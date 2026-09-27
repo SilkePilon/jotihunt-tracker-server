@@ -65,8 +65,8 @@ Recomputed per area on: a new observation for the area, an area status change, a
     last position by nearest-neighbour + 2-opt on the cached group-to-group matrix
   - `wCluster · (candidates within 1.5 km of it / total candidates)`
 - Probabilities = softmax(score / temperature 0.15). Top 3 are published.
-- ETA = lastObservationTime + dwellMinutes + travelMinutes; if that is in the past, ETA = now + remaining
-  estimate is not attempted — the candidate is shown as "had er kunnen zijn" (overdue).
+- ETA = lastObservationTime + dwellMinutes + travelMinutes. If that ETA is already in the past, the candidate is
+  flagged `overdue: true` and shown as "had er al kunnen zijn" (no new ETA is extrapolated).
 
 ### Where-are-they-now zone
 
