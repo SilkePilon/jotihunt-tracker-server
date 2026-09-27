@@ -2,9 +2,13 @@ import type { LngLat, PolygonGeometry } from "./types";
 
 /** ORS (or any walking router) could not answer: no key, HTTP error, quota. Callers fall back to estimates. */
 export class RoutingUnavailableError extends Error {
-  constructor(message: string) {
+  /** Set when the outage cannot resolve itself (e.g. no API key configured) so callers should not retry on a cooldown. */
+  readonly permanent: boolean;
+
+  constructor(message: string, options: { permanent?: boolean } = {}) {
     super(message);
     this.name = "RoutingUnavailableError";
+    this.permanent = options.permanent ?? false;
   }
 }
 

@@ -23,4 +23,6 @@ export const WEIGHT_RANGE: [number, number] = [0, 2];
 export const MAX_ISLANDS = 3;
 export const TRANSIT_CACHE_MS = 30 * 60 * 1000;
 export const RECOMPUTE_INTERVAL_MS = 5 * 60 * 1000;
+/** After a RoutingUnavailableError, ORS is treated as down for this long before being retried. */
+export const ORS_COOLDOWN_MS = 5 * 60 * 1000;
 export const USER_AGENT = "jotihunt-tracker (+https://github.com/SilkePilon/jotihunt-tracker-server)";

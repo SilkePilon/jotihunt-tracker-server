@@ -120,6 +120,76 @@ describe("walking prediction", () => {
   });
 });
 
+describe("ORS circuit breaker", () => {
+  function countingFailingRouter() {
+    let calls = 0;
+    const fail = async (): Promise<never> => {
+      calls++;
+      throw new RoutingUnavailableError("ORS down");
+    };
+    const router: WalkingRouter = { matrix: fail, route: fail, isochrones: fail };
+    return { router, calls: () => calls };
+  }
+
+  test("after the first outage, later calls in the same run skip ORS", async () => {
+    await alphaWithThreeGroups();
+    await addObservation("alpha", at(0), moveM(O, -1000, 0));
+    await addObservation("alpha", at(60), O);
+    const { router, calls } = countingFailingRouter();
+    const prediction = await serviceAt(80, { walking: router }).recomputeArea("alpha");
+    expect(prediction.estimate).toBe(true);
+    expect(calls()).toBe(1);
+  });
+
+  test("ORS is retried after the cooldown", async () => {
+    await alphaWithThreeGroups();
+    await addObservation("alpha", at(0), moveM(O, -1000, 0));
+    await addObservation("alpha", at(60), O);
+    const { router, calls } = countingFailingRouter();
+    let clock = at(80);
+    const service = createPredictionService({ walking: router, fallback: straightLineRouter, transit: noTransit, now: () => clock });
+
+    const first = await service.recomputeArea("alpha");
+    expect(first.estimate).toBe(true);
+    expect(calls()).toBe(1);
+
+    // Still within the 5-minute cooldown: ORS must not be touched again.
+    clock = plus(at(80), 3);
+    await service.recomputeArea("alpha");
+    expect(calls()).toBe(1);
+
+    // Past the cooldown: the next call is a half-open probe against ORS.
+    clock = plus(at(80), 6);
+    await service.recomputeArea("alpha");
+    expect(calls()).toBe(2);
+  });
+
+  test("success after the half-open probe resumes normal ORS use", async () => {
+    await alphaWithThreeGroups();
+    await addObservation("alpha", at(0), moveM(O, -1000, 0));
+    await addObservation("alpha", at(60), O);
+    const { router: failing, calls } = countingFailingRouter();
+    let useFailing = true;
+    const router: WalkingRouter = {
+      matrix: (...args) => (useFailing ? failing.matrix(...args) : straightLineRouter.matrix(...args)),
+      route: (...args) => (useFailing ? failing.route(...args) : straightLineRouter.route(...args)),
+      isochrones: (...args) => (useFailing ? failing.isochrones(...args) : straightLineRouter.isochrones(...args)),
+    };
+    let clock = at(80);
+    const service = createPredictionService({ walking: router, fallback: straightLineRouter, transit: noTransit, now: () => clock });
+
+    const first = await service.recomputeArea("alpha");
+    expect(first.estimate).toBe(true);
+    expect(calls()).toBe(1);
+
+    useFailing = false;
+    clock = plus(at(80), 6);
+    const second = await service.recomputeArea("alpha");
+    expect(second.estimate).toBe(false);
+    expect(calls()).toBe(1);
+  });
+});
+
 describe("public transport", () => {
   function busItinerary(departAt: Date): TransitItinerary {
     const stop = (name: string, location: LngLat, arrival: Date | null) => ({ name, lng: location[0], lat: location[1], arrival, departure: null });

@@ -3,7 +3,7 @@ import { Marker } from "../../models/marker.model";
 import { Prediction } from "../../models/prediction.model";
 import { PredictionModel } from "../../models/prediction-model.model";
 import { Team } from "../../models/team.model";
-import { RECOMPUTE_INTERVAL_MS, TOP_CANDIDATES, TRANSIT_CACHE_MS, VISIT_RADIUS_M } from "./constants";
+import { ORS_COOLDOWN_MS, RECOMPUTE_INTERVAL_MS, TOP_CANDIDATES, TRANSIT_CACHE_MS, VISIT_RADIUS_M } from "./constants";
 import { distanceM } from "./geo";
 import {
   dwellSample,
@@ -212,6 +212,15 @@ export function createPredictionService(deps: PredictionDeps) {
   const now = deps.now ?? (() => new Date());
   const locks = new Map<string, Promise<unknown>>();
 
+  /**
+   * ORS circuit breaker, shared across areas/ticks for the life of this service instance.
+   * - `permanent`: no API key configured; never call ORS, never churn a cooldown.
+   * - `openUntil`: set after a RoutingUnavailableError; while `now() < openUntil`, skip ORS
+   *   entirely (straight to the fallback). Once elapsed the next call is a half-open probe:
+   *   success closes the breaker, failure re-opens it for another ORS_COOLDOWN_MS.
+   */
+  const orsBreaker: { permanent: boolean; openUntil: number | null } = { permanent: false, openUntil: null };
+
   /** Run tasks for the same area one at a time (cron and PUT /visits can overlap). */
   function withLock<T>(area: string, task: () => Promise<T>): Promise<T> {
     const previous = locks.get(area) ?? Promise.resolve();
@@ -227,13 +236,23 @@ export function createPredictionService(deps: PredictionDeps) {
   async function routed<T>(flags: RunFlags, key: string, ttlMs: number, request: (router: WalkingRouter) => Promise<T>): Promise<T> {
     const hit = await readCache<T>(key);
     if (hit !== undefined) return hit;
+    if (orsBreaker.permanent || (orsBreaker.openUntil !== null && now().getTime() < orsBreaker.openUntil)) {
+      flags.estimate = true;
+      return request(deps.fallback);
+    }
     try {
       const value = await request(deps.walking);
       await writeCache(key, value, ttlMs);
+      orsBreaker.openUntil = null;
       return value;
     } catch (error) {
       if (!(error instanceof RoutingUnavailableError)) throw error;
       flags.estimate = true;
+      if (error.permanent) {
+        orsBreaker.permanent = true;
+      } else {
+        orsBreaker.openUntil = now().getTime() + ORS_COOLDOWN_MS;
+      }
       return request(deps.fallback);
     }
   }

@@ -57,7 +57,7 @@ export function createOrsRouter(apiKey: string | undefined, deps: OrsDeps = {}):
   };
 
   async function call(endpoint: OrsEndpoint, path: string, body: unknown): Promise<unknown> {
-    if (!apiKey) throw new RoutingUnavailableError("ORS_API_KEY is not set");
+    if (!apiKey) throw new RoutingUnavailableError("ORS_API_KEY is not set", { permanent: true });
     return schedule(async () => {
       if (!counters[endpoint].tryConsume()) throw new RoutingUnavailableError(`ORS ${endpoint}: daily limit reached`);
       try {
