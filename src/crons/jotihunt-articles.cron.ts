@@ -12,4 +12,7 @@ export default async function retrieveJotihuntArticles() {
   if (result.changedHints.length) {
     logger.warn(`(CRON) Hint articles changed after publication: ${result.changedHints.join(", ")}`);
   }
+  if (result.failed.length) {
+    logger.warn(`(CRON) Failed to sync articles: ${result.failed.join(", ")}`);
+  }
 }

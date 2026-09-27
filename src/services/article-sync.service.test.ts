@@ -67,6 +67,46 @@ describe("syncArticles", () => {
     expect(await Article.exists({ id: 5 })).toBeTruthy();
   });
 
+  test("backfills missing areas without duplicating existing cells", async () => {
+    await HintCell.create({
+      articleId: 8,
+      area: "alpha",
+      publishAt: new Date("2026-10-17T12:05:00.000Z"),
+      slotTime: new Date("2026-10-17T12:00:00.000Z"),
+      status: HintCellStatus.Open,
+    });
+
+    const result = await syncArticles([apiArticle(8, "hint", hintHtml)]);
+
+    expect(result.cellsCreated).toBe(8);
+    const cells = await HintCell.find({ articleId: 8 }).lean();
+    expect(cells).toHaveLength(9);
+    const alphaCells = cells.filter((cell) => cell.area === "alpha");
+    expect(alphaCells).toHaveLength(1);
+  });
+
+  test("ignores Area collection names outside DEFAULT_AREAS", async () => {
+    await Area.create([{ name: "Zulu", status: "red", updatedAt: new Date() }]);
+    const result = await syncArticles([apiArticle(9, "hint", hintHtml)]);
+    expect(result.cellsCreated).toBe(9);
+    const areas = (await HintCell.find({ articleId: 9 }).lean()).map((cell) => cell.area);
+    expect(areas).not.toContain("zulu");
+    expect(areas.sort()).toEqual(
+      ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "oscar"].sort(),
+    );
+  });
+
+  test("one article with an invalid publish_at fails without aborting the rest", async () => {
+    const bad = apiArticle(10, "hint", hintHtml, "not-a-date");
+    const good = apiArticle(11, "hint", hintHtml);
+    const result = await syncArticles([bad, good]);
+    expect(result.failed).toEqual([10]);
+    expect(result.upserted).toBe(1);
+    expect(await Article.exists({ id: 10 })).toBeNull();
+    expect(await Article.exists({ id: 11 })).toBeTruthy();
+    expect(await HintCell.countDocuments({ articleId: 11 })).toBe(9);
+  });
+
   test("flags cells when a hint article changes after publication", async () => {
     await syncArticles([apiArticle(7, "hint", hintHtml)]);
     await HintCell.updateOne({ articleId: 7, area: "alpha" }, { $set: { answer: "1234 5678" } });
