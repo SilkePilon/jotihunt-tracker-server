@@ -48,8 +48,8 @@ export async function updateUser(req: Request, res: Response) {
   const data = matchedData(req);
 
   try {
-    const user = await User.findById(id)!;
-    if (!user) return;
+    const user = await User.findById(id);
+    if (!user) return res.status(404).json({ message: "User not found" });
 
     if (data.name) user.name = data.name;
     if (data.email) user.email = data.email.toLowerCase();

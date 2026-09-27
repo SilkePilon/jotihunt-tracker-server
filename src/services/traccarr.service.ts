@@ -4,6 +4,8 @@ import { logger } from "..";
 const apiUrl = process.env.TRACCARR_API_URL;
 const apiToken = process.env.TRACCARR_API_TOKEN;
 
+export const isTraccarConfigured = Boolean(apiUrl && apiToken);
+
 const apiClient = axios.create({
   baseURL: apiUrl,
   headers: {

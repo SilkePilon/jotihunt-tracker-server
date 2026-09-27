@@ -1,4 +1,4 @@
-import express from "express";
+import express, { NextFunction, Request, Response } from "express";
 import cron from "node-cron";
 import trackerRoute from "./routes/tracker.route";
 import markersRoute from "./routes/markers.route";
@@ -49,6 +49,11 @@ if (!process.env.JWT_SECRET) {
 logger.info("Setting up Express and loading config...");
 const app = express();
 app.use(express.json());
+// Express 5 leaves req.body undefined when no body parser matched; keep the Express 4 behaviour of an empty object
+app.use((req, _res, next) => {
+  req.body ??= {};
+  next();
+});
 app.use(expressWinston.logger({ winstonInstance: logger }));
 app.use(cors());
 
@@ -63,8 +68,24 @@ app.use("/hunts", huntsRoute);
 app.use("/articles", articlesRoute);
 app.use("/admin", adminRoute);
 
+// Fallback handlers (Express 5 forwards rejected promises from async handlers here)
+app.use((_req, res) => {
+  res.status(404).json({ message: "Not found" });
+});
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
+  logger.error(`Unhandled error on ${req.method} ${req.originalUrl}`, err);
+  if (res.headersSent) return;
+  const { status = 500, message } = (err ?? {}) as { status?: number; message?: string };
+  res.status(status).json({ message: status >= 500 ? "Internal server error" : message });
+});
+
 // Database connection
-const db = process.env.MONGO_URI || "";
+const db = process.env.MONGO_URI;
+if (!db) {
+  logger.error("MONGO_URI is not set");
+  process.exit(1);
+}
 logger.info("Trying to connect to MongoDB...");
 await mongoose.connect(db).then(() => {
   logger.info("Connected to MongoDB!");
@@ -72,13 +93,33 @@ await mongoose.connect(db).then(() => {
 });
 
 // Start the server
-const port = process.env.PORT || 3000;
+const port = Number(process.env.PORT) || 3000;
 logger.info(`Starting server on port ${port}...`);
-app.listen(port);
+app.listen(port, (error) => {
+  if (error) {
+    logger.error(`Failed to start server on port ${port}`, error);
+    process.exit(1);
+  }
+  logger.info(`Server listening on port ${port}`);
+});
 
-// Schedule cron jobs
+// Schedule cron jobs (only the ones whose configuration is present)
 logger.info("Starting cron jobs...");
+cron.setLogger(logger);
 
-cron.schedule("*/10 * * * * *", retrieveJotihuntAreas);
-cron.schedule("*/10 * * * * *", retrieveJotihuntArticles);
-cron.schedule("*/60 * * * * *", scrapeJotihuntWebsite);
+if (process.env.JOTIHUNT_API_URL) {
+  cron.schedule("*/10 * * * * *", retrieveJotihuntAreas, { name: "jotihunt-areas", noOverlap: true });
+  cron.schedule("*/10 * * * * *", retrieveJotihuntArticles, { name: "jotihunt-articles", noOverlap: true });
+} else {
+  logger.warn("JOTIHUNT_API_URL is not set, skipping areas and articles cron jobs");
+}
+
+if (process.env.JOTIHUNT_WEB_URL && process.env.JOTIHUNT_WEB_USERNAME && process.env.JOTIHUNT_WEB_PASSWORD) {
+  cron.schedule("0 * * * * *", scrapeJotihuntWebsite, { name: "jotihunt-scraper", noOverlap: true });
+} else {
+  logger.warn("JOTIHUNT_WEB_URL/JOTIHUNT_WEB_USERNAME/JOTIHUNT_WEB_PASSWORD not set, skipping website scraper cron job");
+}
+
+if (!process.env.TRACCARR_API_URL || !process.env.TRACCARR_API_TOKEN) {
+  logger.warn("TRACCARR_API_URL/TRACCARR_API_TOKEN not set, tracker endpoints will return 503");
+}
