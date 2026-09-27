@@ -11,7 +11,8 @@
     "test": "bun test",
     "create-user": "bun run src/scripts/create-user.ts",
     "load-teams": "bun run src/scripts/load-teams.ts",
-    "seed-hint": "bun run src/scripts/seed-hint.ts"
+    "seed-hint": "bun run src/scripts/seed-hint.ts",
+    "seed-prediction": "bun run src/scripts/seed-prediction.ts"
   },
   "dependencies": {
     "@turf/bearing": "^7.4.0",
