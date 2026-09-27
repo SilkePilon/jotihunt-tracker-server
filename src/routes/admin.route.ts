@@ -1,5 +1,6 @@
 import express from "express";
 import * as adminController from "../controllers/admin.controller";
+import * as predictionsController from "../controllers/predictions.controller";
 import verifyToken, { isAdmin } from "../middleware/auth.middleware";
 import { body, param } from "express-validator";
 import { User } from "../models/user.model";
@@ -57,5 +58,6 @@ router.get("/users", [verifyToken, isAdmin], adminController.getUsers);
 router.post("/users", [verifyToken, isAdmin, validate(createValidator)], adminController.createUser);
 router.delete("/users/:id", [verifyToken, isAdmin, validate(deleteValidator)], adminController.deleteUser);
 router.put("/users/:id", [verifyToken, isAdmin, validate(updateValidator)], adminController.updateUser);
+router.post("/transit-stops/refresh", [verifyToken, isAdmin], predictionsController.refreshStops);
 
 export default router;

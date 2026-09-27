@@ -99,6 +99,7 @@ JOTIHUNT_WEB_USERNAME=naam@jouwscoutinggroep.nl
 JOTIHUNT_WEB_PASSWORD=password123
 HUNT_START_TIME=2025-10-18T10:00+02:00 # Pas dit aan naar de starttijd van de hunt van dat jaar.
 HUNT_END_TIME=2025-10-19T12:00+02:00 # Pas dit aan naar de eindtijd van de hunt van dat jaar.
+ORS_API_KEY= # Optioneel, voor de vossenvoorspelling (zie configuratie)
 
 # Client
 JWT_SECRET=verander-dit-naar-een-veilige-random-string-van-minimaal-32-tekens
@@ -141,6 +142,15 @@ Dit zijn de inloggegevens die je normaal gebruikt om in te loggen op [jotihunt.n
 
 #### `HUNT_START_TIME` en `HUNT_END_TIME`
 Stel hier de start- en eindtijd van de hunt in. Let goed op de juiste tijdzone (bijv. `+02:00` voor Nederland tijdens zomertijd).
+
+#### `ORS_API_KEY` (optioneel)
+Wordt gebruikt door de vossenvoorspelling voor looptijden, looproutes en bereikbaarheidszones via [OpenRouteService](https://openrouteservice.org/).
+1. Maak een gratis account aan op [openrouteservice.org](https://openrouteservice.org/dev/#/signup).
+2. Maak in het dashboard een (gratis) token aan.
+3. Plak de key in de `.env` file bij `ORS_API_KEY`.
+
+Zonder key werkt de voorspelling ook, maar dan met schattingen (rechte lijn × 1,3 bij 5 km/u en cirkelvormige zones); de client toont dan "(schatting)".
+Reizen met het openbaar vervoer komen van [Transitous](https://transitous.org/) en de haltes van OpenStreetMap (Overpass API); daarvoor is geen key nodig. Er worden alleen coördinaten en tijden verstuurd, geen persoonsgegevens.
 
 #### `JWT_SECRET`
 Genereer een willekeurige, veilige string van minimaal 32 tekens. Deze wordt gebruikt om JWT tokens te ondertekenen voor de authenticatie.

@@ -8,9 +8,12 @@ import huntsRoute from "./routes/hunts.route";
 import articlesRoute from "./routes/articles.route";
 import adminRoute from "./routes/admin.route";
 import hintsRoute from "./routes/hints.route";
+import predictionsRoute from "./routes/predictions.route";
+import visitsRoute from "./routes/visits.route";
 import retrieveJotihuntAreas from "./crons/jotihunt-areas.cron";
 import retrieveJotihuntArticles from "./crons/jotihunt-articles.cron";
 import scrapeJotihuntWebsite from "./crons/jotihunt-scraper.cron";
+import recomputePredictions from "./crons/prediction.cron";
 import winston from "winston";
 import mongoose from "mongoose";
 import expressWinston from "express-winston";
@@ -69,6 +72,8 @@ app.use("/hunts", huntsRoute);
 app.use("/articles", articlesRoute);
 app.use("/admin", adminRoute);
 app.use("/hints", hintsRoute);
+app.use("/predictions", predictionsRoute);
+app.use("/visits", visitsRoute);
 
 // Fallback handlers (Express 5 forwards rejected promises from async handlers here)
 app.use((_req, res) => {
@@ -131,4 +136,10 @@ if (process.env.JOTIHUNT_WEB_URL && process.env.JOTIHUNT_WEB_USERNAME && process
 
 if (!process.env.TRACCARR_API_URL || !process.env.TRACCARR_API_TOKEN) {
   logger.warn("TRACCARR_API_URL/TRACCARR_API_TOKEN not set, tracker endpoints will return 503");
+}
+
+// Fox prediction: recompute changed areas every minute (and every area at least every 5 minutes)
+cron.schedule("30 * * * * *", recomputePredictions, { name: "fox-prediction", noOverlap: true });
+if (!process.env.ORS_API_KEY) {
+  logger.warn("ORS_API_KEY not set, fox prediction uses straight-line estimates");
 }
