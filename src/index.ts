@@ -7,6 +7,7 @@ import areasRoute from "./routes/areas.route";
 import huntsRoute from "./routes/hunts.route";
 import articlesRoute from "./routes/articles.route";
 import adminRoute from "./routes/admin.route";
+import hintsRoute from "./routes/hints.route";
 import retrieveJotihuntAreas from "./crons/jotihunt-areas.cron";
 import retrieveJotihuntArticles from "./crons/jotihunt-articles.cron";
 import scrapeJotihuntWebsite from "./crons/jotihunt-scraper.cron";
@@ -67,6 +68,7 @@ app.use("/areas", areasRoute);
 app.use("/hunts", huntsRoute);
 app.use("/articles", articlesRoute);
 app.use("/admin", adminRoute);
+app.use("/hints", hintsRoute);
 
 // Fallback handlers (Express 5 forwards rejected promises from async handlers here)
 app.use((_req, res) => {

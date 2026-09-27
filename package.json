@@ -10,7 +10,8 @@
     "lint": "eslint .",
     "test": "bun test",
     "create-user": "bun run src/scripts/create-user.ts",
-    "load-teams": "bun run src/scripts/load-teams.ts"
+    "load-teams": "bun run src/scripts/load-teams.ts",
+    "seed-hint": "bun run src/scripts/seed-hint.ts"
   },
   "dependencies": {
     "axios": "^1.20.0",
