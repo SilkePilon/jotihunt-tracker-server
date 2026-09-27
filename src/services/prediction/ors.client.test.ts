@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { USER_AGENT } from "./constants";
-import { DailyCounter, MinuteBudget, type HttpPost } from "./http";
+import { createThrottle, DailyCounter, MinuteBudget, type HttpPost } from "./http";
 import { createOrsRouter, ORS_MINUTE_LIMITS, parseOrsIsochrones, parseOrsMatrix, parseOrsRoute } from "./ors.client";
 import { RoutingUnavailableError } from "./routing";
 
@@ -201,5 +201,41 @@ describe("ORS per-minute budgets", () => {
     await router.isochrones([5.48, 52.08], [10]);
     expect(sleeps).toEqual([60_000]);
     expect(post).toHaveBeenCalledTimes(4);
+  });
+
+  test("keeps ≥1 req/s spacing after a per-minute budget wait (fake clock)", async () => {
+    let clock = 0;
+    const time = {
+      now: () => clock,
+      sleep: async (ms: number) => {
+        clock += ms;
+      },
+    };
+    // Real MinuteBudget instance (values are irrelevant), with `acquire` overridden so the second
+    // call alone waits ~45 s for the per-minute budget — simulating a burst hitting the limit.
+    const isochronesBudget = new MinuteBudget(1, time);
+    let acquireCalls = 0;
+    isochronesBudget.acquire = async () => {
+      acquireCalls++;
+      if (acquireCalls === 2) await time.sleep(45_000);
+    };
+
+    const sendTimes: number[] = [];
+    const post: HttpPost = async () => {
+      sendTimes.push(clock);
+      return { data: sampleIsochrones };
+    };
+    const router = createOrsRouter("secret", {
+      post,
+      schedule: createThrottle(1000, time),
+      budgets: { isochrones: isochronesBudget, matrix: new MinuteBudget(40, time), directions: new MinuteBudget(40, time) },
+    });
+
+    await router.isochrones([5.48, 52.08], [10]);
+    await router.isochrones([5.48, 52.08], [10]); // waits ~45 s for the budget before sending
+    await router.isochrones([5.48, 52.08], [10]); // must still be ≥ 1 s behind the previous *send*
+
+    expect(sendTimes).toEqual([0, 45_000, 46_000]);
+    expect(sendTimes[2] - sendTimes[1]).toBeGreaterThanOrEqual(1000);
   });
 });

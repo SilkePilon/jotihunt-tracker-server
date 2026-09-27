@@ -257,9 +257,13 @@ export function createPredictionService(deps: PredictionDeps) {
    * caches the fallback under this key for 6 h, so the bad request is not re-probed every tick.
    */
   async function routed<T>(flags: RunFlags, key: string, ttlMs: number, request: (router: WalkingRouter) => Promise<T>): Promise<T> {
+    // `route:` keys are visit-detection only (syncVisits re-routes every historical hint pair on
+    // every recompute); a request-specific (400/404) fallback for one of them does not change the
+    // published zone/candidates, so it must not flag the whole area as an estimate.
+    const isVisitDetectionKey = key.startsWith("route:");
     const hit = await readCacheEntry<T>(key);
     if (hit !== undefined) {
-      if (hit.estimate) flags.estimate = true;
+      if (hit.estimate && !isVisitDetectionKey) flags.estimate = true;
       return hit.value;
     }
     if (orsBreaker.permanent || (orsBreaker.openUntil !== null && now().getTime() < orsBreaker.openUntil)) {
@@ -273,12 +277,13 @@ export function createPredictionService(deps: PredictionDeps) {
       return value;
     } catch (error) {
       if (!(error instanceof RoutingUnavailableError)) throw error;
-      flags.estimate = true;
       if (error.kind === "request") {
+        if (!isVisitDetectionKey) flags.estimate = true;
         const value = await request(deps.fallback);
         await writeCache(key, value, Math.min(ttlMs, ORS_REQUEST_FALLBACK_TTL_MS), { estimate: true });
         return value;
       }
+      flags.estimate = true;
       if (error.kind === "permanent") {
         orsBreaker.permanent = true;
       } else {

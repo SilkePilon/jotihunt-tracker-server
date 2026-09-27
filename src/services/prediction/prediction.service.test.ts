@@ -228,23 +228,51 @@ describe("ORS error classes", () => {
     let clock = at(80);
     const service = createPredictionService({ walking: router, fallback: straightLineRouter, transit: noTransit, now: () => clock });
 
+    // LAKE is only touched by the route: pair used for visit detection; the published zone and
+    // candidates for alpha are still fully ORS-routed, so alpha must not be flagged as an estimate.
     const alpha = await service.recomputeArea("alpha");
-    expect(alpha.estimate).toBe(true);
+    expect(alpha.estimate).toBe(false);
     expect(failures()).toBe(1);
 
     const bravo = await service.recomputeArea("bravo");
     expect(bravo.estimate).toBe(false);
 
-    // The fallback for the bad pair is cached for 6 h: the next recompute does not ask ORS again.
+    // The fallback for the bad pair is cached for 6 h: the next recompute does not ask ORS again,
+    // and the cache hit must not re-flag the area either.
     clock = plus(at(80), 10);
     const again = await service.recomputeArea("alpha");
     expect(failures()).toBe(1);
-    expect(again.estimate).toBe(true);
+    expect(again.estimate).toBe(false);
     const cached = await RoutingCache.findOne({ key: `route:${coordKey(LAKE)}>${coordKey(O)}` }).lean();
     expect(cached?.estimate).toBe(true);
     const ttlH = ((cached?.expiresAt.getTime() ?? 0) - Date.now()) / 3_600_000;
     expect(ttlH).toBeGreaterThan(5.9);
     expect(ttlH).toBeLessThanOrEqual(6);
+  });
+
+  test("an old unroutable route pair does not mark the area as an estimate when its iso/matrix calls succeed", async () => {
+    await alphaWithThreeGroups();
+    await addObservation("alpha", at(0), LAKE);
+    await addObservation("alpha", at(60), O);
+    const { router, failures } = routerFailingAt(LAKE, "request");
+    const service = createPredictionService({ walking: router, fallback: straightLineRouter, transit: noTransit, now: () => at(80) });
+
+    const prediction = await service.recomputeArea("alpha");
+    expect(failures()).toBe(1);
+    expect(prediction.estimate).toBe(false);
+    expect(prediction.candidates).toHaveLength(3);
+    expect(prediction.zone.outer?.type).toBe("Polygon");
+  });
+
+  test("an iso/matrix request fallback still flags the area as an estimate", async () => {
+    await alphaWithThreeGroups();
+    await addObservation("alpha", at(60), O);
+    const { router, failures } = routerFailingAt(O, "request");
+    const service = createPredictionService({ walking: router, fallback: straightLineRouter, transit: noTransit, now: () => at(80) });
+
+    const prediction = await service.recomputeArea("alpha");
+    expect(failures()).toBeGreaterThan(0);
+    expect(prediction.estimate).toBe(true);
   });
 
   test("a permanent error (401/403) stops ORS calls for good, not for a cooldown", async () => {

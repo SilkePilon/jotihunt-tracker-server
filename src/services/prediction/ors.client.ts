@@ -75,10 +75,12 @@ export function createOrsRouter(apiKey: string | undefined, deps: OrsDeps = {}):
 
   async function call(endpoint: OrsEndpoint, path: string, body: unknown): Promise<unknown> {
     if (!apiKey) throw new RoutingUnavailableError("ORS_API_KEY is not set", { kind: "permanent" });
+    // Acquire the per-minute budget before entering the 1 req/s throttle, so a budget wait never
+    // lands inside the throttle's timing window: the throttle's lastStart is only ever set right
+    // before a request is actually sent, keeping the ≥ 1 s spacing even after a budget wait.
+    await budgets[endpoint].acquire();
     return schedule(async () => {
       if (!counters[endpoint].tryConsume()) throw new RoutingUnavailableError(`ORS ${endpoint}: daily limit reached`);
-      // Inside the 1 req/s queue: waiting here holds back later ORS calls too, keeping their order.
-      await budgets[endpoint].acquire();
       try {
         const response = await post(`${ORS_BASE_URL}${path}`, body, {
           headers: {
