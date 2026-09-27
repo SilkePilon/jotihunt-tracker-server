@@ -8,7 +8,7 @@ async function createUser(email: string, password: string, name: string, admin: 
 
         const hashedPassword = await Bun.password.hash(password);
         const user = new User({
-            email,
+            email: email.toLowerCase(),
             password: hashedPassword,
             name,
             admin,
