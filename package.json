@@ -8,6 +8,7 @@
     "start": "bun run src/index.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
+    "test": "bun test",
     "create-user": "bun run src/scripts/create-user.ts",
     "load-teams": "bun run src/scripts/load-teams.ts"
   },
