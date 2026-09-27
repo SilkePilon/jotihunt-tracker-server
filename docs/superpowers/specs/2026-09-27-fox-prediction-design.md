@@ -164,6 +164,8 @@ Server (`bun test`, no network — routing clients are injected and mocked):
 - learning updates (EMA, weight step, clamps) with hand-computed expectations;
 - public-transport mode triggers; min(walk, transit) choice; island selection;
 - fallback maths (straight line × 1.3, circle zones);
-- replay test: a synthetic area with 8 groups and a scripted fox route of hourly hints; after 3 hints the top-3
-  contains the true next group in ≥ 70 % of the remaining hours.
+- replay test: 3 seeded synthetic areas with 12 scattered groups; the fox walks a planned tour (one non-greedy
+  step) at 4 km/h with 15-minute stops; hourly hints (hour-floored, ± 100 m, entered 15 minutes late), one spot
+  and one red hour. Over the hours after 3 hints with > 3 groups left (≥ 8 in total): top-3 ≥ 70 %, top-1 ≥ 40 %,
+  top-3 ≥ a "3 nearest groups" baseline, mean top-1 probability ≤ top-1 hit rate + 0.25, plus learning sanity.
 Client: build + lint; screenshots of the layer, sidebar section and group popup with seeded observations.
