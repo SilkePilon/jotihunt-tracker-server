@@ -39,9 +39,10 @@ const {values} = parseArgs({
         name: {
             type: "string",
         },
+        // String instead of boolean: with a boolean flag "--admin false" still made the user an admin
         admin: {
-            type: "boolean",
-            default: false,
+            type: "string",
+            default: "false",
         },
     },
     strict: true,
@@ -53,4 +54,10 @@ if (!values.email || !values.password || !values.name) {
     process.exit(1);
 }
 
-await createUser(values.email, values.password, values.name, values.admin);
+const admin = values.admin?.toLowerCase();
+if (admin !== "true" && admin !== "false") {
+    console.error("--admin must be 'true' or 'false'");
+    process.exit(1);
+}
+
+await createUser(values.email, values.password, values.name, admin === "true");
