@@ -4,6 +4,7 @@ const ArticleSchema = new mongoose.Schema({
   id: {
     type: Number,
     required: true,
+    unique: true,
   },
   title: {
     type: String,
@@ -31,6 +32,10 @@ const ArticleSchema = new mongoose.Schema({
   },
   endTime: {
     type: Date,
+    required: false,
+  },
+  contentHash: {
+    type: String,
     required: false,
   },
 });
