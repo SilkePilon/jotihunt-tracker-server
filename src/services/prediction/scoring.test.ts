@@ -64,8 +64,8 @@ describe("softmax", () => {
     expect(softmax([0, 0])).toEqual([0.5, 0.5]);
   });
 
-  test("uses temperature 0.15", () => {
-    const [p] = softmax([1, 0.85]);
+  test("uses temperature 0.5", () => {
+    const [p] = softmax([1, 0.5]);
     expect(p).toBeCloseTo(1 / (1 + Math.exp(-1)), 6);
   });
 
@@ -77,6 +77,14 @@ describe("softmax", () => {
 });
 
 describe("scoreCandidates", () => {
+  test("the tour bonus alone gives a decisive but honest top probability (0.7–0.9)", () => {
+    // Same travel time, no heading, far apart (no cluster): only the tour term differs.
+    const scored = scoreCandidates(input([candidate(1, moveM(O, 3000, 0), 20), candidate(2, moveM(O, -3000, 0), 20)], { tourFirstIndex: 0 }));
+    expect(scored[0].terms).toEqual({ ...scored[1].terms, tour: 1 });
+    expect(scored[0].probability).toBeGreaterThan(0.7);
+    expect(scored[0].probability).toBeLessThan(0.9);
+  });
+
   test("keeps input order and probabilities sum to 1", () => {
     const scored = scoreCandidates(
       input([candidate(1, moveM(O, 1000, 0), 15), candidate(2, moveM(O, 3000, 0), 45)], { heading: 90, tourFirstIndex: 0 }),

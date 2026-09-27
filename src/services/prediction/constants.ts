@@ -5,7 +5,8 @@ export const HEADING_MIN_DISTANCE_M = 200;
 /** …and at most this many minutes apart. */
 export const HEADING_MAX_GAP_MIN = 180;
 export const CLUSTER_RADIUS_M = 1500;
-export const SOFTMAX_TEMPERATURE = 0.15;
+/** Softmax temperature: 0.5 keeps the ranking but gives honest probabilities (tour bonus alone ≈ 80 % : 20 %). */
+export const SOFTMAX_TEMPERATURE = 0.5;
 export const TOP_CANDIDATES = 3;
 export const ELAPSED_CAP_MIN = 120;
 /** ORS foot-walking speed (5 km/h) in metres per minute. */

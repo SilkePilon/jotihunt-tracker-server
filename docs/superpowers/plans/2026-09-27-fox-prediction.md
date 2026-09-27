@@ -28,7 +28,7 @@
 - Server tests use **no network**: routing clients are injected; tests use `straightLineRouter` or hand-written mocks. HTTP clients take an injectable `post`/`get` function.
 - Server files under `src/services/` and `src/models/` must **not** import `logger` from `".."` (that import boots the whole server). Only controllers/crons may.
 - Area names are **lowercase** in everything this feature stores (`GroupVisit.area`, `Prediction.area`, `PredictionModel.area`). `Area.name` (e.g. `Alpha`) and `Team.area` may be capitalised: always compare case-insensitively.
-- Spec numbers (copy exactly): visit radius **300 m**; heading only if the last two observations are **≥ 200 m** and **≤ 3 h** apart; cluster radius **1.5 km**; softmax temperature **0.15**; publish top **3**; elapsed capped at **120 min**; `speedFactor` start **1.0**, clamp **0.5–1.6**; `dwellMinutes` start **15**, clamp **0–45**; weights start `wTime 1.0, wHeading 0.5, wTour 0.7, wCluster 0.3`, each clamp **0–2**; EMA **α = 0.3**; weight step **0.1**; fallback **straight line × 1.3 at 5 km/h**; stop radius **250 m**; stops bbox = all groups **+ 10 km**; max **3** islands; transit cache **30 min**; 30-minute repeat rule; recompute every **5 minutes** or on change.
+- Spec numbers (copy exactly): visit radius **300 m**; heading only if the last two observations are **≥ 200 m** and **≤ 3 h** apart; cluster radius **1.5 km**; softmax temperature **0.5** (was 0.15, changed after the final review: too overconfident); publish top **3**; elapsed capped at **120 min**; `speedFactor` start **1.0**, clamp **0.5–1.6**; `dwellMinutes` start **15**, clamp **0–45**; weights start `wTime 1.0, wHeading 0.5, wTour 0.7, wCluster 0.3`, each clamp **0–2**; EMA **α = 0.3**; weight step **0.1**; fallback **straight line × 1.3 at 5 km/h**; stop radius **250 m**; stops bbox = all groups **+ 10 km**; max **3** islands; transit cache **30 min**; 30-minute repeat rule; recompute every **5 minutes** or on change.
 - External requests: ≤ 1 request/s per provider, header `User-Agent: jotihunt-tracker (+https://github.com/SilkePilon/jotihunt-tracker-server)`, **no personal data** (no email, no names) in any request. ORS key goes in the `Authorization` header.
 - Prediction texts (Dutch, exact): `Inactief, voorspelling gepauzeerd`, `Nog geen waarnemingen`, `(schatting)`, `had er al kunnen zijn`, section title `Voorspelling`, buttons `Bezocht` / `Niet bezocht` / `Automatisch`.
 - Client: UI copy Dutch. `bun test` only covers pure `src/lib/*.test.ts` (excluded from `tsc -b`); lib files used by tests must use `import type` for type-only imports. React Compiler lint rules are strict: no ref reads during render.
@@ -112,7 +112,7 @@ export const HEADING_MIN_DISTANCE_M = 200;
 /** …and at most this many minutes apart. */
 export const HEADING_MAX_GAP_MIN = 180;
 export const CLUSTER_RADIUS_M = 1500;
-export const SOFTMAX_TEMPERATURE = 0.15;
+export const SOFTMAX_TEMPERATURE = 0.5;
 export const TOP_CANDIDATES = 3;
 export const ELAPSED_CAP_MIN = 120;
 /** ORS foot-walking speed (5 km/h) in metres per minute. */
@@ -482,8 +482,8 @@ describe("softmax", () => {
     expect(softmax([0, 0])).toEqual([0.5, 0.5]);
   });
 
-  test("uses temperature 0.15", () => {
-    const [p] = softmax([1, 0.85]);
+  test("uses temperature 0.5", () => {
+    const [p] = softmax([1, 0.5]);
     expect(p).toBeCloseTo(1 / (1 + Math.exp(-1)), 6);
   });
 

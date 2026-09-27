@@ -64,7 +64,9 @@ Recomputed per area on: a new observation for the area, an area status change, a
   - `wTour · [candidate is the first stop of the shortest open tour through all candidates]` — tour from the
     last position by nearest-neighbour + 2-opt on the cached group-to-group matrix
   - `wCluster · (candidates within 1.5 km of it / total candidates)`
-- Probabilities = softmax(score / temperature 0.15). Top 3 are published.
+- Probabilities = softmax(score / temperature 0.5). Top 3 are published. Temperature 0.5 rather than 0.15
+  because 0.15 turned the tour bonus alone into ~99 % (labels showed 100 % / 0 %), while 0.5 keeps the same
+  ranking with honest odds (tour bonus alone ≈ 80 % : 20 %).
 - ETA = lastObservationTime + dwellMinutes + travelMinutes. If that ETA is already in the past, the candidate is
   flagged `overdue: true` and shown as "had er al kunnen zijn" (no new ETA is extrapolated).
 
