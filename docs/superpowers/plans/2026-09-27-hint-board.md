@@ -29,7 +29,7 @@
 - Client UI copy is Dutch (matches existing app).
 - Every commit message ends with:
   `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`
-- Deviations from spec, decided here: (1) client applies the server's response to the SWR cache immediately instead of a pre-request optimistic update — same UX locally, no rollback logic; (2) service-level tests replace HTTP controller tests (controller is a thin wrapper, verified by a curl smoke test); (3) there is no existing sound setting, so the new-hint sound always plays.
+- Deviations from spec, decided here: (1) client applies the server's response to the SWR cache immediately instead of a pre-request optimistic update — same UX locally, no rollback logic; (2) service-level tests replace HTTP controller tests (controller is a thin wrapper, verified by a curl smoke test); (3) there is no existing sound setting, so the new-hint sound always plays; (4) RD parsing lives only on the server (user decision): the client previews answers via `GET /hints/parse-answer` and "show on map" uses `answerLocation` stored on the cell.
 
 ## File Structure
 
@@ -46,7 +46,7 @@ Server (`jotihunt-tracker-server/`):
 - Create `src/test/db.ts` + `*.test.ts` next to services.
 
 Client (`jotihunt-tracker-client/`):
-- Create `src/types/HintCell.ts`, `src/lib/rd-answer.ts`, `src/lib/hints.ts`, `src/hooks/hints.hook.ts`.
+- Create `src/types/HintCell.ts`, `src/lib/hints.ts`, `src/hooks/hints.hook.ts`.
 - Create `src/components/hints/HintGrid.tsx`, `src/components/hints/HintCellPanel.tsx`, `src/pages/Hints.tsx`.
 - Modify `src/Routes.tsx`, `src/components/Settings.tsx`, `tsconfig.app.json`, `package.json`.
 
@@ -366,6 +366,7 @@ const HintCellSchema = new mongoose.Schema({
   claimedAt: { type: Date },
   answer: { type: String },
   answerKind: { type: String, enum: ["rd", "text"] },
+  answerLocation: { type: [Number], default: undefined }, // [lng, lat] for RD answers
   markerId: { type: mongoose.Schema.Types.ObjectId, ref: "Marker" },
   check: { type: String, enum: Object.values(HintCheck), default: HintCheck.Unchecked, required: true },
   checkedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
@@ -665,6 +666,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   - `setCheck(articleId: number, area: string, userId: Id, check: HintCheck)`
   - `addNote(articleId: number, area: string, userId: Id, text: string)`
   - `setStatus(articleId: number, area: string, status: HintCellStatus.Open | HintCellStatus.None)`
+  - `solveCell` stores `answerLocation: [lng, lat]` for RD answers and unsets it for text answers.
   - All mutations return the updated cell with `claimedBy`, `checkedBy`, `notes.user` populated to `{ _id, name }`.
   - `type Id = mongoose.Types.ObjectId | string`
 
@@ -785,6 +787,7 @@ describe("solveCell", () => {
     expect(marker!.type).toBe(MarkerType.Hint);
     expect(marker!.time.toISOString()).toBe(slotTime.toISOString());
     expect(marker!.location.coordinates[1]).toBeCloseTo(52.2079, 3);
+    expect(cell.answerLocation![1]).toBeCloseTo(52.2079, 3);
   });
 
   test("solving again moves the same marker", async () => {
@@ -802,6 +805,7 @@ describe("solveCell", () => {
     const cell = await solveCell(1, "alpha", user._id, "doedelzak");
     expect(cell.answerKind).toBe("text");
     expect(cell.markerId).toBeFalsy();
+    expect(cell.answerLocation).toBeFalsy();
     expect(await Marker.countDocuments()).toBe(0);
   });
 
@@ -975,6 +979,7 @@ export async function solveCell(articleId: number, area: string, userId: Id, ans
 
   const unset: Record<string, 1> = { checkedBy: 1 };
   if (!markerId) unset.markerId = 1;
+  if (!rd) unset.answerLocation = 1;
 
   return updateCell(articleId, area, {
     $set: {
@@ -984,6 +989,7 @@ export async function solveCell(articleId: number, area: string, userId: Id, ans
       check: HintCheck.Unchecked,
       claimedBy: userId,
       ...(markerId ? { markerId } : {}),
+      ...(rd ? { answerLocation: [rd.lng, rd.lat] } : {}),
     },
     $unset: unset,
   });
@@ -1025,9 +1031,10 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - Modify: `src/index.ts`, `package.json`
 
 **Interfaces:**
-- Consumes: everything exported by `hint-board.service.ts` (Task 4), `syncArticles` (Task 3), `DEFAULT_AREAS` (Task 1).
+- Consumes: everything exported by `hint-board.service.ts` (Task 4), `syncArticles` (Task 3), `DEFAULT_AREAS` (Task 1), `parseRdAnswer` (Task 2).
 - Produces HTTP API (all require `Authorization: Bearer <jwt>`):
   - `GET /hints/board` → `{ articles, cells }`
+  - `GET /hints/parse-answer?answer=<text>` → `{ rd: { x, y, lng, lat } | null }` (answer preview for the client)
   - `POST /hints/:articleId/:area/claim` | `/release` → cell
   - `POST /hints/:articleId/:area/solve` `{ answer: string, replaceMarker?: boolean }` → cell
   - `POST /hints/:articleId/:area/check` `{ check: "unchecked"|"verified"|"disputed" }` → cell
@@ -1041,6 +1048,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 import { Request, Response } from "express";
 import * as board from "../services/hint-board.service";
 import { HintBoardError } from "../services/hint-board.service";
+import { parseRdAnswer } from "../services/rd-answer";
 
 function cellKey(req: Request) {
   return { articleId: Number(req.params.articleId), area: String(req.params.area).toLowerCase() };
@@ -1059,6 +1067,10 @@ async function respond(res: Response, action: () => Promise<unknown>) {
 
 export function getBoard(_req: Request, res: Response) {
   return respond(res, () => board.getBoard());
+}
+
+export function parseAnswer(req: Request, res: Response) {
+  return res.status(200).json({ rd: parseRdAnswer(String(req.query.answer ?? "")) });
 }
 
 export function claim(req: Request, res: Response) {
@@ -1097,7 +1109,7 @@ export function setStatus(req: Request, res: Response) {
 
 ```ts
 import express from "express";
-import { body, param } from "express-validator";
+import { body, param, query } from "express-validator";
 import * as hintsController from "../controllers/hints.controller";
 import verifyToken from "../middleware/auth.middleware";
 import { validate } from "../middleware/validate.middleware";
@@ -1109,6 +1121,11 @@ const cellParams = [param("articleId").isInt({ min: 0 }), param("area").isIn(DEF
 const router = express.Router();
 
 router.get("/board", verifyToken, hintsController.getBoard);
+router.get(
+  "/parse-answer",
+  [verifyToken, validate([query("answer").optional().isString().isLength({ max: 200 })])],
+  hintsController.parseAnswer,
+);
 router.post("/:articleId/:area/claim", [verifyToken, validate(cellParams)], hintsController.claim);
 router.post("/:articleId/:area/release", [verifyToken, validate(cellParams)], hintsController.release);
 router.post(
@@ -1205,9 +1222,11 @@ curl -s -X POST localhost:3000/hints/$ART/alpha/solve -H "Authorization: Bearer 
   -H 'content-type: application/json' -d '{"answer":"2126 4692"}' | jq '{status, answerKind, markerId}'
 curl -s -o /dev/null -w "%{http_code}\n" -X POST localhost:3000/hints/$ART/bravo/claim -H "Authorization: Bearer $TOKEN"
 curl -s -o /dev/null -w "%{http_code}\n" -X POST localhost:3000/hints/$ART/zulu/claim -H "Authorization: Bearer $TOKEN"
+curl -s "localhost:3000/hints/parse-answer?answer=2126%204692" -H "Authorization: Bearer $TOKEN" | jq -c .
+curl -s "localhost:3000/hints/parse-answer?answer=doedelzak" -H "Authorization: Bearer $TOKEN" | jq -c .
 ```
 
-Expected: seed prints `... with 9 cells`; claim → `status: "solving"`, `claimedBy.name: "Admin"`; solve → `status: "solved"`, `answerKind: "rd"`, a `markerId`; bravo claim → `409` (it is `none`); zulu → `400`.
+Expected: seed prints `... with 9 cells`; claim → `status: "solving"`, `claimedBy.name: "Admin"`; solve → `status: "solved"`, `answerKind: "rd"`, a `markerId`; bravo claim → `409` (it is `none`); zulu → `400`; parse-answer → `{"rd":{"x":212600,"y":469200,"lng":6.229…,"lat":52.207…}}` then `{"rd":null}`.
 
 - [ ] **Step 7: Commit**
 
@@ -1225,15 +1244,15 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 Work in `/home/silke/Documents/Jotihunt 2026/jotihunt-tracker-client`.
 
 **Files:**
-- Create: `src/types/HintCell.ts`, `src/lib/rd-answer.ts`, `src/lib/hints.ts`, `src/hooks/hints.hook.ts`
-- Test: `src/lib/rd-answer.test.ts`, `src/lib/hints.test.ts`
+- Create: `src/types/HintCell.ts`, `src/lib/hints.ts`, `src/hooks/hints.hook.ts`
+- Test: `src/lib/hints.test.ts`
 - Modify: `package.json` (add `dompurify`, `"test": "bun test"`), `tsconfig.app.json` (exclude tests)
 
 **Interfaces:**
 - Consumes: server API from Task 5; `useAuthSWR`, `fetcherWithMethod` from `src/lib/swr.ts`.
 - Produces:
-  - Types `HintCellStatus`, `HintCheck`, `UserRef`, `HintNote`, `HintCell`, `HintArticle`, `HintBoard`.
-  - `parseRdAnswer(text: string): { x: number; y: number; lng: number; lat: number } | null` (same rules as server).
+  - Types `HintCellStatus`, `HintCheck`, `UserRef`, `HintNote`, `HintCell` (incl. `answerLocation?: [number, number]`), `HintArticle`, `HintBoard`, `RdPreview`.
+  - `useRdPreview(answer: string): RdPreview | null` — server-side parse of the typed answer (no RD parsing in the client).
   - `HINT_WINDOW_MS`, `remainingMs(publishAt: string, now: number): number`, `formatCountdown(ms: number): string`, `sanitizeHintHtml(html: string): string`.
   - `useHintBoard()` → `{ board?: HintBoard; isLoading: boolean; isError: unknown; claim(articleId, area); release(articleId, area); solve(articleId, area, answer, replaceMarker?); setCheck(articleId, area, check); addNote(articleId, area, text); setStatus(articleId, area, status) }`, each mutation `Promise<HintCell>` that throws the axios error on failure.
 
@@ -1269,6 +1288,7 @@ export interface HintCell {
   claimedAt?: string;
   answer?: string;
   answerKind?: 'rd' | 'text';
+  answerLocation?: [number, number];
   markerId?: string;
   check: HintCheck;
   checkedBy?: UserRef | null;
@@ -1287,34 +1307,16 @@ export interface HintBoard {
   articles: HintArticle[];
   cells: HintCell[];
 }
+
+export interface RdPreview {
+  x: number;
+  y: number;
+  lng: number;
+  lat: number;
+}
 ```
 
-- [ ] **Step 3: Write failing tests** — `src/lib/rd-answer.test.ts`
-
-```ts
-import { describe, expect, test } from 'bun:test';
-import { parseRdAnswer } from './rd-answer';
-
-describe('parseRdAnswer', () => {
-  test('converts 4+4 digits', () => {
-    const result = parseRdAnswer('2126 4692');
-    expect(result?.x).toBe(212600);
-    expect(result?.y).toBe(469200);
-    expect(result!.lat).toBeCloseTo(52.2079, 3);
-    expect(result!.lng).toBeCloseTo(6.2299, 3);
-  });
-
-  test.each([['21264692'], ['212600 469200'], ['2126,4692']])('accepts %p', (input) => {
-    expect(parseRdAnswer(input)?.x).toBe(212600);
-  });
-
-  test.each([['doedelzak'], ['2126 469200'], ['0000 0000'], ['']])('rejects %p', (input) => {
-    expect(parseRdAnswer(input)).toBeNull();
-  });
-});
-```
-
-`src/lib/hints.test.ts`:
+- [ ] **Step 3: Write failing tests** — `src/lib/hints.test.ts`:
 
 ```ts
 import { describe, expect, test } from 'bun:test';
@@ -1340,47 +1342,7 @@ describe('hint timer', () => {
 
 Run `bun_ test` → FAIL (modules missing).
 
-- [ ] **Step 4: Implement** — `src/lib/rd-answer.ts`
-
-```ts
-import proj4 from 'proj4';
-
-// Same definition as main.tsx; repeated so this module also works outside the app (tests)
-proj4.defs(
-  'RD',
-  '+proj=sterea +lat_0=52.15616055555555 +lon_0=5.38763888888889 +k=0.9999079 +x_0=155000 +y_0=463000 +ellps=bessel +towgs84=565.417,50.3319,465.552,-0.398957,0.343988,-1.8774,4.0725 +units=m +no_defs',
-);
-
-/**
- * Parse a hint answer as an RD coordinate (mirrors the server's parser).
- * @param text The answer as entered
- * @returns RD and WGS84 coordinates, or null when not a valid RD coordinate
- */
-export function parseRdAnswer(text: string): { x: number; y: number; lng: number; lat: number } | null {
-  const parts = text.trim().split(/[\s,;]+/).filter(Boolean);
-  let xs: string;
-  let ys: string;
-
-  if (parts.length === 1 && /^(\d{8}|\d{12})$/.test(parts[0])) {
-    const half = parts[0].length / 2;
-    xs = parts[0].slice(0, half);
-    ys = parts[0].slice(half);
-  } else if (parts.length === 2 && parts[0].length === parts[1].length && parts.every((part) => /^(\d{4}|\d{6})$/.test(part))) {
-    [xs, ys] = parts;
-  } else {
-    return null;
-  }
-
-  const x = xs.length === 4 ? Number(xs) * 100 : Number(xs);
-  const y = ys.length === 4 ? Number(ys) * 100 : Number(ys);
-  if (x < 0 || x > 290000 || y < 290000 || y > 630000) return null;
-
-  const [lng, lat] = proj4('RD', 'WGS84', [x, y]);
-  return { x, y, lng, lat };
-}
-```
-
-`src/lib/hints.ts`:
+- [ ] **Step 4: Implement** — `src/lib/hints.ts`:
 
 ```ts
 import DOMPurify from 'dompurify';
@@ -1419,7 +1381,7 @@ export function sanitizeHintHtml(html: string) {
 ```ts
 import useAuthHeader from 'react-auth-kit/hooks/useAuthHeader';
 import { fetcherWithMethod, useAuthSWR } from '@/lib/swr';
-import { HintBoard, HintCell, HintCheck } from '@/types/HintCell';
+import { HintBoard, HintCell, HintCheck, RdPreview } from '@/types/HintCell';
 
 export const useHintBoard = () => {
   const authHeader = useAuthHeader() || '';
@@ -1451,6 +1413,18 @@ export const useHintBoard = () => {
     setStatus: (articleId: number, area: string, status: 'open' | 'none') => post(articleId, area, 'status', { status }),
   };
 };
+
+/**
+ * Let the server parse a typed answer as an RD coordinate (single source of truth for RD rules).
+ * @returns The parsed coordinate, or null when the answer is not a coordinate (or still loading)
+ */
+export const useRdPreview = (answer: string): RdPreview | null => {
+  const { data } = useAuthSWR<{ rd: RdPreview | null }>(`/hints/parse-answer?answer=${encodeURIComponent(answer.trim())}`, {
+    keepPreviousData: true,
+    revalidateOnFocus: false,
+  });
+  return answer.trim() ? (data?.rd ?? null) : null;
+};
 ```
 
 - [ ] **Step 5: Verify** — `bun_ test` PASS; `bun_ run build` and `bun_ run lint` clean.
@@ -1458,7 +1432,7 @@ export const useHintBoard = () => {
 - [ ] **Step 6: Commit**
 
 ```bash
-git add package.json bun.lock tsconfig.app.json src/types/HintCell.ts src/lib/rd-answer.ts src/lib/rd-answer.test.ts src/lib/hints.ts src/lib/hints.test.ts src/hooks/hints.hook.ts
+git add package.json bun.lock tsconfig.app.json src/types/HintCell.ts src/lib/hints.ts src/lib/hints.test.ts src/hooks/hints.hook.ts
 git commit -m "feat(hints): add hint board data layer
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
@@ -1587,8 +1561,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { HintArticle, HintCell } from '@/types/HintCell';
-import { useHintBoard } from '@/hooks/hints.hook';
-import { parseRdAnswer } from '@/lib/rd-answer';
+import { useHintBoard, useRdPreview } from '@/hooks/hints.hook';
 import { sanitizeHintHtml } from '@/lib/hints';
 import { capitalizeFirstLetter } from '@/lib/utils';
 
@@ -1624,8 +1597,7 @@ export default function HintCellPanel({ article, cell, currentUserId, actions, o
   const [busy, setBusy] = useState(false);
 
   const { articleId, area } = cell;
-  const rd = parseRdAnswer(answer);
-  const solvedRd = cell.answer ? parseRdAnswer(cell.answer) : null;
+  const rd = useRdPreview(answer);
   const claimedByMe = cell.status === 'solving' && cell.claimedBy?._id === currentUserId;
 
   async function run(action: () => Promise<unknown>, success?: string) {
@@ -1647,8 +1619,8 @@ export default function HintCellPanel({ article, cell, currentUserId, actions, o
   async function submitAnswer(replaceMarker = false) {
     setBusy(true);
     try {
-      await actions.solve(articleId, area, answer, replaceMarker);
-      toast.success(rd ? 'Opgelost, hint-marker geplaatst!' : 'Antwoord opgeslagen');
+      const solved = await actions.solve(articleId, area, answer, replaceMarker);
+      toast.success(solved.answerKind === 'rd' ? 'Opgelost, hint-marker geplaatst!' : 'Antwoord opgeslagen');
     } catch (error) {
       if (isAxiosError(error) && error.response?.status === 409 && error.response.data?.existingMarkerId) {
         setConfirmReplace(true);
@@ -1766,8 +1738,8 @@ export default function HintCellPanel({ article, cell, currentUserId, actions, o
             Twijfel
           </Button>
           {cell.checkedBy && <span className="text-xs text-muted-foreground">door {cell.checkedBy.name}</span>}
-          {solvedRd && (
-            <Button variant="secondary" onClick={() => onShowOnMap(solvedRd.lng, solvedRd.lat)}>
+          {cell.answerLocation && (
+            <Button variant="secondary" onClick={() => onShowOnMap(cell.answerLocation![0], cell.answerLocation![1])}>
               <MapPinIcon />
               Toon op kaart
             </Button>
