@@ -110,6 +110,7 @@ interface RunFlags {
 interface VisitedAt {
   teamApiId: number;
   visitedAt: Date;
+  evidence: "point" | "route" | "manual";
 }
 
 interface PredictedPart {
@@ -213,10 +214,10 @@ async function saveModel(area: string, model: LearnedModel): Promise<void> {
 
 function visitedList(state: RoundState, manual: ManualVisit[]): VisitedAt[] {
   return [
-    ...state.autoVisits.map((visit) => ({ teamApiId: visit.teamApiId, visitedAt: visit.visitedAt })),
+    ...state.autoVisits.map((visit) => ({ teamApiId: visit.teamApiId, visitedAt: visit.visitedAt, evidence: visit.evidence })),
     ...manual
       .filter((visit) => visit.state === "visited" && visit.visitedAt)
-      .map((visit) => ({ teamApiId: visit.teamApiId, visitedAt: visit.visitedAt as Date })),
+      .map((visit) => ({ teamApiId: visit.teamApiId, visitedAt: visit.visitedAt as Date, evidence: "manual" as const })),
   ].sort((a, b) => a.visitedAt.getTime() - b.visitedAt.getTime());
 }
 
@@ -370,8 +371,9 @@ export function createPredictionService(deps: PredictionDeps) {
       }
     }
 
+    // Route visits get an interpolated visitedAt that assumes no stop, which would bias dwell low.
     const dwellFrom = model.lastDwellVisitAt?.getTime() ?? 0;
-    for (const visit of visits.filter((candidate) => candidate.visitedAt.getTime() > dwellFrom)) {
+    for (const visit of visits.filter((candidate) => candidate.evidence !== "route" && candidate.visitedAt.getTime() > dwellFrom)) {
       const group = ctx.groups.find((candidate) => candidate.teamApiId === visit.teamApiId);
       if (!group) continue;
       const groupLocation: LngLat = [group.lng, group.lat];

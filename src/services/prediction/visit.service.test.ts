@@ -49,6 +49,15 @@ describe("setManualVisit", () => {
     expect(await loadManualVisits("alpha")).toEqual([]);
   });
 
+  test("'visited' on an auto-visited group keeps the real visit time", async () => {
+    await makeTeam(7, "alpha", O);
+    await replaceAutoVisits("alpha", [{ teamApiId: 7, round: 1, visitedAt: T, evidence: "point" }]);
+    const later = new Date(T.getTime() + 45 * 60_000);
+    const result = await setManualVisit(7, "visited", later);
+    expect(result?.visit).toMatchObject({ state: "visited", source: "manual", visitedAt: T });
+    expect(await loadManualVisits("alpha")).toEqual([{ teamApiId: 7, round: 1, state: "visited", visitedAt: T }]);
+  });
+
   test("uses the current round stored on the prediction", async () => {
     await makeTeam(7, "alpha", O);
     await Prediction.create({ area: "alpha", round: 2, updatedAt: T });

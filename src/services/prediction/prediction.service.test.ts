@@ -9,6 +9,7 @@ import { clearTestDb, connectTestDb, disconnectTestDb } from "../../test/db";
 import { addObservation, makeTeam, setAreaStatus } from "../../test/prediction-fixtures";
 import { moveM } from "./geo";
 import { coordKey, createPredictionService, listPredictions, type PredictionDeps } from "./prediction.service";
+import { setManualVisit } from "./visit.service";
 import { RoutingUnavailableError, TransitUnavailableError, type TransitItinerary, type TransitPlanner, type WalkingRouter } from "./routing";
 import { straightLineRouter } from "./straight-line.router";
 import type { LngLat } from "./types";
@@ -404,6 +405,48 @@ describe("live learning", () => {
     expect(model?.accuracy).toEqual({ top1Hits: 1, top3Hits: 1, evaluations: 1 });
     expect(model?.pendingSnapshot).toBeNull();
     expect(model?.weights?.wTime).not.toBe(1);
+  });
+});
+
+describe("dwell learning", () => {
+  /** Group 1 lies on the straight route between the two hints: a `route` visit interpolated at t = 30. */
+  async function passByRoute() {
+    await setAreaStatus("Alpha", "green");
+    await makeTeam(1, "alpha", moveM(O, 1000, 0));
+    await makeTeam(2, "alpha", moveM(O, 1000, 6000));
+    await addObservation("alpha", at(0), moveM(O, -1000, 0));
+    await addObservation("alpha", at(60), moveM(O, 3000, 0));
+  }
+
+  test("an interpolated route visit is no dwell sample", async () => {
+    await passByRoute();
+    await serviceAt(65).recomputeArea("alpha");
+    expect((await GroupVisit.findOne({ teamApiId: 1 }).lean())?.evidence).toBe("route");
+    const model = await PredictionModel.findOne({ area: "alpha" }).lean();
+    expect(model?.dwellMinutes).toBe(15);
+    expect(model?.lastDwellVisitAt ?? null).toBeNull();
+  });
+
+  test("a manual visit is a dwell sample", async () => {
+    await passByRoute();
+    await setManualVisit(1, "visited", at(30));
+    await serviceAt(65).recomputeArea("alpha");
+    const model = await PredictionModel.findOne({ area: "alpha" }).lean();
+    expect(model?.dwellMinutes).not.toBe(15);
+    expect(model?.lastDwellVisitAt).toEqual(at(30));
+  });
+
+  test("a point visit is a dwell sample", async () => {
+    await setAreaStatus("Alpha", "green");
+    await makeTeam(1, "alpha", moveM(O, 1000, 0));
+    await makeTeam(2, "alpha", moveM(O, 1000, 6000));
+    await addObservation("alpha", at(0), moveM(O, 1000, 50));
+    await addObservation("alpha", at(40), moveM(O, 3000, 0));
+    await serviceAt(45).recomputeArea("alpha");
+    const model = await PredictionModel.findOne({ area: "alpha" }).lean();
+    // speed 2600 m / 25 min → 1.074; travel 2000 m × 1.3 / 83.33 / 1.074 ≈ 29.0 min; sample 11.0 → EMA 13.8
+    expect(model?.dwellMinutes).toBeCloseTo(13.8, 1);
+    expect(model?.lastDwellVisitAt).toEqual(at(0));
   });
 });
 

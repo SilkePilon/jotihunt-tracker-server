@@ -88,9 +88,12 @@ export async function setManualVisit(teamApiId: number, state: VisitInput, now =
     return { area, visit: remaining ? toDto(remaining) : { area, teamApiId, round, state: "not_visited", source: "auto", visitedAt: null } };
   }
 
+  // Confirming a group that already has a visit keeps its real visit time (rounds, 30-minute rule, learning).
+  const existing = state === "visited" ? await GroupVisit.findOne({ teamApiId, round }).lean() : null;
+  const visitedAt = state === "visited" ? (existing?.state === VisitState.Visited && existing.visitedAt ? existing.visitedAt : now) : null;
   const doc = await GroupVisit.findOneAndUpdate(
     { teamApiId, round },
-    { $set: { area, state, source: VisitSource.Manual, visitedAt: state === "visited" ? now : null, evidence: "manual" } },
+    { $set: { area, state, source: VisitSource.Manual, visitedAt, evidence: "manual" } },
     { upsert: true, returnDocument: "after" },
   ).lean();
   return { area, visit: toDto(doc as VisitDoc) };
