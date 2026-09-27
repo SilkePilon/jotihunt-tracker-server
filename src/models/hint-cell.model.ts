@@ -21,7 +21,7 @@ const NoteSchema = new mongoose.Schema({
 
 const HintCellSchema = new mongoose.Schema({
   articleId: { type: Number, required: true },
-  area: { type: String, required: true },
+  area: { type: String, required: true, lowercase: true },
   publishAt: { type: Date, required: true },
   slotTime: { type: Date, required: true },
   snippet: { type: String },

@@ -92,6 +92,13 @@ await mongoose.connect(db).then(() => {
   if (debug) mongoose.set("debug", true);
 });
 
+// Surface index build failures (e.g. duplicate article ids blocking the unique index) instead of failing silently
+await Promise.all(
+  Object.values(mongoose.models).map((model) =>
+    model.init().catch((error) => logger.error(`Could not build indexes for ${model.modelName}`, error)),
+  ),
+);
+
 // Start the server
 const port = Number(process.env.PORT) || 3000;
 logger.info(`Starting server on port ${port}...`);
