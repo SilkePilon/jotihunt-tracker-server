@@ -7,6 +7,7 @@ ENV TZ=Europe/Amsterdam \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
+    tini \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src/app
@@ -19,4 +20,6 @@ COPY . .
 ARG PORT
 EXPOSE ${PORT:-3000}
 
+# tini runs as PID 1 and reaps the orphaned chromium/crashpad processes left behind by puppeteer
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["bun", "run", "src/index.ts"]
