@@ -1,4 +1,3 @@
-version: "3.9"
 services:
   server:
     image: ghcr.io/scoutingscherpenzeel/jotihunt-tracker-server:latest # of ":main" voor de laatste ontwikkelversie.

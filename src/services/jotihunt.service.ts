@@ -47,15 +47,17 @@ export async function getArticles(): Promise<ApiArticle[]> {
  * @returns {Promise<Page>} - A promise that resolves to a Puppeteer page.
  */
 export async function login(): Promise<Page> {
-    const environment = process.env.NODE_ENV;
-    const isProduction = environment === "production";
+    // Prefer an explicit PUPPETEER_EXECUTABLE_PATH (set in the Docker image to the system chromium),
+    // fall back to the system chromium in production and to puppeteer's bundled browser otherwise.
+    const isProduction = process.env.NODE_ENV === "production";
+    const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || (isProduction ? "/usr/bin/chromium" : undefined);
     const browser = await puppeteer.launch({
-        args: ["--no-sandbox", "--disable-setuid-sandbox"],
-        ...(isProduction && { executablePath: "/usr/bin/chromium" })
+        args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+        ...(executablePath && { executablePath }),
     });
     try {
         const page = await browser.newPage();
-        await page.setUserAgent(userAgent);
+        await page.setUserAgent({ userAgent });
 
         logger.info("(SCRAPER) Logging in to Jotihunt website with e-mail: " + websiteUsername);
         await page.goto(websiteUrl + "/login", { waitUntil: "networkidle2" });
