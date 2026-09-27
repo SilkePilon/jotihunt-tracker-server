@@ -28,4 +28,6 @@ const MarkerSchema = new mongoose.Schema({
   },
 });
 
+MarkerSchema.index({ area: 1, time: 1 }, { unique: true, partialFilterExpression: { type: "hint" } });
+
 export const Marker = mongoose.model("Marker", MarkerSchema);

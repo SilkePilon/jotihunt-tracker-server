@@ -31,9 +31,13 @@ async function findCellOr404(articleId: number, area: string) {
 }
 
 async function updateCell(articleId: number, area: string, update: mongoose.UpdateQuery<unknown>) {
-  const cell = await HintCell.findOneAndUpdate({ articleId, area }, update, { new: true }).populate(populateUsers);
+  const cell = await HintCell.findOneAndUpdate({ articleId, area }, update, { returnDocument: "after" }).populate(populateUsers);
   if (!cell) throw new HintBoardError(404, "Hint cell not found");
   return cell;
+}
+
+function isDuplicateKeyError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error as { code: unknown }).code === 11000;
 }
 
 export async function getBoard() {
@@ -52,7 +56,7 @@ export async function claimCell(articleId: number, area: string, userId: Id) {
       $or: [{ status: HintCellStatus.Open }, { status: HintCellStatus.Solving, claimedBy: userId }],
     },
     { $set: { status: HintCellStatus.Solving, claimedBy: userId, claimedAt: new Date() } },
-    { new: true },
+    { returnDocument: "after" },
   ).populate(populateUsers);
   if (cell) return cell;
 
@@ -68,7 +72,7 @@ export async function releaseCell(articleId: number, area: string, user: { _id: 
   const cell = await HintCell.findOneAndUpdate(
     filter,
     { $set: { status: HintCellStatus.Open }, $unset: { claimedBy: 1, claimedAt: 1 } },
-    { new: true },
+    { returnDocument: "after" },
   ).populate(populateUsers);
   if (cell) return cell;
 
@@ -78,7 +82,8 @@ export async function releaseCell(articleId: number, area: string, user: { _id: 
 
 export async function solveCell(articleId: number, area: string, userId: Id, answer: string, replaceMarker = false) {
   const cell = await findCellOr404(articleId, area);
-  const rd = parseRdAnswer(answer);
+  const trimmedAnswer = answer.trim();
+  const rd = parseRdAnswer(trimmedAnswer);
   let markerId: mongoose.Types.ObjectId | undefined;
 
   if (rd) {
@@ -96,8 +101,16 @@ export async function solveCell(articleId: number, area: string, userId: Id, ans
         });
       }
       if (existing) await existing.deleteOne();
-      const marker = await Marker.create({ area, time: cell.slotTime, type: MarkerType.Hint, location });
-      markerId = marker._id;
+      try {
+        const marker = await Marker.create({ area, time: cell.slotTime, type: MarkerType.Hint, location });
+        markerId = marker._id;
+      } catch (error) {
+        if (!isDuplicateKeyError(error)) throw error;
+        const existingMarker = await Marker.findOne({ type: MarkerType.Hint, area, time: cell.slotTime });
+        throw new HintBoardError(409, "A hint marker already exists for this area and hour", {
+          existingMarkerId: existingMarker ? String(existingMarker._id) : undefined,
+        });
+      }
     }
   } else if (cell.markerId) {
     // Answer changed from a coordinate to a word: remove the marker we created earlier
@@ -110,11 +123,12 @@ export async function solveCell(articleId: number, area: string, userId: Id, ans
 
   return updateCell(articleId, area, {
     $set: {
-      answer: answer.trim(),
+      answer: trimmedAnswer,
       answerKind: rd ? "rd" : "text",
       status: HintCellStatus.Solved,
       check: HintCheck.Unchecked,
       claimedBy: userId,
+      claimedAt: new Date(),
       ...(markerId ? { markerId } : {}),
       ...(rd ? { answerLocation: [rd.lng, rd.lat] } : {}),
     },

@@ -59,6 +59,9 @@ export async function createMarker(req: Request, res: Response) {
 
     return res.status(201).json(marker);
   } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && (error as { code: unknown }).code === 11000) {
+      return res.status(409).json({ message: "Er bestaat al een hint-marker voor dit deelgebied op dit uur" });
+    }
     logger.error("Error creating marker", error);
     return res.status(500).json({ message: "Error creating marker", error });
   }

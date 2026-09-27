@@ -160,6 +160,36 @@ describe("solveCell", () => {
     const cell = await solveCell(1, "alpha", user._id, "2000 4700");
     expect(cell.check).toBe(HintCheck.Unchecked);
   });
+
+  test("RD answer then text answer deletes the previously created marker", async () => {
+    const user = await makeUser("merida");
+    await makeCell();
+    await solveCell(1, "alpha", user._id, "2126 4692");
+    expect(await Marker.countDocuments()).toBe(1);
+    const cell = await solveCell(1, "alpha", user._id, "doedelzak");
+    expect(cell.answerKind).toBe("text");
+    expect(cell.markerId).toBeFalsy();
+    expect(cell.answerLocation).toBeFalsy();
+    expect(await Marker.countDocuments()).toBe(0);
+  });
+
+  test("solveCell on a missing cell throws 404", async () => {
+    const user = await makeUser("merida");
+    await expectBoardError(solveCell(1, "golf", user._id, "doedelzak"), 404);
+  });
+
+  test("only one of two concurrent RD solves on the same cell wins", async () => {
+    const [a, b] = await Promise.all([makeUser("a"), makeUser("b"), makeCell()]);
+    const results = await Promise.allSettled([
+      solveCell(1, "alpha", a._id, "2126 4692"),
+      solveCell(1, "alpha", b._id, "2000 4700"),
+    ]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
+    expect(rejected.reason).toBeInstanceOf(HintBoardError);
+    expect((rejected.reason as HintBoardError).status).toBe(409);
+    expect(await Marker.countDocuments({ type: MarkerType.Hint })).toBe(1);
+  });
 });
 
 describe("setCheck, addNote, setStatus", () => {
@@ -169,6 +199,16 @@ describe("setCheck, addNote, setStatus", () => {
     const cell = await setCheck(1, "alpha", user._id, HintCheck.Disputed);
     expect(cell.check).toBe(HintCheck.Disputed);
     expect((cell.checkedBy as unknown as { name: string }).name).toBe("merida");
+  });
+
+  test("setCheck with Unchecked clears checkedBy", async () => {
+    const user = await makeUser("merida");
+    await makeCell();
+    const checked = await setCheck(1, "alpha", user._id, HintCheck.Verified);
+    expect(checked.checkedBy).toBeTruthy();
+    const cell = await setCheck(1, "alpha", user._id, HintCheck.Unchecked);
+    expect(cell.check).toBe(HintCheck.Unchecked);
+    expect(cell.checkedBy).toBeFalsy();
   });
 
   test("addNote appends a note with the author", async () => {
