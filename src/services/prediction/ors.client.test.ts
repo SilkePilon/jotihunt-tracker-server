@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { USER_AGENT } from "./constants";
-import { DailyCounter, type HttpPost } from "./http";
-import { createOrsRouter, parseOrsIsochrones, parseOrsMatrix, parseOrsRoute } from "./ors.client";
+import { DailyCounter, MinuteBudget, type HttpPost } from "./http";
+import { createOrsRouter, ORS_MINUTE_LIMITS, parseOrsIsochrones, parseOrsMatrix, parseOrsRoute } from "./ors.client";
 import { RoutingUnavailableError } from "./routing";
 
 const sampleMatrix = {
@@ -106,5 +106,100 @@ describe("createOrsRouter", () => {
     });
     await expect(exhausted.route([5.48, 52.08], [5.49, 52.08])).rejects.toBeInstanceOf(RoutingUnavailableError);
     expect(post).not.toHaveBeenCalled();
+  });
+});
+
+describe("ORS error classification", () => {
+  /** An axios-like error; the config carries the key to prove it never reaches the message. */
+  function httpError(status: number | undefined, message: string, code?: string) {
+    return Object.assign(new Error(message), {
+      code,
+      config: { headers: { Authorization: "secret" } },
+      response: status === undefined ? undefined : { status, data: { error: { code: 2010, message: "Could not find routable point within a radius of 350.0 meters" } } },
+    });
+  }
+
+  async function failureFor(error: unknown) {
+    const router = createOrsRouter("secret", { post: async () => Promise.reject(error), schedule: immediate });
+    try {
+      await router.route([5.48, 52.08], [5.49, 52.08]);
+    } catch (caught) {
+      return caught as RoutingUnavailableError;
+    }
+    throw new Error("expected a failure");
+  }
+
+  test("400 and 404 are request-specific", async () => {
+    for (const status of [400, 404]) {
+      const error = await failureFor(httpError(status, `Request failed with status code ${status}`));
+      expect(error).toBeInstanceOf(RoutingUnavailableError);
+      expect(error.kind).toBe("request");
+      expect(error.permanent).toBe(false);
+    }
+  });
+
+  test("401 and 403 are permanent", async () => {
+    for (const status of [401, 403]) {
+      const error = await failureFor(httpError(status, `Request failed with status code ${status}`));
+      expect(error.kind).toBe("permanent");
+      expect(error.permanent).toBe(true);
+    }
+  });
+
+  test("429, 5xx, timeouts and network errors are temporary", async () => {
+    const errors = [
+      httpError(429, "Request failed with status code 429"),
+      httpError(500, "Request failed with status code 500"),
+      httpError(503, "Request failed with status code 503"),
+      httpError(undefined, "timeout of 15000ms exceeded", "ECONNABORTED"),
+      httpError(undefined, "getaddrinfo ENOTFOUND api.openrouteservice.org", "ENOTFOUND"),
+      new Error("socket hang up"),
+    ];
+    for (const raw of errors) expect((await failureFor(raw)).kind).toBe("temporary");
+  });
+
+  test("a missing key is permanent", async () => {
+    const router = createOrsRouter(undefined, { post: async () => ({ data: sampleRoute }), schedule: immediate });
+    await expect(router.route([5.48, 52.08], [5.49, 52.08])).rejects.toMatchObject({ kind: "permanent" });
+  });
+
+  test("the error message never contains the API key", async () => {
+    for (const status of [400, 401, 429, undefined]) {
+      const error = await failureFor(httpError(status, "Request failed"));
+      expect(error.message).not.toContain("secret");
+      expect(JSON.stringify(error)).not.toContain("secret");
+    }
+  });
+});
+
+describe("ORS per-minute budgets", () => {
+  test("uses the free-plan per-minute limits", () => {
+    expect(ORS_MINUTE_LIMITS).toEqual({ isochrones: 20, matrix: 40, directions: 40 });
+  });
+
+  test("an exhausted endpoint waits for the minute to roll over instead of failing", async () => {
+    let clock = 0;
+    const sleeps: number[] = [];
+    const time = {
+      now: () => clock,
+      sleep: async (ms: number) => {
+        sleeps.push(ms);
+        clock += ms;
+      },
+    };
+    const post = mock<HttpPost>(async (url) => ({ data: url.includes("isochrones") ? sampleIsochrones : sampleRoute }));
+    const router = createOrsRouter("secret", {
+      post,
+      schedule: immediate,
+      budgets: { isochrones: new MinuteBudget(2, time), matrix: new MinuteBudget(40, time), directions: new MinuteBudget(40, time) },
+    });
+    await router.isochrones([5.48, 52.08], [10]);
+    await router.isochrones([5.48, 52.08], [10]);
+    // Other endpoints have their own budget.
+    await router.route([5.48, 52.08], [5.49, 52.08]);
+    expect(sleeps).toEqual([]);
+    await router.isochrones([5.48, 52.08], [10]);
+    expect(sleeps).toEqual([60_000]);
+    expect(post).toHaveBeenCalledTimes(4);
   });
 });

@@ -1,14 +1,25 @@
 import type { LngLat, PolygonGeometry } from "./types";
 
+/**
+ * How a routing failure should be handled:
+ * - `request`: only this request is bad (e.g. 400/404 "no routable point within 350 m"); other requests still work.
+ * - `permanent`: cannot resolve itself (no/invalid API key, 401/403); stop calling until the config changes.
+ * - `temporary`: outage, rate limit, timeout or network error (429/5xx); retry after a cooldown.
+ */
+export type RoutingFailureKind = "request" | "permanent" | "temporary";
+
 /** ORS (or any walking router) could not answer: no key, HTTP error, quota. Callers fall back to estimates. */
 export class RoutingUnavailableError extends Error {
-  /** Set when the outage cannot resolve itself (e.g. no API key configured) so callers should not retry on a cooldown. */
-  readonly permanent: boolean;
+  readonly kind: RoutingFailureKind;
 
-  constructor(message: string, options: { permanent?: boolean } = {}) {
+  constructor(message: string, options: { kind?: RoutingFailureKind } = {}) {
     super(message);
     this.name = "RoutingUnavailableError";
-    this.permanent = options.permanent ?? false;
+    this.kind = options.kind ?? "temporary";
+  }
+
+  get permanent(): boolean {
+    return this.kind === "permanent";
   }
 }
 

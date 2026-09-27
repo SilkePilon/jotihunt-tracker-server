@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createThrottle, DailyCounter } from "./http";
+import { createThrottle, DailyCounter, MinuteBudget } from "./http";
 
 describe("createThrottle", () => {
   test("spaces task starts by the interval and keeps order", async () => {
@@ -32,5 +32,30 @@ describe("DailyCounter", () => {
     expect([counter.tryConsume(), counter.tryConsume(), counter.tryConsume()]).toEqual([true, true, false]);
     now = new Date("2026-10-18T00:00:01Z");
     expect(counter.tryConsume()).toBe(true);
+  });
+});
+
+describe("MinuteBudget", () => {
+  test("allows `limit` starts per rolling minute, then waits until the oldest one is a minute old", async () => {
+    let clock = 0;
+    const sleeps: number[] = [];
+    const budget = new MinuteBudget(2, {
+      now: () => clock,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        clock += ms;
+      },
+    });
+    await budget.acquire();
+    clock = 10_000;
+    await budget.acquire();
+    expect(sleeps).toEqual([]);
+    clock = 30_000;
+    await budget.acquire();
+    expect(sleeps).toEqual([30_000]);
+    expect(clock).toBe(60_000);
+    // Starts at 10 s and 60 s are in the window; the next slot opens at 70 s.
+    await budget.acquire();
+    expect(sleeps).toEqual([30_000, 10_000]);
   });
 });

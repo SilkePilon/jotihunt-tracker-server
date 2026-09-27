@@ -25,4 +25,8 @@ export const TRANSIT_CACHE_MS = 30 * 60 * 1000;
 export const RECOMPUTE_INTERVAL_MS = 5 * 60 * 1000;
 /** After a RoutingUnavailableError, ORS is treated as down for this long before being retried. */
 export const ORS_COOLDOWN_MS = 5 * 60 * 1000;
+/** A request ORS rejected as unanswerable (400/404) is answered from the cached fallback for this long. */
+export const ORS_REQUEST_FALLBACK_TTL_MS = 6 * 60 * 60 * 1000;
+/** After a TransitUnavailableError, Transitous is skipped (walking only) for this long. */
+export const TRANSIT_COOLDOWN_MS = 5 * 60 * 1000;
 export const USER_AGENT = "jotihunt-tracker (+https://github.com/SilkePilon/jotihunt-tracker-server)";

@@ -57,3 +57,34 @@ export class DailyCounter {
     return true;
   }
 }
+
+const MINUTE_MS = 60_000;
+
+/**
+ * Per-endpoint per-minute rate limit (rolling window). `acquire` waits until a slot is free
+ * instead of failing, so a burst is queued until the minute rolls over.
+ */
+export class MinuteBudget {
+  private readonly starts: number[] = [];
+  private readonly limit: number;
+  private readonly now: () => number;
+  private readonly sleep: (ms: number) => Promise<void>;
+
+  constructor(limit: number, clock: ThrottleClock = {}) {
+    this.limit = limit;
+    this.now = clock.now ?? (() => Date.now());
+    this.sleep = clock.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  }
+
+  async acquire(): Promise<void> {
+    for (;;) {
+      const now = this.now();
+      while (this.starts.length > 0 && this.starts[0] <= now - MINUTE_MS) this.starts.shift();
+      if (this.starts.length < this.limit) {
+        this.starts.push(now);
+        return;
+      }
+      await this.sleep(this.starts[0] + MINUTE_MS - now);
+    }
+  }
+}

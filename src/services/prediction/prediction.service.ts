@@ -3,7 +3,16 @@ import { Marker } from "../../models/marker.model";
 import { Prediction } from "../../models/prediction.model";
 import { PredictionModel } from "../../models/prediction-model.model";
 import { Team } from "../../models/team.model";
-import { ORS_COOLDOWN_MS, RECOMPUTE_INTERVAL_MS, TOP_CANDIDATES, TRANSIT_CACHE_MS, VISIT_RADIUS_M } from "./constants";
+import { createHash } from "node:crypto";
+import {
+  ORS_COOLDOWN_MS,
+  ORS_REQUEST_FALLBACK_TTL_MS,
+  RECOMPUTE_INTERVAL_MS,
+  TOP_CANDIDATES,
+  TRANSIT_CACHE_MS,
+  TRANSIT_COOLDOWN_MS,
+  VISIT_RADIUS_M,
+} from "./constants";
 import { distanceM } from "./geo";
 import {
   dwellSample,
@@ -16,7 +25,7 @@ import {
   type SnapshotCandidate,
 } from "./learning";
 import { RoutingUnavailableError, TransitUnavailableError, type RouteResult, type TransitItinerary, type TransitPlanner, type WalkingRouter } from "./routing";
-import { readCache, writeCache } from "./routing-cache";
+import { readCache, readCacheEntry, writeCache } from "./routing-cache";
 import { computeHeading, scoreCandidates } from "./scoring";
 import { straightLineSeconds } from "./straight-line.router";
 import { planTour } from "./tour";
@@ -113,6 +122,12 @@ interface PredictedPart {
 /** Stable cache key for a coordinate (~1 m precision). */
 export function coordKey([lng, lat]: LngLat): string {
   return `${lng.toFixed(5)},${lat.toFixed(5)}`;
+}
+
+/** Short cache key for a set of groups: ids and coordinates, so a moved group gets a new key. */
+function groupsKey(groups: GroupRef[]): string {
+  const parts = groups.map((group) => `${group.teamApiId}@${coordKey([group.lng, group.lat])}`).join(";");
+  return createHash("sha1").update(parts).digest("hex");
 }
 
 function escapeRegExp(value: string) {
@@ -214,12 +229,15 @@ export function createPredictionService(deps: PredictionDeps) {
 
   /**
    * ORS circuit breaker, shared across areas/ticks for the life of this service instance.
-   * - `permanent`: no API key configured; never call ORS, never churn a cooldown.
-   * - `openUntil`: set after a RoutingUnavailableError; while `now() < openUntil`, skip ORS
-   *   entirely (straight to the fallback). Once elapsed the next call is a half-open probe:
+   * - `permanent`: no or rejected API key (401/403); never call ORS again, never churn a cooldown.
+   * - `openUntil`: set after a temporary error (429/5xx/timeout/network); while `now() < openUntil`,
+   *   skip ORS entirely (straight to the fallback). Once elapsed the next call is a half-open probe:
    *   success closes the breaker, failure re-opens it for another ORS_COOLDOWN_MS.
+   * Request-specific errors (400/404) never touch the breaker (see `routed`).
    */
   const orsBreaker: { permanent: boolean; openUntil: number | null } = { permanent: false, openUntil: null };
+  /** Transitous cooldown after a TransitUnavailableError (walking only until then). */
+  const transitBreaker: { openUntil: number | null } = { openUntil: null };
 
   /** Run tasks for the same area one at a time (cron and PUT /visits can overlap). */
   function withLock<T>(area: string, task: () => Promise<T>): Promise<T> {
@@ -232,10 +250,17 @@ export function createPredictionService(deps: PredictionDeps) {
     return run;
   }
 
-  /** Cached walking-router call; on RoutingUnavailableError use the fallback router (not cached). */
+  /**
+   * Cached walking-router call; on RoutingUnavailableError use the fallback router.
+   * A request-specific failure (e.g. an unroutable point) leaves ORS open for everything else and
+   * caches the fallback under this key for 6 h, so the bad request is not re-probed every tick.
+   */
   async function routed<T>(flags: RunFlags, key: string, ttlMs: number, request: (router: WalkingRouter) => Promise<T>): Promise<T> {
-    const hit = await readCache<T>(key);
-    if (hit !== undefined) return hit;
+    const hit = await readCacheEntry<T>(key);
+    if (hit !== undefined) {
+      if (hit.estimate) flags.estimate = true;
+      return hit.value;
+    }
     if (orsBreaker.permanent || (orsBreaker.openUntil !== null && now().getTime() < orsBreaker.openUntil)) {
       flags.estimate = true;
       return request(deps.fallback);
@@ -248,7 +273,12 @@ export function createPredictionService(deps: PredictionDeps) {
     } catch (error) {
       if (!(error instanceof RoutingUnavailableError)) throw error;
       flags.estimate = true;
-      if (error.permanent) {
+      if (error.kind === "request") {
+        const value = await request(deps.fallback);
+        await writeCache(key, value, Math.min(ttlMs, ORS_REQUEST_FALLBACK_TTL_MS), { estimate: true });
+        return value;
+      }
+      if (error.kind === "permanent") {
         orsBreaker.permanent = true;
       } else {
         orsBreaker.openUntil = now().getTime() + ORS_COOLDOWN_MS;
@@ -269,16 +299,23 @@ export function createPredictionService(deps: PredictionDeps) {
   }
 
   async function planTransit(flags: RunFlags, area: string, last: Observation, group: GroupRef, from: LngLat, departAt: Date): Promise<TransitItinerary | null> {
-    const key = `transit:${area}:${last.time.toISOString()}:${group.teamApiId}`;
+    const to: LngLat = [group.lng, group.lat];
+    const key = `transit:${area}:${last.time.toISOString()}:${coordKey(from)}:${group.teamApiId}@${coordKey(to)}`;
     const hit = await readCache<{ itinerary: TransitItinerary | null }>(key);
     if (hit) return hit.itinerary;
+    if (transitBreaker.openUntil !== null && now().getTime() < transitBreaker.openUntil) {
+      flags.transitUnavailable = true;
+      return null;
+    }
     try {
-      const itinerary = await deps.transit.plan(from, [group.lng, group.lat], departAt);
+      const itinerary = await deps.transit.plan(from, to, departAt);
       await writeCache(key, { itinerary }, TRANSIT_CACHE_MS);
+      transitBreaker.openUntil = null;
       return itinerary;
     } catch (error) {
       if (!(error instanceof TransitUnavailableError)) throw error;
       flags.transitUnavailable = true;
+      transitBreaker.openUntil = now().getTime() + TRANSIT_COOLDOWN_MS;
       return null;
     }
   }
@@ -352,9 +389,9 @@ export function createPredictionService(deps: PredictionDeps) {
   async function predict(flags: RunFlags, ctx: AreaContext, last: ObservationRecord, state: RoundState, model: LearnedModel, at: Date): Promise<PredictedPart> {
     const position: LngLat = [last.lng, last.lat];
     const coords = ctx.groups.map((group): LngLat => [group.lng, group.lat]);
-    const idsKey = ctx.groups.map((group) => group.teamApiId).join(",");
-    const fromPosition = await routed(flags, `pmatrix:${coordKey(position)}:${idsKey}`, DAY_MS, (router) => router.matrix([position], coords));
-    const between = await routed(flags, `gmatrix:${ctx.area}:${idsKey}`, WEEK_MS, (router) => router.matrix(coords, coords));
+    const groupsHash = groupsKey(ctx.groups);
+    const fromPosition = await routed(flags, `pmatrix:${coordKey(position)}:${groupsHash}`, DAY_MS, (router) => router.matrix([position], coords));
+    const between = await routed(flags, `gmatrix:${ctx.area}:${groupsHash}`, WEEK_MS, (router) => router.matrix(coords, coords));
 
     const open = new Set(
       candidateIds(

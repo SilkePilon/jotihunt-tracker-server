@@ -3,6 +3,8 @@ import { GroupVisit } from "../../models/group-visit.model";
 import { MarkerType } from "../../models/marker.model";
 import { Prediction } from "../../models/prediction.model";
 import { PredictionModel } from "../../models/prediction-model.model";
+import { RoutingCache } from "../../models/routing-cache.model";
+import { Team } from "../../models/team.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../../test/db";
 import { addObservation, makeTeam, setAreaStatus } from "../../test/prediction-fixtures";
 import { moveM } from "./geo";
@@ -190,6 +192,104 @@ describe("ORS circuit breaker", () => {
   });
 });
 
+describe("ORS error classes", () => {
+  const LAKE = moveM(O, -1000, 0);
+
+  /** straight-line routing, but every request touching the LAKE point fails with the given kind. */
+  function routerFailingAt(point: LngLat, kind: "request" | "permanent") {
+    let failures = 0;
+    let calls = 0;
+    const touches = (coords: LngLat[]) => coords.some((coord) => coordKey(coord) === coordKey(point));
+    const guard = <T>(coords: LngLat[], run: () => Promise<T>) => {
+      calls++;
+      if (kind === "permanent" || touches(coords)) {
+        failures++;
+        return Promise.reject(new RoutingUnavailableError("ORS directions: Request failed with status code 404", { kind }));
+      }
+      return run();
+    };
+    const router: WalkingRouter = {
+      matrix: (sources, destinations) => guard([...sources, ...destinations], () => straightLineRouter.matrix(sources, destinations)),
+      route: (a, b) => guard([a, b], () => straightLineRouter.route(a, b)),
+      isochrones: (center, ranges) => guard([center], () => straightLineRouter.isochrones(center, ranges)),
+    };
+    return { router, failures: () => failures, calls: () => calls };
+  }
+
+  test("one unroutable point does not put other areas in estimate mode and is not re-probed", async () => {
+    await alphaWithThreeGroups();
+    await setAreaStatus("Bravo", "green");
+    await makeTeam(21, "bravo", moveM(O, 0, 6000));
+    await addObservation("alpha", at(0), LAKE);
+    await addObservation("alpha", at(60), O);
+    await addObservation("bravo", at(60), moveM(O, 0, 4000));
+    const { router, failures } = routerFailingAt(LAKE, "request");
+    let clock = at(80);
+    const service = createPredictionService({ walking: router, fallback: straightLineRouter, transit: noTransit, now: () => clock });
+
+    const alpha = await service.recomputeArea("alpha");
+    expect(alpha.estimate).toBe(true);
+    expect(failures()).toBe(1);
+
+    const bravo = await service.recomputeArea("bravo");
+    expect(bravo.estimate).toBe(false);
+
+    // The fallback for the bad pair is cached for 6 h: the next recompute does not ask ORS again.
+    clock = plus(at(80), 10);
+    const again = await service.recomputeArea("alpha");
+    expect(failures()).toBe(1);
+    expect(again.estimate).toBe(true);
+    const cached = await RoutingCache.findOne({ key: `route:${coordKey(LAKE)}>${coordKey(O)}` }).lean();
+    expect(cached?.estimate).toBe(true);
+    const ttlH = ((cached?.expiresAt.getTime() ?? 0) - Date.now()) / 3_600_000;
+    expect(ttlH).toBeGreaterThan(5.9);
+    expect(ttlH).toBeLessThanOrEqual(6);
+  });
+
+  test("a permanent error (401/403) stops ORS calls for good, not for a cooldown", async () => {
+    await alphaWithThreeGroups();
+    await addObservation("alpha", at(0), moveM(O, -1000, 0));
+    await addObservation("alpha", at(60), O);
+    const { router, calls } = routerFailingAt(O, "permanent");
+    let clock = at(80);
+    const service = createPredictionService({ walking: router, fallback: straightLineRouter, transit: noTransit, now: () => clock });
+    expect((await service.recomputeArea("alpha")).estimate).toBe(true);
+    expect(calls()).toBe(1);
+    clock = plus(at(80), 120);
+    expect((await service.recomputeArea("alpha")).estimate).toBe(true);
+    expect(calls()).toBe(1);
+  });
+});
+
+describe("routing cache keys", () => {
+  function countingRouter() {
+    const counts = { matrix: 0 };
+    const router: WalkingRouter = {
+      ...straightLineRouter,
+      matrix: (sources, destinations) => {
+        counts.matrix++;
+        return straightLineRouter.matrix(sources, destinations);
+      },
+    };
+    return { router, counts };
+  }
+
+  test("moving a group invalidates the cached matrices", async () => {
+    await alphaWithThreeGroups();
+    await addObservation("alpha", at(60), O);
+    const { router, counts } = countingRouter();
+    const service = serviceAt(80, { walking: router });
+    await service.recomputeArea("alpha");
+    expect(counts.matrix).toBe(2);
+    await service.recomputeArea("alpha");
+    expect(counts.matrix).toBe(2);
+
+    await Team.updateOne({ apiId: 2 }, { $set: { "location.coordinates": moveM(O, 2000, 500) } });
+    await service.recomputeArea("alpha");
+    expect(counts.matrix).toBe(4);
+  });
+});
+
 describe("public transport", () => {
   function busItinerary(departAt: Date): TransitItinerary {
     const stop = (name: string, location: LngLat, arrival: Date | null) => ({ name, lng: location[0], lat: location[1], arrival, departure: null });
@@ -231,6 +331,58 @@ describe("public transport", () => {
     expect(prediction.transitUnavailable).toBe(true);
     expect(prediction.candidates[0].via).toBe("walk");
     expect(prediction.zone.islands).toEqual([]);
+  });
+});
+
+describe("Transitous breaker", () => {
+  async function oscar() {
+    await setAreaStatus("Oscar", "green");
+    await makeTeam(11, "oscar", moveM(O, 8000, 0));
+    await addObservation("oscar", at(0), O, MarkerType.Spot);
+  }
+
+  test("after a failure Transitous is skipped for 5 minutes (walking only, flagged)", async () => {
+    await oscar();
+    let calls = 0;
+    const transit: TransitPlanner = {
+      plan: async () => {
+        calls++;
+        throw new TransitUnavailableError("timeout of 20000ms exceeded");
+      },
+    };
+    let clock = at(90);
+    const service = createPredictionService({ walking: straightLineRouter, fallback: straightLineRouter, transit, now: () => clock });
+
+    expect((await service.recomputeArea("oscar")).transitUnavailable).toBe(true);
+    expect(calls).toBe(1);
+
+    clock = plus(at(90), 3);
+    const skipped = await service.recomputeArea("oscar");
+    expect(calls).toBe(1);
+    expect(skipped.transitUnavailable).toBe(true);
+    expect(skipped.candidates[0].via).toBe("walk");
+
+    clock = plus(at(90), 6);
+    await service.recomputeArea("oscar");
+    expect(calls).toBe(2);
+  });
+
+  test("a moved group gets a fresh transit plan (coordinates in the cache key)", async () => {
+    await oscar();
+    let calls = 0;
+    const transit: TransitPlanner = {
+      plan: async () => {
+        calls++;
+        return null;
+      },
+    };
+    const service = serviceAt(90, { transit });
+    await service.recomputeArea("oscar");
+    await service.recomputeArea("oscar");
+    expect(calls).toBe(1);
+    await Team.updateOne({ apiId: 11 }, { $set: { "location.coordinates": moveM(O, 8000, 800) } });
+    await service.recomputeArea("oscar");
+    expect(calls).toBe(2);
   });
 });
 
