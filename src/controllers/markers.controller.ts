@@ -39,9 +39,13 @@ export async function createMarker(req: Request, res: Response) {
       return res.status(400).json({ message: "Time must be a valid date" });
     }
 
-    parsedTime.setSeconds(0);
-
-    if(type == MarkerType.Hint) parsedTime.setMinutes(0);
+    if (type == MarkerType.Hint) {
+      // Hint markers are keyed by hour slot (see HintCell.slotTime / the unique index), so
+      // round down to the exact hour, matching floorToHour in article-sync.service.
+      parsedTime.setUTCMinutes(0, 0, 0);
+    } else {
+      parsedTime.setSeconds(0, 0);
+    }
 
     // Create a new marker
     const marker = new Marker({

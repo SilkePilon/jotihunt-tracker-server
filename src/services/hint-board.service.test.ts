@@ -152,6 +152,30 @@ describe("solveCell", () => {
     expect(cell.markerId).toBeTruthy();
   });
 
+  test("replacing a marker linked from another cell clears that cell's link", async () => {
+    const user = await makeUser("merida");
+    await makeCell("alpha");
+    await makeCell("bravo");
+
+    // bravo owns a marker at alpha's slot/area (simulates two areas sharing an hour slot
+    // via a manually-created marker that a different cell then adopts).
+    const manual = await Marker.create({
+      area: "alpha",
+      time: slotTime,
+      type: MarkerType.Hint,
+      location: { type: "Point", coordinates: [6, 52] },
+    });
+    await HintCell.updateOne({ articleId: 1, area: "bravo" }, { $set: { markerId: manual._id, answerLocation: [6, 52] } });
+
+    const solved = await solveCell(1, "alpha", user._id, "2126 4692", true);
+    expect(String(solved.markerId)).not.toBe(String(manual._id));
+    expect(await Marker.exists({ _id: manual._id })).toBeNull();
+
+    const bravoCell = await HintCell.findOne({ articleId: 1, area: "bravo" }).lean();
+    expect(bravoCell!.markerId).toBeFalsy();
+    expect(bravoCell!.answerLocation).toBeFalsy();
+  });
+
   test("solving resets the check", async () => {
     const user = await makeUser("merida");
     await makeCell();

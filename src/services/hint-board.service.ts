@@ -26,13 +26,13 @@ const populateUsers = [
 
 async function findCellOr404(articleId: number, area: string) {
   const cell = await HintCell.findOne({ articleId, area }).populate(populateUsers);
-  if (!cell) throw new HintBoardError(404, "Hint cell not found");
+  if (!cell) throw new HintBoardError(404, "Hintvak niet gevonden");
   return cell;
 }
 
 async function updateCell(articleId: number, area: string, update: mongoose.UpdateQuery<unknown>) {
   const cell = await HintCell.findOneAndUpdate({ articleId, area }, update, { returnDocument: "after" }).populate(populateUsers);
-  if (!cell) throw new HintBoardError(404, "Hint cell not found");
+  if (!cell) throw new HintBoardError(404, "Hintvak niet gevonden");
   return cell;
 }
 
@@ -61,7 +61,10 @@ export async function claimCell(articleId: number, area: string, userId: Id) {
   if (cell) return cell;
 
   const existing = await findCellOr404(articleId, area);
-  const message = existing.status === HintCellStatus.Solving ? "Cell is already claimed" : `Cell is ${existing.status}`;
+  const message =
+    existing.status === HintCellStatus.Solving
+      ? "Dit vak is al geclaimd"
+      : `Dit vak is ${existing.status === HintCellStatus.Solved ? "al opgelost" : "gemarkeerd als geen hint"}`;
   throw new HintBoardError(409, message, { claimedBy: existing.claimedBy ?? null });
 }
 
@@ -77,7 +80,7 @@ export async function releaseCell(articleId: number, area: string, user: { _id: 
   if (cell) return cell;
 
   await findCellOr404(articleId, area);
-  throw new HintBoardError(409, "Cell is not claimed by you");
+  throw new HintBoardError(409, "Dit vak is niet door jou geclaimd");
 }
 
 export async function solveCell(articleId: number, area: string, userId: Id, answer: string, replaceMarker = false) {
@@ -96,18 +99,26 @@ export async function solveCell(articleId: number, area: string, userId: Id, ans
       markerId = existing._id;
     } else {
       if (existing && !replaceMarker) {
-        throw new HintBoardError(409, "A hint marker already exists for this area and hour", {
+        throw new HintBoardError(409, "Er bestaat al een hint-marker voor dit deelgebied op dit uur", {
           existingMarkerId: String(existing._id),
         });
       }
-      if (existing) await existing.deleteOne();
+      if (existing) {
+        // If the marker being replaced is linked from a different cell, that cell's link
+        // would otherwise point at a deleted marker.
+        await HintCell.updateMany(
+          { markerId: existing._id, _id: { $ne: cell._id } },
+          { $unset: { markerId: 1, answerLocation: 1 } },
+        );
+        await existing.deleteOne();
+      }
       try {
         const marker = await Marker.create({ area, time: cell.slotTime, type: MarkerType.Hint, location });
         markerId = marker._id;
       } catch (error) {
         if (!isDuplicateKeyError(error)) throw error;
         const existingMarker = await Marker.findOne({ type: MarkerType.Hint, area, time: cell.slotTime });
-        throw new HintBoardError(409, "A hint marker already exists for this area and hour", {
+        throw new HintBoardError(409, "Er bestaat al een hint-marker voor dit deelgebied op dit uur", {
           existingMarkerId: existingMarker ? String(existingMarker._id) : undefined,
         });
       }
