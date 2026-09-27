@@ -23,7 +23,7 @@ export async function getAreas(): Promise<ApiArea[]> {
         return response.data.data as ApiArea[];
     } catch (error) {
         logger.error("Error fetching areas:", error);
-        throw new Error("Could not fetch areas");
+        throw new Error("Could not fetch areas", { cause: error });
     }
 }
 
@@ -38,7 +38,7 @@ export async function getArticles(): Promise<ApiArticle[]> {
         return response.data.data as ApiArticle[];
     } catch (error) {
         logger.error("Error fetching articles:", error);
-        throw new Error("Could not fetch articles");
+        throw new Error("Could not fetch articles", { cause: error });
     }
 }
 

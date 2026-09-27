@@ -27,7 +27,7 @@ export default async function verifyToken(req: Request, res: Response, next: Nex
     req.user = user;
 
     next();
-  } catch (error) {
+  } catch {
     res.status(401).json({
       message: "Access denied",
     });

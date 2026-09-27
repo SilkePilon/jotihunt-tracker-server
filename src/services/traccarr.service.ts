@@ -76,7 +76,7 @@ export async function getDevices(): Promise<Array<TraccarDevice>> {
     return response.data;
   } catch (error) {
     logger.error("Error fetching devices:", error);
-    throw new Error("Could not fetch devices");
+    throw new Error("Could not fetch devices", { cause: error });
   }
 }
 
@@ -97,7 +97,7 @@ export async function getPositions(): Promise<Array<TraccarPosition>> {
     });
   } catch (error) {
     logger.error("Error fetching positions:", error);
-    throw new Error("Could not fetch positions");
+    throw new Error("Could not fetch positions", { cause: error });
   }
 }
 
@@ -111,6 +111,6 @@ export async function getGroups(): Promise<Array<TraccarGroup>> {
     return response.data;
   } catch (error) {
     logger.error("Error fetching groups:", error);
-    throw new Error("Could not fetch groups");
+    throw new Error("Could not fetch groups", { cause: error });
   }
 }

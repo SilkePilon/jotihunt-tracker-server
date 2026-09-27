@@ -1,7 +1,7 @@
 import express from "express";
 import * as adminController from "../controllers/admin.controller";
 import verifyToken, { isAdmin } from "../middleware/auth.middleware";
-import { body, check, param } from "express-validator";
+import { body, param } from "express-validator";
 import { User } from "../models/user.model";
 import { validate } from "../middleware/validate.middleware";
 
@@ -10,7 +10,7 @@ const createValidator = [
   body("name").notEmpty().withMessage("Naam mag niet leeg zijn.").trim().escape(),
   body("email").notEmpty().withMessage("E-mailadres mag niet leeg zijn.").isEmail().withMessage("E-mailadres is ongeldig.").trim(),
   body("password").notEmpty().withMessage("Wachtwoord mag niet leeg zijn."),
-  body("email").custom((value, {}) => {
+  body("email").custom((value) => {
     return User.findOne({ email: value }).then((user) => {
       if (user) {
         throw new Error("E-mailadres is al in gebruik.");
@@ -20,7 +20,7 @@ const createValidator = [
 ];
 
 const deleteValidator = [
-  param("id").custom((value, { req }) => {
+  param("id").custom((value) => {
     return User.findById(value).then((user) => {
       if (!user) {
         throw new Error("Er is geen gebruiker met dit ID.");
@@ -30,7 +30,7 @@ const deleteValidator = [
 ];
 
 const updateValidator = [
-  param("id").custom((value, { req }) => {
+  param("id").custom((value) => {
     return User.findById(value).then((user) => {
       if (!user) {
         throw new Error("Er is geen gebruiker met dit ID.");

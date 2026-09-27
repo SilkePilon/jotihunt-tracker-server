@@ -20,7 +20,7 @@ export async function getTeams(): Promise<ApiTeam[]> {
         return data as ApiTeam[];
     } catch (error) {
         console.error("Error fetching teams:", error);
-        throw new Error("Could not fetch teams");
+        throw new Error("Could not fetch teams", { cause: error });
     }
 }
 
