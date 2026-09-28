@@ -24,6 +24,7 @@ router.post(
       body("kind").isIn(HUNT_KINDS).withMessage("Soort moet hunt of tegenhunt zijn."),
       body("lng").optional().isFloat({ min: -180, max: 180 }).withMessage("Ongeldige lengtegraad."),
       body("lat").optional().isFloat({ min: -90, max: 90 }).withMessage("Ongeldige breedtegraad."),
+      body("uploadId").optional().isUUID().withMessage("Ongeldig upload-ID."),
     ]),
   ],
   huntReportsController.postHuntReport,

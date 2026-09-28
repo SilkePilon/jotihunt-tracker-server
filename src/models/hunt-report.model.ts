@@ -33,6 +33,8 @@ const HuntReportSchema = new mongoose.Schema(
     area: { type: String, enum: HUNT_AREAS, required: true },
     /** Normalised: whitespace removed; case-sensitive. null until read. Not unique: duplicates are flagged, not blocked. */
     huntCode: { type: String, required: false, default: null, index: true },
+    /** Random id the phone generates per photo, so a retried upload (lost response) doesn't create a second hunt */
+    uploadId: { type: String, required: false },
     /** null until read or entered; the upload time (createdAt) is used meanwhile */
     huntTime: { type: Date, required: false, default: null },
     /** Missing on reports from before OCR (entered by hand, so manual) */
@@ -54,6 +56,8 @@ const HuntReportSchema = new mongoose.Schema(
   },
   { timestamps: { createdAt: true, updatedAt: false } },
 );
+
+HuntReportSchema.index({ uploadId: 1 }, { unique: true, sparse: true });
 
 export const HuntReport = mongoose.model("HuntReport", HuntReportSchema);
 export type HuntReportDocument = HydratedDocument<InferSchemaType<typeof HuntReportSchema>>;

@@ -58,7 +58,7 @@ export function getHuntReports(_req: Request, res: Response) {
 
 export function postHuntReport(req: Request, res: Response) {
   if (!req.file) return res.status(400).json({ message: "Foto ontbreekt of is geen JPEG, PNG of WebP." });
-  const { area, huntCode, huntTime, kind, lng, lat } = req.body as Record<string, string | undefined>;
+  const { area, huntCode, huntTime, kind, lng, lat, uploadId } = req.body as Record<string, string | undefined>;
   const location: [number, number] | undefined = lng !== undefined && lat !== undefined ? [Number(lng), Number(lat)] : undefined;
   return respond(res, 201, async () =>
     queueReading(
@@ -70,6 +70,7 @@ export function postHuntReport(req: Request, res: Response) {
           kind: kind as HuntKind,
           photo: { buffer: req.file!.buffer, mimetype: req.file!.mimetype },
           location,
+          uploadId: uploadId || undefined,
         },
         req.user!,
       ),

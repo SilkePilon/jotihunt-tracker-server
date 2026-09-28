@@ -39,6 +39,8 @@ export interface NewHuntReport {
   photo: { buffer: Buffer; mimetype: string };
   /** [lng, lat] of the phone at registration */
   location?: [number, number];
+  /** Id the phone generated for this photo; the same id again returns the existing report */
+  uploadId?: string;
 }
 
 export interface DuplicateOf {
@@ -141,7 +143,20 @@ function toMinute(date: Date): Date {
  * Store a new report. Code and time are optional (normally read from the photo by OCR); when one is missing the
  * report gets `ocr.status: "pending"` and the caller queues the reading. Duplicate codes are allowed (flagged in the view).
  */
+function isDuplicateKeyError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error as { code: unknown }).code === 11000;
+}
+
+/** The report an earlier attempt of the same upload (same phone-generated id, same user) already created. */
+async function existingUpload(uploadId: string | undefined, user: UserType): Promise<HuntReportView | null> {
+  if (!uploadId) return null;
+  const existing = await HuntReport.findOne({ uploadId, reportedBy: user._id });
+  return existing ? await viewOf(existing) : null;
+}
+
 export async function createHuntReport(input: NewHuntReport, user: UserType): Promise<HuntReportView> {
+  const retried = await existingUpload(input.uploadId, user);
+  if (retried) return retried;
   const huntCode = input.huntCode ? normalizeHuntCode(input.huntCode) || null : null;
   const huntTime = input.huntTime ? toMinute(input.huntTime) : null;
   const extension = resolvePhotoExtension(input.photo.mimetype);
@@ -169,6 +184,7 @@ export async function createHuntReport(input: NewHuntReport, user: UserType): Pr
       reportedByName: user.name,
       location: input.location ? { type: "Point", coordinates: input.location } : undefined,
       markerId: marker?._id,
+      uploadId: input.uploadId,
       ocr: { status: huntCode && huntTime ? "done" : "pending", attempts: 0 },
     });
     return await viewOf(report);
@@ -176,6 +192,11 @@ export async function createHuntReport(input: NewHuntReport, user: UserType): Pr
     // Clean up side effects
     if (photo) await deletePhoto(photo);
     if (marker) await Marker.deleteOne({ _id: marker._id });
+    // Two attempts of the same upload raced: return the one that won
+    if (isDuplicateKeyError(error)) {
+      const retried = await existingUpload(input.uploadId, user);
+      if (retried) return retried;
+    }
     throw error;
   }
 }

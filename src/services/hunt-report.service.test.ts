@@ -63,6 +63,17 @@ beforeEach(async () => {
 afterAll(disconnectTestDb);
 
 describe("createHuntReport", () => {
+  test("a retried upload with the same uploadId returns the existing report (no second photo or marker)", async () => {
+    const merida = await makeUser("merida");
+    const uploadId = "6f1c1e7a-2b3c-4d5e-8f90-123456789abc";
+    const first = await createHuntReport(input({ uploadId, location: [5.9, 52.2] }), merida);
+    const again = await createHuntReport(input({ uploadId, location: [5.9, 52.2] }), merida);
+    expect(again._id).toBe(first._id);
+    expect(await HuntReport.countDocuments()).toBe(1);
+    expect(await Marker.countDocuments()).toBe(1);
+    expect(readdirSync(process.env.UPLOADS_DIR!).length).toBe(1);
+  });
+
   test("stores a normalised code, the photo and the reporter", async () => {
     const user = await makeUser("merida");
     const view = await createHuntReport(input(), user);
