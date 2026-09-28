@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 import { HuntReport, type HuntReportDocument } from "../models/hunt-report.model";
-import { Marker, MarkerType } from "../models/marker.model";
+import { Marker, MarkerType, type MarkerDocument } from "../models/marker.model";
 import type { UserType } from "../models/user.model";
 import { HUNT_AREAS, huntReportStatus, normalizeHuntCode, resolvePhotoExtension, submitDeadline, type HuntKind, type HuntReportStatus } from "./hunt-report.helpers";
 import { deletePhoto, photoFilePath, savePhoto } from "./photo-store";
@@ -83,16 +83,25 @@ export async function createHuntReport(input: NewHuntReport, user: UserType): Pr
   if (!huntCode) throw new HuntReportError(400, "Huntcode ontbreekt.");
   const extension = resolvePhotoExtension(input.photo.mimetype);
   if (!extension) throw new HuntReportError(400, "Foto moet een JPEG, PNG of WebP zijn.");
-  if (await HuntReport.exists({ huntCode })) throw await duplicateError(huntCode);
 
-  const photo = await savePhoto(input.photo.buffer, extension);
+  // Check for duplicate with one findOne call
+  const existing = await HuntReport.findOne({ huntCode });
+  if (existing) {
+    throw new HuntReportError(409, "Deze code is al geregistreerd.", { reason: "duplicate", reportedByName: existing.reportedByName });
+  }
+
   const time = new Date(input.huntTime);
   time.setSeconds(0, 0);
-  const marker = input.location
-    ? await Marker.create({ area: input.area, time, type: MarkerType.Hunt, location: { type: "Point", coordinates: input.location } })
-    : null;
+
+  let photo: string | null = null;
+  let marker: MarkerDocument | null = null;
 
   try {
+    photo = await savePhoto(input.photo.buffer, extension);
+    marker = input.location
+      ? await Marker.create({ area: input.area, time, type: MarkerType.Hunt, location: { type: "Point", coordinates: input.location } })
+      : null;
+
     const report = await HuntReport.create({
       area: input.area as (typeof HUNT_AREAS)[number],
       huntCode,
@@ -106,8 +115,8 @@ export async function createHuntReport(input: NewHuntReport, user: UserType): Pr
     });
     return toHuntReportView(report, new Date());
   } catch (error) {
-    // Undo the side effects; a concurrent registration of the same code loses the unique-index race
-    await deletePhoto(photo);
+    // Clean up side effects; a concurrent registration of the same code loses the unique-index race
+    if (photo) await deletePhoto(photo);
     if (marker) await Marker.deleteOne({ _id: marker._id });
     if (isDuplicateKeyError(error)) throw await duplicateError(huntCode);
     throw error;

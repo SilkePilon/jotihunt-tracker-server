@@ -1,5 +1,5 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync } from "node:fs";
+import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { HuntReport } from "../models/hunt-report.model";
@@ -48,7 +48,16 @@ async function expectReportError(promise: Promise<unknown>, status: number) {
 }
 
 beforeAll(connectTestDb);
-beforeEach(clearTestDb);
+beforeEach(async () => {
+  await clearTestDb();
+  // Clean up uploads directory for a fresh start
+  const uploadsDir = process.env.UPLOADS_DIR!;
+  try {
+    rmSync(uploadsDir, { recursive: true, force: true });
+  } catch {
+    // Ignore if directory doesn't exist
+  }
+});
 afterAll(disconnectTestDb);
 
 describe("createHuntReport", () => {
@@ -77,6 +86,22 @@ describe("createHuntReport", () => {
     const user = await makeUser("merida");
     await createHuntReport(input(), user);
     expect(await Marker.countDocuments()).toBe(0);
+  });
+
+  test("cleans up the photo when marker creation fails", async () => {
+    const user = await makeUser("merida");
+    const spy = spyOn(Marker, "create");
+    spy.mockRejectedValueOnce(new Error("boom"));
+    try {
+      await createHuntReport(input({ location: [5.9, 52.2] }), user);
+      throw new Error("Expected createHuntReport to reject");
+    } catch (error) {
+      if (error instanceof Error && error.message === "Expected createHuntReport to reject") throw error;
+      // Expected to reject
+    }
+    expect(await HuntReport.countDocuments()).toBe(0);
+    const uploadsDir = process.env.UPLOADS_DIR!;
+    expect(readdirSync(uploadsDir)).toHaveLength(0);
   });
 
   test("rejects a duplicate code with 409 and the first reporter's name", async () => {
