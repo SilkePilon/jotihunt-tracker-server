@@ -74,11 +74,17 @@ export function createTrackerOnboarding(deps: TrackerOnboardingDeps) {
     const storedVehicle = user.tracker?.vehicle as Vehicle | undefined;
     let device = await api.findDevice(uniqueId);
     if (!device) {
-      device = await api.createDevice({
-        name: user.name,
-        uniqueId,
-        groupId: groupIdForVehicle(storedVehicle ?? DEFAULT_VEHICLE, deps.groups),
-      });
+      try {
+        device = await api.createDevice({
+          name: user.name,
+          uniqueId,
+          groupId: groupIdForVehicle(storedVehicle ?? DEFAULT_VEHICLE, deps.groups),
+        });
+      } catch (error) {
+        // A concurrent request may have created the device first (duplicate uniqueId): use that one
+        device = await api.findDevice(uniqueId);
+        if (!device) throw error;
+      }
     }
     const vehicle = storedVehicle ?? vehicleForGroupId(device.groupId, deps.groups) ?? DEFAULT_VEHICLE;
     if (user.tracker?.deviceId !== device.id || user.tracker?.uniqueId !== uniqueId || user.tracker?.vehicle !== vehicle) {

@@ -129,6 +129,24 @@ describe("getMe", () => {
     expect(stored?.tracker).toEqual({ deviceId: 100, uniqueId, vehicle: "walking" });
   });
 
+  test("recovers when a concurrent request created the device first (duplicate uniqueId)", async () => {
+    const user = await makeUser();
+    const uniqueId = deriveUniqueId(user._id.toString());
+    const traccar = fakeTraccar();
+    const originalCreate = traccar.api.createDevice.bind(traccar.api);
+    // Simulate the race: the device gets created by "someone else", then our create call fails
+    traccar.api.createDevice = async (input) => {
+      await originalCreate(input);
+      throw new Error("duplicate uniqueId");
+    };
+    const me = await service(traccar).onboarding.getMe(user);
+
+    expect(me).toMatchObject({ configured: true, uniqueId, connected: false });
+    expect(traccar.devices.size).toBe(1);
+    const stored = await User.findById(user._id).lean();
+    expect(stored?.tracker?.deviceId).toBe(100);
+  });
+
   test("reuses an existing device and does not create a second one", async () => {
     const user = await makeUser();
     const traccar = fakeTraccar();
