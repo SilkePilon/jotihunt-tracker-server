@@ -138,6 +138,10 @@ if (!process.env.TRACCARR_API_URL || !process.env.TRACCARR_API_TOKEN) {
   logger.warn("TRACCARR_API_URL/TRACCARR_API_TOKEN not set, tracker endpoints will return 503");
 }
 
+if (!process.env.TRACCAR_CLIENT_URL) {
+  logger.warn("TRACCAR_CLIENT_URL not set, the tracker onboarding card shows a configuration warning");
+}
+
 // Fox prediction: recompute changed areas every minute (and every area at least every 5 minutes)
 cron.schedule("30 * * * * *", recomputePredictions, { name: "fox-prediction", noOverlap: true });
 if (!process.env.ORS_API_KEY) {

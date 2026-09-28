@@ -91,6 +91,7 @@ MONGO_INITDB_DATABASE=jotihunt
 # Traccar
 TRACCARR_API_URL=http://traccar:8082
 TRACCARR_API_TOKEN=token-van-traccar
+TRACCAR_CLIENT_URL=http://tracker.jotihunt.jouwscoutinggroep.nl:5055 # Adres voor de Traccar Client-app (QR-code in "Mijn tracker")
 JOTIHUNT_API_URL=https://jotihunt.nl/api/2.0
 
 # Jotihunt
@@ -132,10 +133,15 @@ Volg de configuratiestappen om de volledige applicatie werkend te krijgen.
 ### Omgevingsvariabelen
 De applicatie kan worden geconfigureerd via omgevingsvariabelen. Hieronder volgt een overzicht van waar je de verschillende variabelen vandaan kunt halen.
 #### `TRACCARR_API_TOKEN`
-1. Ga naar jouw Traccar server (standaard te bereiken via `http://localhost:8082`) en log in als administrator.
+1. Ga naar jouw Traccar server (standaard te bereiken via `http://localhost:8082`) en log in als administrator. De token moet van een beheerder zijn: de server maakt hiermee de apparaten van de gebruikers aan.
 2. Navigeer onderin naar `Instellingen` > `Voorkeuren` > `Token`.
 3. Stel een verloopdatum in en druk op de ververs knop.
 4. Kopieer de gegenereerde token en plak deze in de `.env` file bij `TRACCARR_API_TOKEN`.
+
+#### `TRACCAR_CLIENT_URL`
+Het adres waar de Traccar Client-app op de telefoons de locaties naartoe stuurt: jouw Traccar server op poort `5055`, bijvoorbeeld `http://tracker.jotihunt.jouwscoutinggroep.nl:5055`.
+Dit adres komt in de QR-code van de kaart "Mijn tracker" in de zijbalk. Is het niet ingevuld (of ontbreken `TRACCARR_API_URL`/`TRACCARR_API_TOKEN`), dan toont de kaart "Live tracking is nog niet ingesteld".
+Lokaal testen met een telefoon in hetzelfde wifi-netwerk: gebruik het LAN-adres van je computer, bijvoorbeeld `http://192.168.1.10:5055`.
 
 #### `JOTIHUNT_WEB_USERNAME` en `JOTIHUNT_WEB_PASSWORD`
 Dit zijn de inloggegevens die je normaal gebruikt om in te loggen op [jotihunt.nl](https://jotihunt.nl). De server zal deze gebruiken om automatisch de hunts op te halen (scrapen).
@@ -202,6 +208,10 @@ Hierna wordt de kaart gevuld met de teams die meedoen aan de Jotihunt. Vergeet d
 ## 🛰️ GPS Tracking
 De GPS tracking wordt verzorgd door [Traccar](https://www.traccar.org/).
 Om de GPS tracking werkend te krijgen, dien je de telefoons van de hunters te configureren met de Traccar Client app.
+
+**Makkelijkste manier:** iedere gebruiker ziet in de zijbalk de kaart "Mijn tracker" met een persoonlijke QR-code. Installeer de Traccar Client-app, scan de code in de app (of tik op een telefoon op "Open in Traccar-app") en zet "Continu volgen" aan. De server maakt het apparaat in Traccar zelf aan, zet het in de groep van het gekozen voertuig (Lopend / Fiets / Auto / Motor) en de kaart toont "Verbonden ✓" zodra de eerste locatie binnen is. Hiervoor moeten `TRACCAR_CLIENT_URL` en de `GROUP_*_ID`'s ingevuld zijn.
+
+Handmatig instellen kan ook:
 1. Installeer de [Traccar Client app](https://www.traccar.org/client/) op de telefoons van de hunters. De apps zijn verkrijgbaar in zowel de Play Store als de App Store.
 2. Open de app en ga naar `Instellingen wijzigen`.
 3. De volgende instellingen werken goed in de meeste gevallen:
