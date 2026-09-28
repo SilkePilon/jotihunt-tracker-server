@@ -1,6 +1,7 @@
 import { logger } from "..";
 import { Hunt } from "../models/hunt.model";
 import { login, scrapeHunts } from "../services/jotihunt.service";
+import { linkScrapedHunts } from "../services/hunt-report.service";
 import { Page } from "puppeteer";
 
 let isScrapingJotihuntWebsite = false;
@@ -37,6 +38,11 @@ export default async function scrapeJotihuntWebsite() {
     });
     await Hunt.insertMany(hunts).catch((error) => {
       logger.error("(CRON) Error inserting hunts into database:", error);
+    });
+
+    // Copy status and points to the app's own reports; they keep them after the scraper forgets older hunts
+    await linkScrapedHunts(webHunts).catch((error) => {
+      logger.error("(CRON) Error linking scraped hunts to hunt reports:", error);
     });
   } finally {
     if (page) {

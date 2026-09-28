@@ -229,6 +229,9 @@ Handmatig instellen kan ook:
 
 In het dashboard dien je als beheerder vervolgens het Apparaat-ID te registreren. Dit doe je door in de zijbalk bovenin op het plusje (+) te drukken en de gegevens van het apparaat in te vullen. Na opslaan zal het apparaat verschijnen in de lijst en zal de GPS tracking starten zodra de app op de telefoon wordt gestart met "Continu volgen".
 
+## 📸 Hunts registreren
+Hunters registreren een hunt met een foto vanaf hun telefoon (huntcode, tijdstip, deelgebied en soort hunt/tegenhunt). De foto's staan in de map `uploads` (in Docker het volume `uploads`, het pad is aan te passen met de omgevingsvariabele `UPLOADS_DIR`). HQ stuurt de hunt zelf in op jotihunt.nl en klikt daarna in de tracker op "Ingestuurd" om dat bij te houden.
+
 ## 🤝 Bijdragen
 - Heb je zelf verbeteringen gemaakt? Open een Pull Request!
 - Ideeën maar geen code-skills? Maak een Issue, wie weet pakt iemand het op.
