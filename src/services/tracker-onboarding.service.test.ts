@@ -56,6 +56,9 @@ function fakeTraccar() {
       if (!distances.has(deviceId)) throw new Error("report failed");
       return distances.get(deviceId)!;
     },
+    async getSummary() {
+      return null;
+    },
   };
   return {
     api,
