@@ -24,7 +24,7 @@ const huntTime = new Date("2026-10-17T12:03:00Z");
 function input(overrides: Partial<NewHuntReport> = {}): NewHuntReport {
   return {
     area: "alpha",
-    huntCode: " ab12 cd ",
+    huntCode: " Gy3M 8XI ",
     huntTime,
     kind: "hunt",
     photo: { buffer: Buffer.from([0xff, 0xd8, 0xff]), mimetype: "image/jpeg" },
@@ -64,7 +64,7 @@ describe("createHuntReport", () => {
   test("stores a normalised code, the photo and the reporter", async () => {
     const user = await makeUser("merida");
     const view = await createHuntReport(input(), user);
-    expect(view.huntCode).toBe("AB12CD");
+    expect(view.huntCode).toBe("Gy3M8XI");
     expect(view.reportedByName).toBe("merida");
     expect(view.status).toBe("to_submit");
     expect(view.photoUrl).toBe(`/hunt-reports/${view._id}/photo`);
@@ -108,9 +108,17 @@ describe("createHuntReport", () => {
     const merida = await makeUser("merida");
     const mulan = await makeUser("mulan");
     await createHuntReport(input(), merida);
-    const error = await expectReportError(createHuntReport(input({ huntCode: "AB12CD" }), mulan), 409);
+    const error = await expectReportError(createHuntReport(input({ huntCode: "Gy3M8XI" }), mulan), 409);
     expect(error.details).toEqual({ reason: "duplicate", reportedByName: "merida" });
     expect(await HuntReport.countDocuments()).toBe(1);
+  });
+
+  test("codes differing only in case are different hunts", async () => {
+    const merida = await makeUser("merida");
+    await createHuntReport(input({ huntCode: "GNcrZRZ" }), merida);
+    const other = await createHuntReport(input({ huntCode: "GNCRZRZ" }), merida);
+    expect(other.huntCode).toBe("GNCRZRZ");
+    expect(await HuntReport.countDocuments()).toBe(2);
   });
 
   test("rejects an empty code and a disallowed photo type with 400", async () => {
@@ -187,7 +195,7 @@ describe("linkScrapedHunts", () => {
     const merida = await makeUser("merida");
     await createHuntReport(input(), merida);
     const now = new Date("2026-10-17T13:00:00Z");
-    const updated = await linkScrapedHunts([{ huntCode: "ab12cd ", status: "Goedgekeurd", points: 5 }, { huntCode: null, status: null, points: 0 }], now);
+    const updated = await linkScrapedHunts([{ huntCode: "Gy3M8XI ", status: "Goedgekeurd", points: 5 }, { huntCode: null, status: null, points: 0 }], now);
     expect(updated).toBe(1);
     const [view] = await listHuntReports(now);
     expect(view.status).toBe("judged");
@@ -198,7 +206,7 @@ describe("linkScrapedHunts", () => {
     const merida = await makeUser("merida");
     const report = await createHuntReport(input(), merida);
     const now = new Date("2026-10-17T13:00:00Z");
-    await linkScrapedHunts([{ huntCode: "ab12cd", status: "Goedgekeurd", points: 5 }], now);
+    await linkScrapedHunts([{ huntCode: "Gy3M8XI", status: "Goedgekeurd", points: 5 }], now);
     await expectReportError(deleteHuntReport(report._id, await makeUser("admin", true)), 409);
   });
 });

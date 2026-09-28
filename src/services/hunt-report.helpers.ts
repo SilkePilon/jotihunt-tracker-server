@@ -15,9 +15,9 @@ const PHOTO_EXTENSIONS: Record<string, ".jpg" | ".png" | ".webp"> = {
   "image/webp": ".webp",
 };
 
-/** Hunt codes are compared without whitespace and case-insensitively. */
+/** Hunt codes are case-sensitive ("GNcrZRZ"); only whitespace is removed. */
 export function normalizeHuntCode(code: string): string {
-  return code.replace(/\s+/g, "").toUpperCase();
+  return code.replace(/\s+/g, "");
 }
 
 export function submitDeadline(huntTime: Date): Date {

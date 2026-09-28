@@ -4,11 +4,11 @@ import { huntReportStatus, normalizeHuntCode, resolvePhotoExtension, submitDeadl
 const huntTime = new Date("2026-10-17T12:00:00Z");
 
 describe("normalizeHuntCode", () => {
-  test("removes all whitespace and uppercases", () => {
-    expect(normalizeHuntCode(" ab 12\tc\n")).toBe("AB12C");
+  test("removes all whitespace and keeps the case (codes are case-sensitive)", () => {
+    expect(normalizeHuntCode(" GN cr\tZRZ\n")).toBe("GNcrZRZ");
   });
   test("keeps other characters", () => {
-    expect(normalizeHuntCode("ab-12")).toBe("AB-12");
+    expect(normalizeHuntCode("ab-12")).toBe("ab-12");
   });
 });
 

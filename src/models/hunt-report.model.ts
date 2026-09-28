@@ -15,7 +15,7 @@ const SiteResultSchema = new mongoose.Schema(
 const HuntReportSchema = new mongoose.Schema(
   {
     area: { type: String, enum: HUNT_AREAS, required: true },
-    /** Normalised: whitespace removed, uppercase */
+    /** Normalised: whitespace removed; case-sensitive */
     huntCode: { type: String, required: true, unique: true },
     huntTime: { type: Date, required: true },
     kind: { type: String, enum: HUNT_KINDS, required: true },
