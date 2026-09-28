@@ -58,7 +58,8 @@ app.use((req, _res, next) => {
   req.body ??= {};
   next();
 });
-app.use(expressWinston.logger({ winstonInstance: logger }));
+// Never write credentials (user JWTs, cookies) from request headers to the logs
+app.use(expressWinston.logger({ winstonInstance: logger, headerBlacklist: ["authorization", "cookie"] }));
 app.use(cors());
 
 // Setup routes
