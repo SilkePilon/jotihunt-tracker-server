@@ -1,4 +1,4 @@
-import type { UserType } from "../models/user.model";
+import { User, type UserType } from "../models/user.model";
 import type { TraccarApi, TraccarDeviceDto } from "./traccar-api";
 import { isGroupInvalidError } from "./traccar-http";
 import {
@@ -164,7 +164,21 @@ export function createTrackerOnboarding(deps: TrackerOnboardingDeps) {
     }
   }
 
-  return { ensureDevice, getMe, setVehicle };
+  /**
+   * Admin: move any Traccar device to a vehicle's group (map icon) and keep the linked user's choice in sync.
+   * Returns null when the device doesn't exist; throws when Traccar is not configured or fails.
+   */
+  async function setDeviceVehicle(deviceId: number, vehicle: Vehicle): Promise<{ deviceId: number; vehicle: Vehicle; groupId: number } | null> {
+    const api = requireApi();
+    const device = await api.getDevice(deviceId);
+    if (!device) return null;
+    const groupId = groupIdForVehicle(vehicle, deps.groups);
+    if ((device.groupId ?? 0) !== groupId) await api.updateDevice({ ...device, groupId });
+    await User.updateOne({ "tracker.deviceId": deviceId }, { $set: { "tracker.vehicle": vehicle } });
+    return { deviceId, vehicle, groupId };
+  }
+
+  return { ensureDevice, getMe, setVehicle, setDeviceVehicle };
 }
 
 export type TrackerOnboarding = ReturnType<typeof createTrackerOnboarding>;

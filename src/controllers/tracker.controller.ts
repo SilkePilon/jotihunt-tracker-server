@@ -50,4 +50,17 @@ async function putVehicle(req: Request, res: Response) {
   return res.status(200).json(await onboarding.setVehicle(req.user!, req.body.vehicle as Vehicle));
 }
 
-export { getDevices, getPositions, getMe, putVehicle };
+/** Admin: PUT /admin/devices/:id/vehicle — change any hunter's vehicle (Traccar group / map icon). */
+async function putDeviceVehicle(req: Request, res: Response) {
+  if (!traccarrService.isTraccarConfigured) return traccarUnavailable(res);
+  try {
+    const result = await onboarding.setDeviceVehicle(Number(req.params.id), req.body.vehicle as Vehicle);
+    if (!result) return res.status(404).json({ message: "Toestel niet gevonden." });
+    return res.status(200).json(result);
+  } catch (error) {
+    logger.warn(`Admin vehicle change: ${describeTraccarError(error)}`);
+    return res.status(502).json({ message: "Traccar gaf een fout, probeer het opnieuw." });
+  }
+}
+
+export { getDevices, getPositions, getMe, putVehicle, putDeviceVehicle };

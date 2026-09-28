@@ -39,6 +39,14 @@ describe("createTraccarApi", () => {
     expect(calls[0]).toEqual({ method: "get", url: "/api/devices", params: { uniqueId: "jh-1" }, headers: undefined });
   });
 
+  test("getDevice queries by id and returns the exact match or null", async () => {
+    const { http, calls } = fakeHttp([[{ id: 4, name: "A", uniqueId: "jh-1" }], []]);
+    const api = createTraccarApi(http);
+    expect(await api.getDevice(4)).toEqual({ id: 4, name: "A", uniqueId: "jh-1" });
+    expect(await api.getDevice(5)).toBeNull();
+    expect(calls[0]).toEqual({ method: "get", url: "/api/devices", params: { id: 4 }, headers: undefined });
+  });
+
   test("createDevice posts name, uniqueId and groupId", async () => {
     const { http, calls } = fakeHttp([{ id: 9, name: "Hunter", uniqueId: "jh-1", groupId: 3 }]);
     const created = await createTraccarApi(http).createDevice({ name: "Hunter", uniqueId: "jh-1", groupId: 3 });

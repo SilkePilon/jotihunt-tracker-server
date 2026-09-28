@@ -33,6 +33,8 @@ export interface NewDevice {
 export interface TraccarApi {
   /** Device with this uniqueId, or null when Traccar has none (e.g. it was deleted). */
   findDevice(uniqueId: string): Promise<TraccarDeviceDto | null>;
+  /** Device by its Traccar id, or null when it doesn't exist. */
+  getDevice(id: number): Promise<TraccarDeviceDto | null>;
   createDevice(device: NewDevice): Promise<TraccarDeviceDto>;
   /** PUT the full device object (Traccar replaces the whole record). */
   updateDevice(device: TraccarDeviceDto): Promise<TraccarDeviceDto>;
@@ -47,6 +49,10 @@ export function createTraccarApi(http: HttpClient): TraccarApi {
     async findDevice(uniqueId) {
       const { data } = await http.get<TraccarDeviceDto[]>("/api/devices", { params: { uniqueId } });
       return data.find((device) => device.uniqueId === uniqueId) ?? null;
+    },
+    async getDevice(id) {
+      const { data } = await http.get<TraccarDeviceDto[]>("/api/devices", { params: { id } });
+      return data.find((device) => device.id === id) ?? null;
     },
     async createDevice(device) {
       const { data } = await http.post<TraccarDeviceDto>("/api/devices", device);

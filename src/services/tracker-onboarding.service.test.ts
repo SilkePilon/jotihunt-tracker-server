@@ -27,6 +27,11 @@ function fakeTraccar() {
       guard();
       return [...devices.values()].find((device) => device.uniqueId === uniqueId) ?? null;
     },
+    async getDevice(id) {
+      calls.push(`get ${id}`);
+      guard();
+      return devices.get(id) ?? null;
+    },
     async createDevice(input: NewDevice) {
       calls.push(`create ${input.name} ${input.uniqueId} ${input.groupId}`);
       guard();
@@ -263,6 +268,39 @@ describe("setVehicle", () => {
     await onboarding.getMe(user);
     await onboarding.setVehicle(user, "walking");
     expect(traccar.calls.some((call) => call.startsWith("update"))).toBe(false);
+  });
+});
+
+describe("setDeviceVehicle (admin)", () => {
+  test("moves another user's device to the vehicle group and updates that user's choice", async () => {
+    const user = await makeUser();
+    const traccar = fakeTraccar();
+    const { onboarding } = service(traccar);
+    await onboarding.getMe(user);
+
+    expect(await onboarding.setDeviceVehicle(100, "car")).toEqual({ deviceId: 100, vehicle: "car", groupId: 2 });
+    expect(traccar.devices.get(100)?.groupId).toBe(2);
+    expect((await User.findById(user._id).lean())?.tracker?.vehicle).toBe("car");
+  });
+
+  test("works for a device that no user is linked to", async () => {
+    const traccar = fakeTraccar();
+    traccar.devices.set(7, { id: 7, name: "Oude tracker", uniqueId: "old-7", groupId: 3 });
+    const { onboarding } = service(traccar);
+    await onboarding.setDeviceVehicle(7, "bike");
+    expect(traccar.devices.get(7)).toMatchObject({ name: "Oude tracker", groupId: 5 });
+  });
+
+  test("null for an unknown device, no PUT", async () => {
+    const traccar = fakeTraccar();
+    const { onboarding } = service(traccar);
+    expect(await onboarding.setDeviceVehicle(999, "car")).toBeNull();
+    expect(traccar.calls.some((call) => call.startsWith("update"))).toBe(false);
+  });
+
+  test("throws when Traccar is not configured", async () => {
+    const { onboarding } = service(null);
+    await expect(onboarding.setDeviceVehicle(1, "car")).rejects.toThrow();
   });
 });
 
