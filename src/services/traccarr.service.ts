@@ -1,5 +1,5 @@
 import { logger } from "..";
-import { traccarHttp as apiClient } from "./traccar-http";
+import { describeTraccarError, traccarHttp as apiClient } from "./traccar-http";
 
 export { isTraccarConfigured } from "./traccar-http";
 
@@ -67,7 +67,7 @@ export async function getDevices(): Promise<Array<TraccarDevice>> {
     const response = await apiClient.get<TraccarDevice[]>("/api/devices");
     return response.data;
   } catch (error) {
-    logger.error("Error fetching devices:", error);
+    logger.error(`Error fetching devices: ${describeTraccarError(error)}`);
     throw new Error("Could not fetch devices", { cause: error });
   }
 }
@@ -88,7 +88,7 @@ export async function getPositions(): Promise<Array<TraccarPosition>> {
       };
     });
   } catch (error) {
-    logger.error("Error fetching positions:", error);
+    logger.error(`Error fetching positions: ${describeTraccarError(error)}`);
     throw new Error("Could not fetch positions", { cause: error });
   }
 }
@@ -102,7 +102,7 @@ export async function getGroups(): Promise<Array<TraccarGroup>> {
     const response = await apiClient.get<TraccarGroup[]>("/api/groups");
     return response.data;
   } catch (error) {
-    logger.error("Error fetching groups:", error);
+    logger.error(`Error fetching groups: ${describeTraccarError(error)}`);
     throw new Error("Could not fetch groups", { cause: error });
   }
 }

@@ -2,7 +2,7 @@ import * as traccarrService from "../services/traccarr.service";
 import { Request, Response } from "express";
 import { logger } from "..";
 import { createTraccarApi } from "../services/traccar-api";
-import { traccarHttp } from "../services/traccar-http";
+import { describeTraccarError, traccarHttp } from "../services/traccar-http";
 import { vehicleGroupsFromEnv, type Vehicle } from "../services/tracker-onboarding.helpers";
 import { createTrackerOnboarding } from "../services/tracker-onboarding.service";
 
@@ -10,7 +10,7 @@ const onboarding = createTrackerOnboarding({
   api: traccarrService.isTraccarConfigured ? createTraccarApi(traccarHttp) : null,
   clientUrl: process.env.TRACCAR_CLIENT_URL,
   groups: vehicleGroupsFromEnv(),
-  onError: (error) => logger.warn("Traccar onboarding: Traccar request failed", error),
+  onError: (error) => logger.warn(`Traccar onboarding: ${describeTraccarError(error)}`),
 });
 
 function traccarUnavailable(res: Response) {
