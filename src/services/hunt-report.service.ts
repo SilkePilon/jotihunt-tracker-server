@@ -128,7 +128,13 @@ export async function listHuntReports(now = new Date()): Promise<HuntReportView[
   return reports.map((report) => toHuntReportView(report, now));
 }
 
+/** Hunt statuses and deletions are HQ work: admins only. */
+function requireAdmin(user: UserType) {
+  if (!user.admin) throw new HuntReportError(403, "Alleen admins kunnen hunts wijzigen.");
+}
+
 export async function setHuntReportSubmitted(id: string, submitted: boolean, user: UserType): Promise<HuntReportView> {
+  requireAdmin(user);
   const report = await findReport(id);
   if (submitted) {
     report.submittedAt = new Date();
@@ -144,10 +150,8 @@ export async function setHuntReportSubmitted(id: string, submitted: boolean, use
 }
 
 export async function deleteHuntReport(id: string, user: UserType): Promise<void> {
+  requireAdmin(user);
   const report = await findReport(id);
-  if (!user.admin && report.reportedBy.toString() !== user._id.toString()) {
-    throw new HuntReportError(403, "Alleen de melder of een admin kan deze hunt verwijderen.");
-  }
   if (report.submittedAt) throw new HuntReportError(409, "Deze hunt is al ingestuurd en kan niet meer verwijderd worden.");
   if (report.site) throw new HuntReportError(409, "Deze hunt staat al op jotihunt.nl en kan niet meer verwijderd worden.");
   await HuntReport.deleteOne({ _id: report._id });

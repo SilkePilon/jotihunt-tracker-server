@@ -123,7 +123,7 @@ describe("createHuntReport", () => {
 describe("setHuntReportSubmitted", () => {
   test("sets and clears the submitter", async () => {
     const merida = await makeUser("merida");
-    const hq = await makeUser("hq");
+    const hq = await makeUser("hq", true);
     const report = await createHuntReport(input(), merida);
     const submitted = await setHuntReportSubmitted(report._id, true, hq);
     expect(submitted.status).toBe("submitted");
@@ -133,18 +133,25 @@ describe("setHuntReportSubmitted", () => {
     expect(reverted.submittedByName).toBeNull();
   });
 
+  test("403 for a non-admin, also the reporter", async () => {
+    const merida = await makeUser("merida");
+    const report = await createHuntReport(input(), merida);
+    await expectReportError(setHuntReportSubmitted(report._id, true, merida), 403);
+  });
+
   test("404 for an unknown id", async () => {
-    const hq = await makeUser("hq");
+    const hq = await makeUser("hq", true);
     await expectReportError(setHuntReportSubmitted("0123456789abcdef01234567", true, hq), 404);
   });
 });
 
 describe("deleteHuntReport", () => {
-  test("reporter can delete while not submitted; photo and marker go too", async () => {
+  test("an admin can delete while not submitted; photo and marker go too", async () => {
     const merida = await makeUser("merida");
+    const admin = await makeUser("admin", true);
     const report = await createHuntReport(input({ location: [5.9, 52.2] }), merida);
     const photo = await huntReportPhotoPath(report._id);
-    await deleteHuntReport(report._id, merida);
+    await deleteHuntReport(report._id, admin);
     expect(await HuntReport.countDocuments()).toBe(0);
     expect(await Marker.countDocuments()).toBe(0);
     expect(existsSync(photo)).toBe(false);
@@ -158,18 +165,20 @@ describe("deleteHuntReport", () => {
     expect(await HuntReport.countDocuments()).toBe(0);
   });
 
-  test("403 for another non-admin user", async () => {
+  test("403 for non-admins, also the reporter", async () => {
     const merida = await makeUser("merida");
     const mulan = await makeUser("mulan");
     const report = await createHuntReport(input(), merida);
     await expectReportError(deleteHuntReport(report._id, mulan), 403);
+    await expectReportError(deleteHuntReport(report._id, merida), 403);
   });
 
   test("409 once submitted", async () => {
     const merida = await makeUser("merida");
+    const admin = await makeUser("admin", true);
     const report = await createHuntReport(input(), merida);
-    await setHuntReportSubmitted(report._id, true, merida);
-    await expectReportError(deleteHuntReport(report._id, merida), 409);
+    await setHuntReportSubmitted(report._id, true, admin);
+    await expectReportError(deleteHuntReport(report._id, admin), 409);
   });
 });
 
@@ -190,7 +199,7 @@ describe("linkScrapedHunts", () => {
     const report = await createHuntReport(input(), merida);
     const now = new Date("2026-10-17T13:00:00Z");
     await linkScrapedHunts([{ huntCode: "ab12cd", status: "Goedgekeurd", points: 5 }], now);
-    await expectReportError(deleteHuntReport(report._id, merida), 409);
+    await expectReportError(deleteHuntReport(report._id, await makeUser("admin", true)), 409);
   });
 });
 
