@@ -149,9 +149,10 @@ export async function deleteHuntReport(id: string, user: UserType): Promise<void
     throw new HuntReportError(403, "Alleen de melder of een admin kan deze hunt verwijderen.");
   }
   if (report.submittedAt) throw new HuntReportError(409, "Deze hunt is al ingestuurd en kan niet meer verwijderd worden.");
+  if (report.site) throw new HuntReportError(409, "Deze hunt staat al op jotihunt.nl en kan niet meer verwijderd worden.");
   await HuntReport.deleteOne({ _id: report._id });
   if (report.markerId) await Marker.deleteOne({ _id: report.markerId });
-  await deletePhoto(report.photo);
+  await deletePhoto(report.photo).catch(() => undefined);
 }
 
 export async function huntReportPhotoPath(id: string): Promise<string> {

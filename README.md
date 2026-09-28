@@ -48,6 +48,8 @@ services:
       - .env
     ports:
       - "3000:3000"
+    volumes:
+      - uploads:/usr/src/app/uploads
   client:
     image: ghcr.io/scoutingscherpenzeel/jotihunt-tracker-client:latest
     restart: unless-stopped
@@ -78,6 +80,7 @@ volumes:
   traccar_logs:
   traccar_data:
   traccar_conf:
+  uploads:
 ```
 2. Maak in dezelfde folder een `.env` bestand aan met de volgende inhoud (zie ook: configuratie):
 ```env

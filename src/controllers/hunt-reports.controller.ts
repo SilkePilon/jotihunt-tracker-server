@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { existsSync } from "node:fs";
 import type { HuntKind } from "../services/hunt-report.helpers";
 import {
   createHuntReport,
@@ -48,6 +49,7 @@ export function deleteReport(req: Request, res: Response) {
 export async function getPhoto(req: Request, res: Response) {
   try {
     const file = await huntReportPhotoPath(String(req.params.id));
+    if (!existsSync(file)) return res.status(404).json({ message: "Foto niet gevonden." });
     res.setHeader("Cache-Control", "private, max-age=86400");
     return res.sendFile(file);
   } catch (error) {

@@ -184,6 +184,14 @@ describe("linkScrapedHunts", () => {
     expect(view.status).toBe("judged");
     expect(view.site).toEqual({ status: "Goedgekeurd", points: 5, seenAt: now.toISOString() });
   });
+
+  test("409 once linked to a scraped hunt on jotihunt.nl", async () => {
+    const merida = await makeUser("merida");
+    const report = await createHuntReport(input(), merida);
+    const now = new Date("2026-10-17T13:00:00Z");
+    await linkScrapedHunts([{ huntCode: "ab12cd", status: "Goedgekeurd", points: 5 }], now);
+    await expectReportError(deleteHuntReport(report._id, merida), 409);
+  });
 });
 
 describe("listHuntReports", () => {
