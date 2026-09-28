@@ -106,6 +106,23 @@ describe("configuration", () => {
     expect(await onboarding.setVehicle(user, "car")).toEqual({ configured: false, reason: "unreachable", connected: false });
     expect(errors).toHaveLength(2);
   });
+
+  test("Traccar rejecting the group (bad GROUP_*_ID) gives configured:false 'group_invalid', not 'unreachable'", async () => {
+    const user = await makeUser();
+    const traccar = fakeTraccar();
+    // Simulate the axios error Traccar returns for an unknown/foreign-key-violating groupId.
+    traccar.api.createDevice = async () => {
+      throw {
+        isAxiosError: true,
+        message: "Request failed with status code 400",
+        config: { method: "post", url: "http://traccar.test/api/devices" },
+        response: { status: 400, data: { message: "foreign key group_id" } },
+      };
+    };
+    const { onboarding, errors } = service(traccar);
+    expect(await onboarding.getMe(user)).toEqual({ configured: false, reason: "group_invalid", connected: false });
+    expect(errors).toHaveLength(1);
+  });
 });
 
 describe("getMe", () => {

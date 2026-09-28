@@ -1,5 +1,6 @@
 import type { UserType } from "../models/user.model";
 import type { TraccarApi, TraccarDeviceDto } from "./traccar-api";
+import { isGroupInvalidError } from "./traccar-http";
 import {
   buildDeepLink,
   buildQrUrl,
@@ -46,6 +47,9 @@ export interface EnsuredDevice {
 }
 
 const notConfigured = (reason: NotConfiguredReason): TrackerMe => ({ configured: false, reason, connected: false });
+
+/** `group_invalid` when Traccar rejected a create/update because of a bad GROUP_*_ID, else `unreachable`. */
+const reasonFor = (error: unknown): NotConfiguredReason => (isGroupInvalidError(error) ? "group_invalid" : "unreachable");
 
 export function createTrackerOnboarding(deps: TrackerOnboardingDeps) {
   const now = deps.now ?? (() => new Date());
@@ -134,7 +138,7 @@ export function createTrackerOnboarding(deps: TrackerOnboardingDeps) {
       return await describe(await ensureDevice(user));
     } catch (error) {
       deps.onError?.(error);
-      return notConfigured("unreachable");
+      return notConfigured(reasonFor(error));
     }
   }
 
@@ -156,7 +160,7 @@ export function createTrackerOnboarding(deps: TrackerOnboardingDeps) {
       return await describe({ device, vehicle });
     } catch (error) {
       deps.onError?.(error);
-      return notConfigured("unreachable");
+      return notConfigured(reasonFor(error));
     }
   }
 

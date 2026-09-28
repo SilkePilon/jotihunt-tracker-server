@@ -20,7 +20,7 @@ export const CLIENT_SETTINGS: Readonly<Record<string, string>> = {
 
 export type VehicleGroups = Record<Vehicle, number | undefined>;
 
-export type NotConfiguredReason = "client_url_missing" | "client_url_invalid" | "api_missing" | "unreachable";
+export type NotConfiguredReason = "client_url_missing" | "client_url_invalid" | "api_missing" | "unreachable" | "group_invalid";
 
 export interface TrackerStats {
   /** ISO time of the last data Traccar received */
