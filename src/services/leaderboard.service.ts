@@ -46,7 +46,7 @@ export function createLeaderboardService(deps: LeaderboardDeps) {
     const [users, reports, solved] = await Promise.all([
       User.find({}, { name: 1, tracker: 1 }).lean(),
       HuntReport.find({}, { reportedBy: 1, site: 1 }).lean(),
-      HintCell.find({ status: HintCellStatus.Solved, claimedBy: { $exists: true } }, { claimedBy: 1 }).lean(),
+      HintCell.find({ status: HintCellStatus.Solved, claimedBy: { $ne: null } }, { claimedBy: 1 }).lean(),
     ]);
     const window = distanceWindow(current, deps.huntStart, deps.huntEnd);
     const deviceIds = users.map((user) => user.tracker?.deviceId).filter((id): id is number => typeof id === "number");
