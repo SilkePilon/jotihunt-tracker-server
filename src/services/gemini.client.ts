@@ -1,0 +1,63 @@
+import { parseStickerReading, type StickerReading } from "./sticker-ocr.helpers";
+
+/** The part of axios the client needs; injected so tests never call the real API. */
+export interface GeminiHttp {
+  post<T>(url: string, body: unknown, config: { headers: Record<string, string>; timeout: number }): Promise<{ data: T }>;
+}
+
+/** Failure of a Gemini call. The (Dutch) message is shown to HQ; it never contains the API key or the raw HTTP error. */
+export class GeminiError extends Error {
+  constructor(
+    message: string,
+    readonly retryable: boolean,
+    readonly status?: number,
+  ) {
+    super(message);
+    this.name = "GeminiError";
+  }
+}
+
+export interface StickerReader {
+  readSticker(base64: string, mimeType: string): Promise<StickerReading>;
+}
+
+export const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
+const TIMEOUT_MS = 30_000;
+
+export const STICKER_PROMPT = `The photo shows a Jotihunt sticker (a scouting game). Read two things from it.
+
+1. The hunt code. The sticker has a printed title "JOTIHUNT <year>" (for example "JOTIHUNT 2026"). Below the title the hunt code is printed: 4 to 12 letters and/or digits, no spaces. The code is case-sensitive: copy every letter exactly as printed, keeping uppercase and lowercase apart (e.g. "GNcrZRZ" is not "GNCRZRZ"), and take care to distinguish look-alikes such as O/0, I/l/1, S/5, Z/2, B/8. The code is never the title "JOTIHUNT" and never the year.
+
+2. The handwritten time. Someone wrote the time of the hunt on the sticker by hand with a pen (often blue ink); the writing may overlap the printed text. It is a 24-hour time written as H:MM or HH:MM; the separator may be ":", ".", ";" or ",". Return it as "HH:MM".
+
+Answer with only this JSON object and nothing else:
+{"code": string or null, "codeConfidence": number from 0 to 1, "time": "HH:MM" or null, "timeConfidence": number from 0 to 1}
+Use null (with confidence 0) for a value you cannot read. The confidence is how sure you are that the value is exactly right.`;
+
+type GenerateContentResponse = { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+
+export function createGeminiClient({ apiKey, model, http }: { apiKey: string; model: string; http: GeminiHttp }): StickerReader {
+  return {
+    async readSticker(base64: string, mimeType: string): Promise<StickerReading> {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+      const body = {
+        contents: [{ parts: [{ text: STICKER_PROMPT }, { inline_data: { mime_type: mimeType, data: base64 } }] }],
+        generationConfig: { responseMimeType: "application/json", temperature: 0 },
+      };
+      let response: { data: GenerateContentResponse };
+      try {
+        response = await http.post<GenerateContentResponse>(url, body, { headers: { "x-goog-api-key": apiKey }, timeout: TIMEOUT_MS });
+      } catch (error) {
+        // Only the status code is used: the error object holds the request headers (with the key)
+        const status = (error as { response?: { status?: number } } | null)?.response?.status;
+        throw new GeminiError(status ? `Gemini-verzoek mislukt (HTTP ${status})` : "Gemini niet bereikbaar", !status || status === 429 || status >= 500, status);
+      }
+      const text = response.data?.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("") ?? "";
+      try {
+        return parseStickerReading(text);
+      } catch {
+        throw new GeminiError("Gemini gaf geen geldig antwoord", false);
+      }
+    },
+  };
+}

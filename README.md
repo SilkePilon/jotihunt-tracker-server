@@ -104,6 +104,8 @@ JOTIHUNT_WEB_PASSWORD=password123
 HUNT_START_TIME=2025-10-18T10:00+02:00 # Pas dit aan naar de starttijd van de hunt van dat jaar.
 HUNT_END_TIME=2025-10-19T12:00+02:00 # Pas dit aan naar de eindtijd van de hunt van dat jaar.
 ORS_API_KEY= # Optioneel, voor de vossenvoorspelling (zie configuratie)
+GEMINI_API_KEY= # Optioneel, leest huntcode en tijd van de huntfoto (zie configuratie)
+GEMINI_MODEL=gemini-3.8-flash
 
 # Client
 JWT_SECRET=verander-dit-naar-een-veilige-random-string-van-minimaal-32-tekens
@@ -160,6 +162,15 @@ Wordt gebruikt door de vossenvoorspelling voor looptijden, looproutes en bereikb
 
 Zonder key werkt de voorspelling ook, maar dan met schattingen (rechte lijn × 1,3 bij 5 km/u en cirkelvormige zones); de client toont dan "(schatting)".
 Reizen met het openbaar vervoer komen van [Transitous](https://transitous.org/) en de haltes van OpenStreetMap (Overpass API); daarvoor is geen key nodig. Er worden alleen coördinaten en tijden verstuurd, geen persoonsgegevens.
+
+#### `GEMINI_API_KEY` en `GEMINI_MODEL` (optioneel)
+De server leest de huntcode en de handgeschreven tijd van de huntfoto met [Google Gemini](https://ai.google.dev/). Hunters hoeven dan alleen een foto te maken en de vossengroep te kiezen.
+1. Maak een API-key aan in [Google AI Studio](https://aistudio.google.com/apikey).
+2. Plak de key in de `.env` file bij `GEMINI_API_KEY`. `GEMINI_MODEL` is optioneel (standaard `gemini-3.8-flash`).
+
+Het lezen gebeurt op de achtergrond, één foto tegelijk (bij netwerkfouten of drukte tot 3 pogingen). Is de code of tijd niet (zeker) gelezen, dan krijgt de hunt het label "Controleren" en kan HQ de waarden aanpassen of opnieuw laten lezen. Zonder key worden foto's niet gelezen en vult HQ code en tijd zelf in.
+
+**Privacy:** de huntfoto's worden naar Google gestuurd. Met een gratis (free tier) key mag Google de verstuurde gegevens gebruiken om hun producten te verbeteren; gebruik een betaalde key als je dat niet wilt. De key komt nooit in de logs of in antwoorden van de server.
 
 #### `JWT_SECRET`
 Genereer een willekeurige, veilige string van minimaal 32 tekens. Deze wordt gebruikt om JWT tokens te ondertekenen voor de authenticatie.
@@ -233,7 +244,7 @@ Handmatig instellen kan ook:
 In het dashboard dien je als beheerder vervolgens het Apparaat-ID te registreren. Dit doe je door in de zijbalk bovenin op het plusje (+) te drukken en de gegevens van het apparaat in te vullen. Na opslaan zal het apparaat verschijnen in de lijst en zal de GPS tracking starten zodra de app op de telefoon wordt gestart met "Continu volgen".
 
 ## 📸 Hunts registreren
-Hunters registreren een hunt met een foto vanaf hun telefoon (huntcode, tijdstip, deelgebied en soort hunt/tegenhunt). De foto's staan in de map `uploads` (in Docker het volume `uploads`, het pad is aan te passen met de omgevingsvariabele `UPLOADS_DIR`). HQ stuurt de hunt zelf in op jotihunt.nl en klikt daarna in de tracker op "Ingestuurd" om dat bij te houden.
+Hunters registreren een hunt met een foto vanaf hun telefoon, plus de vossengroep en de soort (hunt/tegenhunt). De server leest de huntcode (hoofdlettergevoelig) en de handgeschreven tijd van de foto met Gemini (zie `GEMINI_API_KEY`); tot de tijd gelezen is geldt het uploadtijdstip. Dubbele codes worden niet geweigerd maar gemarkeerd. HQ (admins) kan code en tijd corrigeren en een foto opnieuw laten lezen. De foto's staan in de map `uploads` (in Docker het volume `uploads`, het pad is aan te passen met de omgevingsvariabele `UPLOADS_DIR`). HQ stuurt de hunt zelf in op jotihunt.nl en klikt daarna in de tracker op "Ingestuurd" om dat bij te houden.
 
 ## 🤝 Bijdragen
 - Heb je zelf verbeteringen gemaakt? Open een Pull Request!

@@ -17,8 +17,9 @@ router.post(
     verifyToken,
     photoUpload,
     validate([
-      body("huntCode").isString().trim().isLength({ min: 1, max: 64 }).withMessage("Huntcode ontbreekt."),
-      body("huntTime").isISO8601().withMessage("Ongeldige tijd."),
+      // Code and time are read from the photo by OCR; entering them is optional
+      body("huntCode").optional({ values: "falsy" }).isString().trim().isLength({ min: 1, max: 64 }).withMessage("Ongeldige huntcode."),
+      body("huntTime").optional({ values: "falsy" }).isISO8601().withMessage("Ongeldige tijd."),
       body("area").isIn(HUNT_AREAS).withMessage("Onbekend deelgebied."),
       body("kind").isIn(HUNT_KINDS).withMessage("Soort moet hunt of tegenhunt zijn."),
       body("lng").optional().isFloat({ min: -180, max: 180 }).withMessage("Ongeldige lengtegraad."),
@@ -32,6 +33,20 @@ router.put(
   [verifyToken, validate([idParam, body("submitted").isBoolean({ strict: true }).withMessage("submitted moet true of false zijn.")])],
   huntReportsController.putSubmitted,
 );
+// HQ corrections (admin check in the service, like status and delete)
+router.patch(
+  "/:id",
+  [
+    verifyToken,
+    validate([
+      idParam,
+      body("huntCode").optional().isString().trim().isLength({ min: 1, max: 64 }).withMessage("Huntcode moet 1 tot 64 tekens zijn."),
+      body("huntTime").optional().isISO8601().withMessage("Ongeldige tijd."),
+    ]),
+  ],
+  huntReportsController.patchReport,
+);
+router.post("/:id/read", [verifyToken, validate([idParam])], huntReportsController.postRead);
 router.delete("/:id", [verifyToken, validate([idParam])], huntReportsController.deleteReport);
 router.get("/:id/photo", [verifyToken, validate([idParam])], huntReportsController.getPhoto);
 

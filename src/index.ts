@@ -21,6 +21,8 @@ import mongoose from "mongoose";
 import expressWinston from "express-winston";
 import cors from "cors";
 import authRoute from "./routes/auth.route";
+import { HuntReport } from "./models/hunt-report.model";
+import { huntOcr } from "./controllers/hunt-reports.controller";
 
 const debug = process.env.DEBUG === "true";
 
@@ -106,10 +108,22 @@ await mongoose.connect(db).then(() => {
 
 // Surface index build failures (e.g. duplicate article ids blocking the unique index) instead of failing silently
 await Promise.all(
-  Object.values(mongoose.models).map((model) =>
-    model.init().catch((error) => logger.error(`Could not build indexes for ${model.modelName}`, error)),
-  ),
+  Object.values(mongoose.models)
+    .filter((model) => model !== HuntReport)
+    .map((model) => model.init().catch((error) => logger.error(`Could not build indexes for ${model.modelName}`, error))),
 );
+// Hunt codes are no longer unique (duplicates are flagged): syncIndexes drops the old unique index. Its automatic
+// init() fails on exactly that index conflict, so HuntReport is synced here instead of awaited above.
+await HuntReport.syncIndexes().catch((error) => logger.error("Could not sync indexes for HuntReport", error));
+
+// Read hunt codes and times left unread by a restart
+await huntOcr
+  .resumePending()
+  .then((count) => count > 0 && logger.info(`Resumed reading ${count} hunt report photo(s)`))
+  .catch((error) => logger.error("Could not resume hunt report reading", error));
+if (!process.env.GEMINI_API_KEY?.trim()) {
+  logger.warn("GEMINI_API_KEY not set, hunt codes and times are not read from photos (HQ enters them by hand)");
+}
 
 // Start the server
 const port = Number(process.env.PORT) || 3000;
