@@ -1,4 +1,15 @@
 import mongoose, { HydratedDocument, InferSchemaType } from "mongoose";
+import { VEHICLES } from "../services/tracker-onboarding.helpers";
+
+/** The user's own Traccar device (created lazily by GET /tracker/me). */
+const TrackerSchema = new mongoose.Schema(
+  {
+    deviceId: { type: Number, required: true },
+    uniqueId: { type: String, required: true },
+    vehicle: { type: String, enum: VEHICLES, required: true },
+  },
+  { _id: false },
+);
 
 const UserSchema = new mongoose.Schema({
   email: {
@@ -23,6 +34,10 @@ const UserSchema = new mongoose.Schema({
     type: Boolean,
     default: true,
     required: true,
+  },
+  tracker: {
+    type: TrackerSchema,
+    required: false,
   },
 });
 

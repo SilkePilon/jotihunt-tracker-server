@@ -1,17 +1,7 @@
-import axios from "axios";
 import { logger } from "..";
+import { traccarHttp as apiClient } from "./traccar-http";
 
-const apiUrl = process.env.TRACCARR_API_URL;
-const apiToken = process.env.TRACCARR_API_TOKEN;
-
-export const isTraccarConfigured = Boolean(apiUrl && apiToken);
-
-const apiClient = axios.create({
-  baseURL: apiUrl,
-  headers: {
-    Authorization: `Bearer ${apiToken}`,
-  },
-});
+export { isTraccarConfigured } from "./traccar-http";
 
 /**
  * API interface for a Traccar position.
