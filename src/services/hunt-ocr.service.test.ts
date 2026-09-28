@@ -168,6 +168,33 @@ describe("createHuntOcr", () => {
     expect(errors).toHaveLength(1);
   });
 
+  test("a throwing onError does not stall the queue", async () => {
+    const { reader } = fakeReader(new Error("boom"), reading);
+    const ocr = createHuntOcr({ reader, loadPhoto: async () => PHOTO, sleep: async () => undefined, onError: () => { throw new Error("logger down"); } });
+    const first = await upload();
+    const second = await upload();
+    ocr.enqueue(first._id);
+    ocr.enqueue(second._id);
+    await ocr.idle();
+    expect((await stored(first._id)).ocr!.status).toBe("failed");
+    expect((await stored(second._id)).ocr!.status).toBe("done");
+    const third = await upload();
+    ocr.enqueue(third._id);
+    await ocr.idle();
+    expect((await stored(third._id)).ocr!.status).toBe("done");
+  });
+
+  test("a report that already used all attempts fails without calling Gemini", async () => {
+    const { reader, calls } = fakeReader(reading);
+    const { ocr } = setup(reader);
+    const report = await upload();
+    await HuntReport.updateOne({ _id: report._id }, { $set: { "ocr.status": "reading", "ocr.attempts": 3 } });
+    expect(await ocr.resumePending()).toBe(1);
+    await ocr.idle();
+    expect(calls).toHaveLength(0);
+    expect((await stored(report._id)).ocr).toMatchObject({ status: "failed", attempts: 3 });
+  });
+
   test("a missing photo fails the report", async () => {
     const { reader, calls } = fakeReader(reading);
     const ocr = createHuntOcr({

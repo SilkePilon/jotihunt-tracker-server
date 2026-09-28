@@ -96,10 +96,14 @@ describe("needsReview", () => {
   test("a low confidence does not matter once the field is manual", () => {
     expect(needsReview({ ...read, huntCodeSource: "manual", ocr: { ...read.ocr, codeConfidence: 0.2 } })).toBe(false);
   });
-  test("true when the code or the time is missing (also while reading)", () => {
+  test("false while the photo is still being read", () => {
+    expect(needsReview({ huntCode: null, huntTime: null, ocr: { status: "pending" } })).toBe(false);
+    expect(needsReview({ huntCode: null, huntTime: null, ocr: { status: "reading" } })).toBe(false);
+  });
+  test("true when the code or the time is missing", () => {
     expect(needsReview({ ...read, huntCode: null, huntCodeSource: null })).toBe(true);
     expect(needsReview({ ...read, huntTime: null, huntTimeSource: null })).toBe(true);
-    expect(needsReview({ huntCode: null, huntTime: null, ocr: { status: "pending" } })).toBe(true);
+    expect(needsReview({ huntCode: null, huntTime: null, ocr: { status: "done" } })).toBe(true);
   });
   test("true when OCR failed, false once both fields are manual", () => {
     expect(needsReview({ huntCode: "ABCD", huntCodeSource: "manual", huntTime: null, ocr: { status: "failed" } })).toBe(true);

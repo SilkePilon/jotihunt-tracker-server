@@ -225,6 +225,8 @@ export async function setHuntReportFields(id: string, fields: { huntCode?: strin
   if (fields.huntTime !== undefined && Number.isNaN(fields.huntTime.getTime())) throw new HuntReportError(400, "Ongeldige tijd.");
   const report = await findReport(id);
   if (huntCode !== undefined) {
+    // The jotihunt.nl result belonged to the old code
+    if (huntCode !== report.huntCode) report.site = undefined;
     report.huntCode = huntCode;
     report.huntCodeSource = "manual";
   }
@@ -232,6 +234,8 @@ export async function setHuntReportFields(id: string, fields: { huntCode?: strin
     report.huntTime = toMinute(fields.huntTime);
     report.huntTimeSource = "manual";
   }
+  const bothManual = fieldSource(report.huntCode, report.huntCodeSource) === "manual" && fieldSource(report.huntTime, report.huntTimeSource) === "manual";
+  if (bothManual && (report.ocr?.status === "pending" || report.ocr?.status === "reading")) report.set("ocr.status", "done");
   await report.save();
   if (fields.huntTime !== undefined && report.markerId) await Marker.updateOne({ _id: report.markerId }, { $set: { time: report.huntTime } });
   return viewOf(report);
@@ -241,6 +245,7 @@ export async function setHuntReportFields(id: string, fields: { huntCode?: strin
 export async function requestHuntReportRead(id: string, user: UserType): Promise<HuntReportView> {
   requireAdmin(user);
   const report = await findReport(id);
+  let resetMarker = false;
   if (fieldSource(report.huntCode, report.huntCodeSource) !== "manual") {
     report.huntCode = null;
     report.huntCodeSource = undefined;
@@ -248,9 +253,11 @@ export async function requestHuntReportRead(id: string, user: UserType): Promise
   if (fieldSource(report.huntTime, report.huntTimeSource) !== "manual") {
     report.huntTime = null;
     report.huntTimeSource = undefined;
+    resetMarker = true;
   }
   report.set("ocr", { status: "pending", attempts: 0 });
   await report.save();
+  if (resetMarker && report.markerId) await Marker.updateOne({ _id: report.markerId }, { $set: { time: toMinute(createdAtOf(report)) } });
   return viewOf(report);
 }
 

@@ -36,6 +36,15 @@ export function createHuntOcr(deps: HuntOcrDeps): HuntOcr {
   const queue: string[] = [];
   let draining: Promise<void> | null = null;
 
+  /** onError must never break the queue */
+  function notifyError(error: unknown, id: string) {
+    try {
+      deps.onError?.(error, id);
+    } catch {
+      // ignore
+    }
+  }
+
   async function fail(id: string, error: string, attempts?: number) {
     const set: Record<string, unknown> = { "ocr.status": "failed", "ocr.error": error };
     if (attempts !== undefined) set["ocr.attempts"] = attempts;
@@ -72,6 +81,10 @@ export function createHuntOcr(deps: HuntOcrDeps): HuntOcr {
     for (;;) {
       const report = await HuntReport.findById(id);
       if (!report) return;
+      if ((report.ocr?.attempts ?? 0) >= MAX_ATTEMPTS) {
+        await fail(id, report.ocr?.error || "Lezen mislukt na meerdere pogingen.");
+        return;
+      }
       if (!deps.reader) {
         await fail(id, NO_KEY_ERROR);
         return;
@@ -84,7 +97,7 @@ export function createHuntOcr(deps: HuntOcrDeps): HuntOcr {
         photo = await deps.loadPhoto(report.photo);
       } catch (error) {
         await fail(id, "Foto niet gevonden.");
-        deps.onError?.(error, id);
+        notifyError(error, id);
         return;
       }
 
@@ -99,36 +112,41 @@ export function createHuntOcr(deps: HuntOcrDeps): HuntOcr {
           continue;
         }
         await fail(id, error.message);
-        deps.onError?.(error, id);
+        notifyError(error, id);
         return;
       }
     }
   }
 
   async function drain() {
-    while (queue.length > 0) {
-      const id = queue.shift()!;
-      try {
-        await read(id);
-      } catch (error) {
-        deps.onError?.(error, id);
-        await fail(id, "Lezen mislukt.").catch((failError) => deps.onError?.(failError, id));
+    try {
+      while (queue.length > 0) {
+        const id = queue.shift()!;
+        try {
+          await read(id);
+        } catch (error) {
+          notifyError(error, id);
+          await fail(id, "Lezen mislukt.").catch((failError) => notifyError(failError, id));
+        }
       }
+    } finally {
+      draining = null;
     }
-    draining = null;
+  }
+
+  function enqueue(id: string) {
+    if (!queue.includes(id)) queue.push(id);
+    // No await between the loop's empty check and `draining = null`, so a new id is never left behind
+    draining ??= drain();
   }
 
   return {
-    enqueue(id: string) {
-      if (!queue.includes(id)) queue.push(id);
-      // No await between the loop's empty check and `draining = null`, so a new id is never left behind
-      draining ??= drain();
-    },
+    enqueue,
     async resumePending() {
       const reports = await HuntReport.find({ "ocr.status": { $in: ["pending", "reading"] } })
         .select("_id")
         .sort({ createdAt: 1 });
-      for (const report of reports) this.enqueue(report._id.toString());
+      for (const report of reports) enqueue(report._id.toString());
       return reports.length;
     },
     async idle() {

@@ -71,6 +71,7 @@ interface ReviewInput {
  * confidence below REVIEW_CONFIDENCE. Manual values are trusted.
  */
 export function needsReview(report: ReviewInput): boolean {
+  if (report.ocr?.status === "pending" || report.ocr?.status === "reading") return false;
   const codeSource = fieldSource(report.huntCode, report.huntCodeSource);
   const timeSource = fieldSource(report.huntTime, report.huntTimeSource);
   if (report.ocr?.status === "failed" && !(codeSource === "manual" && timeSource === "manual")) return true;

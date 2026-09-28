@@ -142,7 +142,7 @@ describe("createHuntReport", () => {
     const user = await makeUser("merida");
     const before = Date.now();
     const view = await createHuntReport(input({ huntCode: undefined, huntTime: undefined, location: [5.9, 52.2] }), user);
-    expect(view).toMatchObject({ huntCode: null, huntTimeKnown: false, huntCodeSource: null, huntTimeSource: null, ocrStatus: "pending", needsReview: true });
+    expect(view).toMatchObject({ huntCode: null, huntTimeKnown: false, huntCodeSource: null, huntTimeSource: null, ocrStatus: "pending", needsReview: false });
     expect(view.huntTime).toBe(view.createdAt);
     expect(view.deadline).toBe(new Date(new Date(view.createdAt).getTime() + 30 * 60 * 1000).toISOString());
     const [marker] = await Marker.find();
@@ -222,6 +222,25 @@ describe("setHuntReportFields", () => {
     expect(view.needsReview).toBe(false);
   });
 
+  test("changing the code clears the jotihunt.nl result, keeping the same code does not", async () => {
+    const merida = await makeUser("merida");
+    const hq = await makeUser("hq", true);
+    const report = await createHuntReport(input(), merida);
+    await HuntReport.updateOne({ _id: report._id }, { $set: { site: { status: "goed", points: 5, seenAt: new Date() } } });
+    expect((await setHuntReportFields(report._id, { huntCode: "Gy3M8XI" }, hq)).site).not.toBeNull();
+    expect((await setHuntReportFields(report._id, { huntCode: "NEWC" }, hq)).site).toBeNull();
+  });
+
+  test("a pending reading is done once code and time are both manual", async () => {
+    const merida = await makeUser("merida");
+    const hq = await makeUser("hq", true);
+    const report = await createHuntReport(input({ huntCode: undefined, huntTime: undefined }), merida);
+    expect((await setHuntReportFields(report._id, { huntCode: "ABCD" }, hq)).ocrStatus).toBe("pending");
+    const view = await setHuntReportFields(report._id, { huntTime }, hq);
+    expect(view.ocrStatus).toBe("done");
+    expect((await HuntReport.findById(report._id))!.ocr!.status).toBe("done");
+  });
+
   test("403 for non-admins, 400 for an empty code or nothing to change, 404 unknown", async () => {
     const merida = await makeUser("merida");
     const hq = await makeUser("hq", true);
@@ -247,6 +266,19 @@ describe("requestHuntReportRead", () => {
     const stored = await HuntReport.findById(report._id);
     expect(stored!.huntTime).toBeNull();
     expect(stored!.ocr).toMatchObject({ status: "pending", attempts: 0 });
+  });
+
+  test("moves the marker back to the upload time when the time is reset", async () => {
+    const merida = await makeUser("merida");
+    const hq = await makeUser("hq", true);
+    const report = await createHuntReport(input({ huntTime: undefined, location: [5.9, 52.2] }), merida);
+    await HuntReport.updateOne({ _id: report._id }, { $set: { huntTime, huntTimeSource: "ocr" } });
+    await Marker.updateMany({}, { $set: { time: huntTime } });
+    await requestHuntReportRead(report._id, hq);
+    const expected = new Date((await HuntReport.findById(report._id))!.get("createdAt") as Date);
+    expected.setSeconds(0, 0);
+    const [marker] = await Marker.find();
+    expect(marker.time).toEqual(expected);
   });
 
   test("keeps values from before OCR (they count as manual)", async () => {
