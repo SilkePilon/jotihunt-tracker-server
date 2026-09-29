@@ -4,6 +4,7 @@ import { Prediction } from "../../models/prediction.model";
 import { PredictionModel } from "../../models/prediction-model.model";
 import { Team } from "../../models/team.model";
 import { createHash } from "node:crypto";
+import { assertGeneration, currentGeneration, DemoSwitchedError, isDemoSwitchInProgress } from "../../demo/demo-mode";
 import {
   ORS_COOLDOWN_MS,
   ORS_REQUEST_FALLBACK_TTL_MS,
@@ -105,6 +106,8 @@ interface AreaContext {
 interface RunFlags {
   estimate: boolean;
   transitUnavailable: boolean;
+  /** Demo switch generation at the start of the run: nothing is stored once the database was switched */
+  generation: number;
 }
 
 interface VisitedAt {
@@ -343,6 +346,7 @@ export function createPredictionService(deps: PredictionDeps) {
       events,
       manual,
     );
+    assertGeneration(flags.generation);
     await replaceAutoVisits(ctx.area, state.autoVisits);
     return { state, manual };
   }
@@ -470,13 +474,14 @@ export function createPredictionService(deps: PredictionDeps) {
     return { mode: transitMode ? "transit" : "walking", zone, candidates, snapshot };
   }
 
-  async function compute(ctx: AreaContext, signature: string): Promise<PredictionDto> {
+  async function compute(ctx: AreaContext, signature: string, generation: number): Promise<PredictionDto> {
     const at = now();
-    const flags: RunFlags = { estimate: false, transitUnavailable: false };
+    const flags: RunFlags = { estimate: false, transitUnavailable: false, generation };
     const previous = await Prediction.findOne({ area: ctx.area }).lean();
     const model = await loadModel(ctx.area);
     const { state, manual } = await syncVisits(flags, ctx);
     if (ctx.groups.length > 0) await learn(flags, ctx, visitedList(state, manual), previous, model);
+    assertGeneration(generation);
     await saveModel(ctx.area, model);
 
     const last = ctx.observations.at(-1);
@@ -513,6 +518,7 @@ export function createPredictionService(deps: PredictionDeps) {
 
     dto.estimate = flags.estimate;
     dto.transitUnavailable = flags.transitUnavailable;
+    assertGeneration(generation);
     await Prediction.replaceOne({ area: ctx.area }, { ...dto, snapshot, signature }, { upsert: true });
     return dto;
   }
@@ -520,9 +526,10 @@ export function createPredictionService(deps: PredictionDeps) {
   /** Recompute one area now (e.g. after a manual visit change). */
   function recomputeArea(area: string): Promise<PredictionDto> {
     const name = area.toLowerCase();
+    const generation = currentGeneration();
     return withLock(name, async () => {
       const ctx = await loadContext(name);
-      return compute(ctx, await signatureFor(ctx));
+      return compute(ctx, await signatureFor(ctx), generation);
     });
   }
 
@@ -533,7 +540,10 @@ export function createPredictionService(deps: PredictionDeps) {
   async function recomputeDue(): Promise<{ recomputed: string[]; failed: { area: string; error: unknown }[] }> {
     const recomputed: string[] = [];
     const failed: { area: string; error: unknown }[] = [];
+    const generation = currentGeneration();
     for (const area of await listAreaNames()) {
+      // A demo switch waits for this run: stop between areas instead of making it wait for all of them
+      if (isDemoSwitchInProgress() || generation !== currentGeneration()) break;
       try {
         const done = await withLock(area, async () => {
           const ctx = await loadContext(area);
@@ -541,11 +551,12 @@ export function createPredictionService(deps: PredictionDeps) {
           const previous = await Prediction.findOne({ area }, { signature: 1, updatedAt: 1 }).lean();
           const fresh = previous && previous.signature === signature && now().getTime() - new Date(previous.updatedAt).getTime() < RECOMPUTE_INTERVAL_MS;
           if (fresh) return false;
-          await compute(ctx, signature);
+          await compute(ctx, signature, generation);
           return true;
         });
         if (done) recomputed.push(area);
       } catch (error) {
+        if (error instanceof DemoSwitchedError) break;
         failed.push({ area, error });
       }
     }

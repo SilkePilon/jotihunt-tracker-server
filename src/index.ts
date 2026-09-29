@@ -24,7 +24,6 @@ import mongoose from "mongoose";
 import expressWinston from "express-winston";
 import cors from "cors";
 import authRoute from "./routes/auth.route";
-import { HuntReport } from "./models/hunt-report.model";
 import { huntOcr } from "./controllers/hunt-reports.controller";
 
 const debug = process.env.DEBUG === "true";
@@ -113,15 +112,7 @@ await initDemoMode(db, { logger: { info: (message) => logger.info(message), warn
   if (debug) mongoose.set("debug", true);
 });
 
-// Surface index build failures (e.g. duplicate article ids blocking the unique index) instead of failing silently
-await Promise.all(
-  Object.values(mongoose.models)
-    .filter((model) => model !== HuntReport)
-    .map((model) => model.init().catch((error) => logger.error(`Could not build indexes for ${model.modelName}`, error))),
-);
-// Hunt codes are no longer unique (duplicates are flagged): syncIndexes drops the old unique index. Its automatic
-// init() fails on exactly that index conflict, so HuntReport is synced here instead of awaited above.
-await HuntReport.syncIndexes().catch((error) => logger.error("Could not sync indexes for HuntReport", error));
+// Index maintenance of the real database runs in initDemoMode (and again whenever demo mode is switched off)
 
 // Read hunt codes and times left unread by a restart
 await huntOcr

@@ -1,10 +1,18 @@
 import type { NextFunction, Request, Response } from "express";
 import mongoose, { type ConnectOptions } from "mongoose";
 import { clearDemoUploads } from "../services/photo-store";
-import { isDemoMode, setDemoModeFlag } from "./demo-mode";
+import { activeWorkCount, beginWork, isDemoMode, nextGeneration, setDemoModeFlag, setDemoSwitchInProgress, waitForIdleWork } from "./demo-mode";
 import { openDemoStateStore, type DemoStateStore } from "./demo-state";
 
-export { isDemoMode, skipInDemoMode } from "./demo-mode";
+export {
+  assertGeneration,
+  currentGeneration,
+  DemoSwitchedError,
+  isDemoMode,
+  isDemoSwitchInProgress,
+  runTracked,
+  skipInDemoMode,
+} from "./demo-mode";
 
 /** Fills the (freshly dropped, users already copied) demo database; times relative to `now`. */
 export type DemoWorldGenerator = (now: Date) => Promise<void>;
@@ -24,8 +32,18 @@ export interface DemoLogger {
   error(message: string, error?: unknown): void;
 }
 
-/** Max time a switch waits for requests that are already running before it disconnects the database. */
+/** A switch was refused because requests or background jobs kept running; nothing changed. */
+export class DemoSwitchBusyError extends Error {
+  readonly status = 409;
+  constructor() {
+    super("Er lopen nog taken; probeer het zo opnieuw.");
+    this.name = "DemoSwitchBusyError";
+  }
+}
+
+/** Max time a switch waits for running requests and tracked jobs; after that the switch is refused. */
 const DRAIN_TIMEOUT_MS = 10_000;
+let drainTimeoutMs = DRAIN_TIMEOUT_MS;
 
 const noopLogger: DemoLogger = { info() {}, warn() {}, error() {} };
 
@@ -37,8 +55,6 @@ let generator: DemoWorldGenerator = async () => {};
 const listeners = new Set<DemoSwitchListener>();
 /** Serialises switches; also what the gate waits for */
 let switching: Promise<unknown> | null = null;
-let activeRequests = 0;
-const drainWaiters = new Set<() => void>();
 
 // --- Database names ---------------------------------------------------------------------------------------------
 
@@ -62,13 +78,16 @@ export function demoDbName(uri: string): string {
 /**
  * Connect options for another database on the same server. The URI stays untouched (it may hold credentials and
  * several hosts); `dbName` selects the database. Without an explicit authSource the driver would authenticate against
- * the selected database, so keep authenticating where the real connection does.
+ * the selected database, so keep authenticating where the real connection does. `mongodb+srv` URIs are left alone:
+ * the driver takes their authSource from the DNS TXT record.
  */
-function connectOptions(uri: string, dbName: string): ConnectOptions {
+export function demoConnectOptions(uri: string, dbName: string): ConnectOptions {
   const match = URI_PATTERN.exec(uri.trim());
-  const hasCredentials = !!match && match[1].includes("@");
-  const hasAuthSource = /[?&]authSource=/i.test(match?.[3] ?? "");
-  const authSource = hasCredentials && !hasAuthSource ? decodeURIComponent(match?.[2] ?? "") || "admin" : undefined;
+  if (!match) throw new Error("Invalid MongoDB connection string");
+  const isSrv = match[1].startsWith("mongodb+srv:");
+  const hasCredentials = match[1].includes("@");
+  const hasAuthSource = /[?&]authSource=/i.test(match[3] ?? "");
+  const authSource = !isSrv && hasCredentials && !hasAuthSource ? decodeURIComponent(match[2] ?? "") || "admin" : undefined;
   return authSource ? { dbName, authSource } : { dbName };
 }
 
@@ -93,9 +112,10 @@ export function getDemoState(): DemoState {
  * Open the DemoState store in the real database and connect the default Mongoose connection: to the real database, or,
  * when demo mode was left on, to a freshly generated demo database.
  */
-export async function initDemoMode(uri: string, options: { logger?: DemoLogger } = {}): Promise<DemoState> {
+export async function initDemoMode(uri: string, options: { logger?: DemoLogger; /** tests only */ drainTimeoutMs?: number } = {}): Promise<DemoState> {
   if (store) throw new Error("Demo mode is already initialised");
   log = options.logger ?? noopLogger;
+  drainTimeoutMs = options.drainTimeoutMs ?? DRAIN_TIMEOUT_MS;
   realUri = uri;
   demoDbName(uri); // refuse to run with an unusable demo database name
   store = await openDemoStateStore(uri);
@@ -109,24 +129,30 @@ export async function initDemoMode(uri: string, options: { logger?: DemoLogger }
       return getDemoState();
     } catch (error) {
       log.error("Could not start in demo mode, falling back to the real database", error);
-      await connectReal();
-      state = { enabled: false, enabledAt: null, startedAt: null };
+      await fallbackToReal();
       await store.write({ enabled: false, enabledAt: null, enabledBy: null, startedAt: null });
       return getDemoState();
     }
   }
   await connectReal();
   state = { enabled: false, enabledAt: null, startedAt: null };
+  // A demo database left behind by a failed switch or a crash
+  await dropDemoDatabase().catch((error) => log.warn(`Could not drop a leftover demo database: ${describe(error)}`));
   return getDemoState();
 }
 
-/** Switch between the real and the demo database. Switching to the current state is a no-op. */
+/**
+ * Switch between the real and the demo database. Switching to the current state is a no-op. Rejects with a
+ * DemoSwitchBusyError (nothing changed) when requests or tracked jobs keep running for more than 10 s.
+ */
 export function switchDemoMode(enabled: boolean, user?: { _id: unknown } | null): Promise<DemoState> {
   const previous = switching ?? Promise.resolve();
   const run = previous.catch(() => undefined).then(() => performSwitch(enabled, user));
   const current = run.finally(() => {
     if (switching === current) switching = null;
   });
+  // The caller handles the rejection of `run`; this copy only serialises switches
+  current.catch(() => undefined);
   switching = current;
   return run;
 }
@@ -137,14 +163,7 @@ export function switchDemoMode(enabled: boolean, user?: { _id: unknown } | null)
  */
 export function demoGate(req: Request, res: Response, next: NextFunction) {
   const start = () => {
-    activeRequests++;
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      activeRequests--;
-      if (activeRequests <= 0) for (const resolve of drainWaiters) resolve();
-    };
+    const finish = beginWork();
     res.on("finish", finish);
     res.on("close", finish);
     next();
@@ -168,29 +187,18 @@ export async function closeDemoMode() {
   realUri = null;
   state = { enabled: false, enabledAt: null, startedAt: null };
   setDemoModeFlag(false);
+  setDemoSwitchInProgress(false);
   generator = async () => {};
 }
 
 // --- Internals --------------------------------------------------------------------------------------------------
 
-async function waitForSwitch() {
-  while (switching) await switching.catch(() => undefined);
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
-function drainRequests(): Promise<void> {
-  if (activeRequests <= 0) return Promise.resolve();
-  return new Promise<void>((resolve) => {
-    const done = () => {
-      clearTimeout(timer);
-      drainWaiters.delete(done);
-      resolve();
-    };
-    const timer = setTimeout(() => {
-      log.warn(`Demo switch: ${activeRequests} request(s) still running after ${DRAIN_TIMEOUT_MS / 1000} s, switching anyway`);
-      done();
-    }, DRAIN_TIMEOUT_MS);
-    drainWaiters.add(done);
-  });
+async function waitForSwitch() {
+  while (switching) await switching.catch(() => undefined);
 }
 
 function requireInit(): { uri: string; store: DemoStateStore } {
@@ -198,13 +206,57 @@ function requireInit(): { uri: string; store: DemoStateStore } {
   return { uri: realUri, store };
 }
 
+/**
+ * Index maintenance of the real database (also after switching back from demo mode). model.init() only runs once
+ * per process, so the indexes are built with createIndexes(). Hunt codes are no longer unique (duplicates are
+ * flagged): syncIndexes drops the old unique index; HuntReport's automatic init() fails on exactly that conflict.
+ */
+async function maintainIndexes() {
+  const models = Object.values(mongoose.models);
+  await Promise.all(
+    models
+      .filter((model) => model.modelName !== "HuntReport")
+      .map((model) => model.createIndexes().catch((error) => log.error(`Could not build indexes for ${model.modelName}`, error))),
+  );
+  const huntReport = models.find((model) => model.modelName === "HuntReport");
+  await huntReport?.syncIndexes().catch((error) => log.error("Could not sync indexes for HuntReport", error));
+}
+
 /** Only the default connection is closed: mongoose.disconnect() would also close the DemoState connection. */
 async function connectReal() {
   const { uri } = requireInit();
   await mongoose.connection.close();
   await mongoose.connect(uri);
-  if (mongoose.connection.name !== mongoUriDbName(uri)) throw new Error("Connected to an unexpected database");
+  if (mongoose.connection.name !== mongoUriDbName(uri)) {
+    await mongoose.connection.close();
+    throw new Error("Connected to an unexpected database");
+  }
   setDemoModeFlag(false);
+  await maintainIndexes();
+}
+
+/** Connect the default connection to the existing demo database again (a failed switch-off), without dropping it. */
+async function reconnectDemo() {
+  const { uri } = requireInit();
+  const demoName = demoDbName(uri);
+  await mongoose.connection.close();
+  await mongoose.connect(uri, demoConnectOptions(uri, demoName));
+  if (mongoose.connection.name !== demoName) {
+    await mongoose.connection.close();
+    throw new Error("Connected to an unexpected database");
+  }
+  setDemoModeFlag(true);
+}
+
+/**
+ * Drop the demo database through the DemoState connection, so it works whatever the default connection is doing.
+ * Never drops anything but `<realDbName>-demo`.
+ */
+async function dropDemoDatabase() {
+  const { uri, store: stateStore } = requireInit();
+  const demoName = demoDbName(uri);
+  if (demoName === stateStore.connection.name || demoName === mongoUriDbName(uri)) throw new Error("Refusing to drop a database that is not the demo database");
+  await stateStore.connection.useDb(demoName, { useCache: false }).dropDatabase();
 }
 
 /** Connect the default connection to a fresh demo database, copy the users and generate the demo world. */
@@ -212,10 +264,13 @@ async function enterDemo(): Promise<Date> {
   const { uri, store: stateStore } = requireInit();
   const demoName = demoDbName(uri);
   await mongoose.connection.close();
-  await mongoose.connect(uri, connectOptions(uri, demoName));
+  await mongoose.connect(uri, demoConnectOptions(uri, demoName));
   const connection = mongoose.connection;
   // Never drop anything but the demo database
-  if (connection.name !== demoName || demoName === stateStore.connection.name) throw new Error("Refusing to drop a database that is not the demo database");
+  if (connection.name !== demoName || demoName === stateStore.connection.name) {
+    await connection.close();
+    throw new Error("Refusing to drop a database that is not the demo database");
+  }
   setDemoModeFlag(true);
   await connection.dropDatabase();
   // model.init() only runs once per process, so build the indexes of the fresh database explicitly
@@ -229,15 +284,52 @@ async function enterDemo(): Promise<Date> {
   return now;
 }
 
-/** Drop the demo database and reconnect to the real one. */
-async function leaveDemo() {
-  const { uri } = requireInit();
-  const demoName = demoDbName(uri);
-  if (mongoose.connection.readyState === mongoose.ConnectionStates.connected && mongoose.connection.name === demoName) {
-    await mongoose.connection.dropDatabase();
+/**
+ * After a failed switch-on: back to the real database and drop the half-built demo database. When even the real
+ * database is unreachable, the default connection stays closed (never serving the demo database as if it were real).
+ */
+async function fallbackToReal() {
+  state = { enabled: false, enabledAt: null, startedAt: null };
+  try {
+    await connectReal();
+  } catch (error) {
+    log.error("Could not reconnect to the real database", error);
+    await mongoose.connection.close().catch(() => undefined);
+    setDemoModeFlag(false);
   }
-  await connectReal();
-  await clearDemoUploads();
+  await dropDemoDatabase().catch((error) => log.error("Could not drop the demo database", error));
+  await clearDemoUploads().catch((error) => log.error("Could not clear the demo uploads", error));
+}
+
+async function switchOn(stateStore: DemoStateStore, user?: { _id: unknown } | null) {
+  let startedAt: Date;
+  try {
+    startedAt = await enterDemo();
+  } catch (error) {
+    log.error("Could not switch to demo mode, back to the real database", error);
+    await fallbackToReal();
+    throw error;
+  }
+  state = { enabled: true, enabledAt: new Date(), startedAt };
+  await stateStore.write({ enabled: true, enabledAt: state.enabledAt, enabledBy: user?._id ? String(user._id) : null, startedAt });
+}
+
+async function switchOff(stateStore: DemoStateStore) {
+  try {
+    await connectReal();
+  } catch (error) {
+    // The demo database still exists (it is dropped only after the real one is connected): stay in demo mode
+    log.error("Could not reconnect to the real database, staying in demo mode", error);
+    await reconnectDemo().catch(async (demoError) => {
+      log.error("Could not reconnect to the demo database either", demoError);
+      await mongoose.connection.close().catch(() => undefined);
+    });
+    throw error;
+  }
+  state = { enabled: false, enabledAt: null, startedAt: null };
+  await dropDemoDatabase().catch((error) => log.error("Could not drop the demo database (dropped at the next start)", error));
+  await clearDemoUploads().catch((error) => log.error("Could not clear the demo uploads", error));
+  await stateStore.write({ enabled: false, enabledAt: null, enabledBy: null, startedAt: null });
 }
 
 async function notifyListeners(enabled: boolean) {
@@ -253,28 +345,30 @@ async function notifyListeners(enabled: boolean) {
 async function performSwitch(enabled: boolean, user?: { _id: unknown } | null): Promise<DemoState> {
   const { store: stateStore } = requireInit();
   if (enabled === isDemoMode()) return getDemoState();
-  await drainRequests();
 
-  if (enabled) {
-    let startedAt: Date;
-    try {
-      startedAt = await enterDemo();
-    } catch (error) {
-      log.error("Could not switch to demo mode, back to the real database", error);
-      await leaveDemo().catch((leaveError) => log.error("Could not reconnect to the real database", leaveError));
-      await notifyListeners(false);
-      throw error;
-    }
-    state = { enabled: true, enabledAt: new Date(), startedAt };
-    await stateStore.write({ enabled: true, enabledAt: state.enabledAt, enabledBy: user?._id ? String(user._id) : null, startedAt });
-    await notifyListeners(true);
-    log.info("Demo mode on");
-  } else {
-    await leaveDemo();
-    state = { enabled: false, enabledAt: null, startedAt: null };
-    await stateStore.write({ enabled: false, enabledAt: null, enabledBy: null, startedAt: null });
-    await notifyListeners(false);
-    log.info("Demo mode off");
+  // From here on tracked jobs are skipped; wait for the running requests and jobs, or refuse the switch
+  setDemoSwitchInProgress(true);
+  if (!(await waitForIdleWork(drainTimeoutMs))) {
+    log.warn(`Demo switch refused: ${activeWorkCount()} request(s)/job(s) still running after ${drainTimeoutMs / 1000} s`);
+    setDemoSwitchInProgress(false);
+    // Nothing changed, but jobs were skipped while waiting (e.g. the OCR queue): let the listeners pick them up
+    await notifyListeners(isDemoMode());
+    throw new DemoSwitchBusyError();
   }
+
+  nextGeneration();
+  let failure: unknown = null;
+  try {
+    if (enabled) await switchOn(stateStore, user);
+    else await switchOff(stateStore);
+  } catch (error) {
+    failure = error;
+  } finally {
+    setDemoSwitchInProgress(false);
+  }
+  // Listeners may start tracked work (e.g. the OCR queue), so they run after the switch is marked done
+  await notifyListeners(isDemoMode());
+  if (failure) throw failure;
+  log.info(`Demo mode ${enabled ? "on" : "off"}`);
   return getDemoState();
 }

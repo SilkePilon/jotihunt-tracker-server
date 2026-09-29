@@ -5,7 +5,22 @@ import mongoose from "mongoose";
 import { Area } from "../models/area.model";
 import { User } from "../models/user.model";
 import { photoFilePath } from "../services/photo-store";
-import { closeDemoMode, demoDbName, demoGate, getDemoState, initDemoMode, isDemoMode, mongoUriDbName, setDemoWorldGenerator, skipInDemoMode, switchDemoMode } from "./database-switch";
+import {
+  closeDemoMode,
+  currentGeneration,
+  demoConnectOptions,
+  demoDbName,
+  demoGate,
+  DemoSwitchBusyError,
+  getDemoState,
+  initDemoMode,
+  isDemoMode,
+  mongoUriDbName,
+  runTracked,
+  setDemoWorldGenerator,
+  skipInDemoMode,
+  switchDemoMode,
+} from "./database-switch";
 
 describe("demo database name", () => {
   test("appends -demo to the database name", () => {
@@ -25,6 +40,25 @@ describe("demo database name", () => {
 
   test("refuses invalid connection strings", () => {
     expect(() => demoDbName("postgres://localhost/jotihunt")).toThrow();
+  });
+});
+
+describe("demo connect options", () => {
+  test("without credentials only the database name is set", () => {
+    expect(demoConnectOptions("mongodb://mongodb:27017/jotihunt", "jotihunt-demo")).toEqual({ dbName: "jotihunt-demo" });
+  });
+
+  test("with credentials keeps authenticating against the real database (or admin)", () => {
+    expect(demoConnectOptions("mongodb://u:p@mongodb:27017/jotihunt", "jotihunt-demo")).toEqual({ dbName: "jotihunt-demo", authSource: "jotihunt" });
+    expect(demoConnectOptions("mongodb://u:p@mongodb:27017", "test-demo")).toEqual({ dbName: "test-demo", authSource: "admin" });
+  });
+
+  test("an explicit authSource in the URI is left to the driver", () => {
+    expect(demoConnectOptions("mongodb://u:p@a:27017,b:27017/jotihunt?replicaSet=rs0&authSource=admin", "jotihunt-demo")).toEqual({ dbName: "jotihunt-demo" });
+  });
+
+  test("mongodb+srv URIs are left to the driver (authSource from DNS)", () => {
+    expect(demoConnectOptions("mongodb+srv://u:p@cluster.example.net/jotihunt?retryWrites=true", "jotihunt-demo")).toEqual({ dbName: "jotihunt-demo" });
   });
 });
 
@@ -57,7 +91,7 @@ describe("switching between the real and the demo database", () => {
     expect(realName).not.toBe("jotihunt");
     if (mongoose.connection.readyState !== mongoose.ConnectionStates.disconnected) await mongoose.disconnect();
     await dropTestDatabases();
-    await initDemoMode(realUri);
+    await initDemoMode(realUri, { drainTimeoutMs: 1_000 });
     expect(mongoose.connection.name).toBe(realName);
   });
 
@@ -145,5 +179,94 @@ describe("switching between the real and the demo database", () => {
     (res as unknown as EventEmitter).emit("finish");
     await switchingOff;
     expect(isDemoMode()).toBe(false);
+  });
+
+  test("a slow tracked job started in demo mode delays switch-off; its writes stay in the demo database", async () => {
+    setDemoWorldGenerator(async () => {});
+    await switchDemoMode(true);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const job = runTracked(async () => {
+      await gate;
+      await Area.create({ name: "SlowDemoJob", status: "green", updatedAt: new Date() });
+      return "done";
+    });
+    let off = false;
+    const switchingOff = switchDemoMode(false).then(() => (off = true));
+    await Bun.sleep(100);
+    expect(off).toBe(false);
+    expect(isDemoMode()).toBe(true);
+    release();
+    expect(await job).toBe("done");
+    await switchingOff;
+    expect(isDemoMode()).toBe(false);
+    expect(await Area.countDocuments({ name: "SlowDemoJob" })).toBe(0);
+    expect(await countIn(demoName, "areas")).toBe(0);
+  });
+
+  test("a tracked job started while a switch runs is skipped", async () => {
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => (release = resolve));
+    setDemoWorldGenerator(() => blocked);
+    const switched = switchDemoMode(true);
+    await Bun.sleep(50);
+    let ran = false;
+    expect(
+      await runTracked(async () => {
+        ran = true;
+        return 1;
+      }),
+    ).toBeUndefined();
+    expect(ran).toBe(false);
+    release();
+    await switched;
+    expect(await runTracked(async () => 2)).toBe(2);
+    await switchDemoMode(false);
+  });
+
+  test("the generation check prevents a write after a switch", async () => {
+    const generation = currentGeneration();
+    setDemoWorldGenerator(async () => {});
+    await switchDemoMode(true);
+    expect(currentGeneration()).not.toBe(generation);
+    let wrote = false;
+    const result = await runTracked(
+      async () => {
+        wrote = true;
+        await Area.create({ name: "Stale", status: "green", updatedAt: new Date() });
+      },
+      { generation },
+    );
+    expect(result).toBeUndefined();
+    expect(wrote).toBe(false);
+    await switchDemoMode(false);
+    expect(await Area.countDocuments({ name: "Stale" })).toBe(0);
+  });
+
+  test("a switch is refused (409) when work keeps running past the drain timeout; nothing changes", async () => {
+    let release!: () => void;
+    const job = runTracked(() => new Promise<void>((resolve) => (release = resolve)));
+    const error = await switchDemoMode(true).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(DemoSwitchBusyError);
+    expect((error as DemoSwitchBusyError).status).toBe(409);
+    expect((error as Error).message).toBe("Er lopen nog taken; probeer het zo opnieuw.");
+    expect(isDemoMode()).toBe(false);
+    expect(mongoose.connection.name).toBe(realName);
+    expect(getDemoState().enabled).toBe(false);
+    // Tracked work runs again once the refused switch is over
+    expect(await runTracked(async () => 3)).toBe(3);
+    release();
+    await job;
+  });
+
+  test("a leftover demo database is dropped at startup", async () => {
+    await closeDemoMode();
+    const conn = await mongoose.createConnection(baseUri).asPromise();
+    await conn.useDb(demoName, { useCache: false }).collection("areas").insertOne({ name: "Leftover" });
+    await conn.close();
+    expect(await countIn(demoName, "areas")).toBe(1);
+    await initDemoMode(realUri, { drainTimeoutMs: 1_000 });
+    expect(await countIn(demoName, "areas")).toBe(0);
+    expect(mongoose.connection.name).toBe(realName);
   });
 });

@@ -1,6 +1,6 @@
 import axios from "axios";
 import { logger } from "..";
-import { skipInDemoMode } from "../demo/demo-mode";
+import { currentGeneration, runTracked, skipInDemoMode } from "../demo/demo-mode";
 import { Team } from "../models/team.model";
 import { USER_AGENT } from "../services/prediction/constants";
 import { normalizeTeamName, parseTeamLogos } from "../services/team-logos.helpers";
@@ -13,18 +13,27 @@ export default async function retrieveJotihuntLogos() {
   if (skipInDemoMode("jotihunt-logos", (message) => logger.debug(message))) return;
 
   const baseUrl = (process.env.JOTIHUNT_WEB_URL || "https://jotihunt.nl").replace(/\/+$/, "");
+  const generation = currentGeneration();
   try {
     const { data } = await axios.get<string>(`${baseUrl}/subscriptions`, { timeout: 15_000, responseType: "text", headers: { "User-Agent": USER_AGENT } });
     const logos = parseTeamLogos(data);
-    const teams = await Team.find({}, { name: 1, logoUrl: 1 });
-    let updated = 0;
-    for (const team of teams) {
-      const logoUrl = logos.get(normalizeTeamName(team.name));
-      if (logoUrl && logoUrl !== team.logoUrl) {
-        await Team.updateOne({ _id: team._id }, { $set: { logoUrl } });
-        updated++;
-      }
-    }
+    // Store only into the database the run started on (skipped when a demo switch happened meanwhile)
+    const updated = await runTracked(
+      async () => {
+        const teams = await Team.find({}, { name: 1, logoUrl: 1 });
+        let count = 0;
+        for (const team of teams) {
+          const logoUrl = logos.get(normalizeTeamName(team.name));
+          if (logoUrl && logoUrl !== team.logoUrl) {
+            await Team.updateOne({ _id: team._id }, { $set: { logoUrl } });
+            count++;
+          }
+        }
+        return count;
+      },
+      { generation },
+    );
+    if (updated === undefined) return;
     logger.info(`(CRON) Group logos: ${logos.size} on jotihunt.nl, ${updated} teams updated`);
   } catch (error) {
     const status = axios.isAxiosError(error) ? error.response?.status : undefined;

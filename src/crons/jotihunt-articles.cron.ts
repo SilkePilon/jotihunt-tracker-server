@@ -1,5 +1,5 @@
 import { logger } from "..";
-import { skipInDemoMode } from "../demo/demo-mode";
+import { currentGeneration, runTracked, skipInDemoMode } from "../demo/demo-mode";
 import { getArticles } from "../services/jotihunt.service";
 import { syncArticles } from "../services/article-sync.service";
 
@@ -8,8 +8,11 @@ export default async function retrieveJotihuntArticles() {
 
   logger.info("(CRON) Retrieving Jotihunt articles from API...");
 
+  const generation = currentGeneration();
   const apiArticles = await getArticles();
-  const result = await syncArticles(apiArticles);
+  // Store only into the database the run started on (skipped when a demo switch happened meanwhile)
+  const result = await runTracked(() => syncArticles(apiArticles), { generation });
+  if (!result) return;
 
   logger.info(`(CRON) Synced ${result.upserted} articles, created ${result.cellsCreated} hint cells`);
   if (result.changedHints.length) {
