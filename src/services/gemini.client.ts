@@ -36,23 +36,46 @@ Use null (with confidence 0) for a value you cannot read. The confidence is how 
 
 type GenerateContentResponse = { candidates?: { content?: { parts?: { text?: string }[] } }[] };
 
+/** One generateContent call with a JSON answer. Returns the answer text; throws GeminiError (never with the key). */
+export async function generateJson({
+  http,
+  apiKey,
+  model,
+  parts,
+  generationConfig = {},
+  timeoutMs,
+}: {
+  http: GeminiHttp;
+  apiKey: string;
+  model: string;
+  parts: unknown[];
+  generationConfig?: Record<string, unknown>;
+  timeoutMs: number;
+}): Promise<string> {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  const body = { contents: [{ parts }], generationConfig: { responseMimeType: "application/json", ...generationConfig } };
+  let response: { data: GenerateContentResponse };
+  try {
+    response = await http.post<GenerateContentResponse>(url, body, { headers: { "x-goog-api-key": apiKey }, timeout: timeoutMs });
+  } catch (error) {
+    // Only the status code is used: the error object holds the request headers (with the key)
+    const status = (error as { response?: { status?: number } } | null)?.response?.status;
+    throw new GeminiError(status ? `Gemini-verzoek mislukt (HTTP ${status})` : "Gemini niet bereikbaar", !status || status === 429 || status >= 500, status);
+  }
+  return response.data?.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("") ?? "";
+}
+
 export function createGeminiClient({ apiKey, model, http }: { apiKey: string; model: string; http: GeminiHttp }): StickerReader {
   return {
     async readSticker(base64: string, mimeType: string): Promise<StickerReading> {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
-      const body = {
-        contents: [{ parts: [{ text: STICKER_PROMPT }, { inline_data: { mime_type: mimeType, data: base64 } }] }],
-        generationConfig: { responseMimeType: "application/json", temperature: 0 },
-      };
-      let response: { data: GenerateContentResponse };
-      try {
-        response = await http.post<GenerateContentResponse>(url, body, { headers: { "x-goog-api-key": apiKey }, timeout: TIMEOUT_MS });
-      } catch (error) {
-        // Only the status code is used: the error object holds the request headers (with the key)
-        const status = (error as { response?: { status?: number } } | null)?.response?.status;
-        throw new GeminiError(status ? `Gemini-verzoek mislukt (HTTP ${status})` : "Gemini niet bereikbaar", !status || status === 429 || status >= 500, status);
-      }
-      const text = response.data?.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("") ?? "";
+      const text = await generateJson({
+        http,
+        apiKey,
+        model,
+        parts: [{ text: STICKER_PROMPT }, { inline_data: { mime_type: mimeType, data: base64 } }],
+        generationConfig: { temperature: 0 },
+        timeoutMs: TIMEOUT_MS,
+      });
       try {
         return parseStickerReading(text);
       } catch {

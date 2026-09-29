@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createGeminiClient, GeminiError, STICKER_PROMPT, type GeminiHttp } from "./gemini.client";
+import { createGeminiClient, generateJson, GeminiError, STICKER_PROMPT, type GeminiHttp } from "./gemini.client";
 
 const API_KEY = "test-key-123";
 
@@ -94,5 +94,23 @@ describe("createGeminiClient.readSticker", () => {
       const error = await readError(client.readSticker("x", "image/jpeg"));
       expect(error.retryable).toBe(false);
     }
+  });
+});
+
+describe("generateJson", () => {
+  test("posts parts and generationConfig with the key header, returns the text", async () => {
+    const { http, calls } = fakeHttp(answer('{"ok":true}'));
+    const text = await generateJson({ http, apiKey: API_KEY, model: "m-1", parts: [{ text: "hi" }], generationConfig: { temperature: 0.2 }, timeoutMs: 5000 });
+    expect(text).toBe('{"ok":true}');
+    expect(calls[0].url).toContain("/models/m-1:generateContent");
+    expect(calls[0].config).toEqual({ headers: { "x-goog-api-key": API_KEY }, timeout: 5000 });
+    expect(calls[0].body).toEqual({ contents: [{ parts: [{ text: "hi" }] }], generationConfig: { responseMimeType: "application/json", temperature: 0.2 } });
+  });
+
+  test("429 is retryable and hides the key", async () => {
+    const { http } = fakeHttp(httpError(429));
+    const error = await readError(generateJson({ http, apiKey: API_KEY, model: "m", parts: [], timeoutMs: 1 }));
+    expect(error.retryable).toBe(true);
+    expect(error.status).toBe(429);
   });
 });
