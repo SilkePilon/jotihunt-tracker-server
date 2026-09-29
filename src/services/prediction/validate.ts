@@ -28,8 +28,9 @@ export function validatePrediction(raw: unknown, facts: AreaFacts): ValidPredict
   if (!isRecord(raw)) throw new InvalidPredictionError("Antwoord is geen object");
   const known = new Set(facts.groups.map((group) => group.teamApiId));
 
-  const manualVisited = facts.manualVisits.filter((visit) => visit.state === "visited").map((visit) => visit.teamApiId);
-  const manualNot = new Set(facts.manualVisits.filter((visit) => visit.state === "not_visited").map((visit) => visit.teamApiId));
+  const round = finite(raw.round) ? Math.min(facts.round + 1, Math.max(facts.round, Math.round(raw.round))) : facts.round;
+  const manualVisited = round === facts.round ? facts.manualVisits.filter((visit) => visit.state === "visited").map((visit) => visit.teamApiId) : [];
+  const manualNot = round === facts.round ? new Set(facts.manualVisits.filter((visit) => visit.state === "not_visited").map((visit) => visit.teamApiId)) : new Set();
   const aiVisited = Array.isArray(raw.visitedTeamApiIds) ? raw.visitedTeamApiIds.filter(finite) : [];
   const visited = [...new Set([...aiVisited, ...manualVisited])].filter((id) => known.has(id) && !manualNot.has(id)).sort((a, b) => a - b);
   const visitedSet = new Set(visited);
@@ -56,7 +57,6 @@ export function validatePrediction(raw: unknown, facts: AreaFacts): ValidPredict
   const last = facts.trail.at(-1);
   if (last && distanceM([last.lng, last.lat], [pin.lng, pin.lat]) > MAX_PIN_DISTANCE_M) throw new InvalidPredictionError("Pin te ver van laatste locatie");
 
-  const round = finite(raw.round) ? Math.min(facts.round + 1, Math.max(facts.round, Math.round(raw.round))) : facts.round;
   const confidence: Confidence = raw.confidence === "high" || raw.confidence === "medium" ? raw.confidence : "low";
   const why = (typeof raw.reason === "string" ? raw.reason.trim() : "").slice(0, MAX_WHY_LENGTH);
 

@@ -22,7 +22,7 @@ Task:
 1. Decide which groups were already visited in the current round (from the trail passing close to them, and manualVisits).
 2. Decide the round (the current one, or the next if every group was visited).
 3. Estimate where the foxes are right now (pin), taking elapsed time since the last trail point, walking speed and likely stops into account.
-4. Rank the 3 most likely next groups with probability (0-1) and etaMinutes = minutes from now until they arrive there.
+4. Rank the 3 most likely groups not yet visited in this round with probability (summing to 1) and etaMinutes = minutes from now until they arrive there.
 5. confidence: high when a trail point is recent and the direction is clear, low when the last point is old or ambiguous.
 6. reason: one short Dutch sentence, at most 15 words.
 Answer only with the JSON object.`;

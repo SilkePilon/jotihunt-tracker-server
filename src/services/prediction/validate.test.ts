@@ -77,4 +77,13 @@ describe("validatePrediction", () => {
     const allVisited = { ...facts, manualVisits: [1, 2, 3, 4].map((id) => ({ teamApiId: id, state: "visited" as const })) };
     expect(validatePrediction({ ...good, candidates: [] }, allVisited).candidates).toEqual([]);
   });
+
+  test("old-round manual visits ignored when Gemini advances the round", () => {
+    const oldRoundManualVisits = { ...facts, manualVisits: [{ teamApiId: 1, state: "visited" as const }] };
+    const raw = { ...good, round: 2, visitedTeamApiIds: [], candidates: [{ teamApiId: 1, probability: 1, etaMinutes: 1 }] };
+    const result = validatePrediction(raw, oldRoundManualVisits);
+    expect(result.round).toBe(2);
+    expect(result.visitedTeamApiIds).toEqual([]);
+    expect(result.candidates.map((c) => c.teamApiId)).toContain(1);
+  });
 });
