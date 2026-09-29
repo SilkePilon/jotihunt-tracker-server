@@ -18,16 +18,6 @@ export interface PredictionDeps {
   sleep?: (ms: number) => Promise<void>;
 }
 
-export interface CandidateDto {
-  teamApiId: number;
-  name: string;
-  lng: number;
-  lat: number;
-  probability: number;
-  eta: Date;
-  walkMinutes: number;
-}
-
 export interface PredictionDto {
   area: string;
   status: string;
@@ -41,14 +31,13 @@ export interface PredictionDto {
   lastObservation: { time: Date; lng: number; lat: number; kind: ObservationKind } | null;
   pin: { lat: number; lng: number } | null;
   confidence: Confidence | null;
-  candidates: CandidateDto[];
   visitedTeamApiIds: number[];
   why: string;
 }
 
 /** Stored predictions for the API (without the signature and the attempt time). */
 export async function listPredictions() {
-  return Prediction.find({}, { _id: 0, __v: 0, signature: 0, attemptedAt: 0 }).sort({ area: 1 }).lean();
+  return Prediction.find({}, { _id: 0, __v: 0, signature: 0, attemptedAt: 0, candidates: 0 }).sort({ area: 1 }).lean();
 }
 
 function errorMessage(error: unknown): string {
@@ -86,7 +75,6 @@ export function createPredictionService(deps: PredictionDeps) {
       lastObservation: last ? { time: last.time, lng: last.lng, lat: last.lat, kind: last.kind } : null,
       pin: null,
       confidence: null,
-      candidates: [],
       visitedTeamApiIds: [],
       why: "",
     };
@@ -120,7 +108,6 @@ export function createPredictionService(deps: PredictionDeps) {
     const facts = await gatherFacts(inputs, deps.walkMinutes, at);
     try {
       const result = await askGemini(deps.predictor, buildPrompt(facts), facts);
-      const byId = new Map(facts.groups.map((group) => [group.teamApiId, group]));
       return store({
         ...dto,
         round: result.round,
@@ -129,22 +116,10 @@ export function createPredictionService(deps: PredictionDeps) {
         confidence: result.confidence,
         visitedTeamApiIds: result.visitedTeamApiIds,
         why: result.why,
-        candidates: result.candidates.map((candidate) => {
-          const group = byId.get(candidate.teamApiId)!;
-          return {
-            teamApiId: group.teamApiId,
-            name: group.name,
-            lng: group.lng,
-            lat: group.lat,
-            probability: candidate.probability,
-            eta: new Date(at.getTime() + candidate.etaMinutes * 60_000),
-            walkMinutes: group.walkMinutes,
-          };
-        }),
       });
     } catch (error) {
       if (error instanceof DemoSwitchedError) throw error;
-      const previous = await Prediction.findOne({ area: inputs.area }, { _id: 0, __v: 0, signature: 0, attemptedAt: 0 }).lean();
+      const previous = await Prediction.findOne({ area: inputs.area }, { _id: 0, __v: 0, signature: 0, attemptedAt: 0, candidates: 0 }).lean();
       // Only a real earlier prediction (has a pin) is worth keeping; status-only docs are not.
       const base = previous && (previous as PredictionDto).pin ? (previous as PredictionDto) : dto;
       const { reason: _reason, ...rest } = base;

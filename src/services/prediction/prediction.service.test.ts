@@ -23,10 +23,6 @@ function answer(overrides: Record<string, unknown> = {}) {
     visitedTeamApiIds: [],
     pin: { lat: O[1], lng: O[0] + 0.005 },
     confidence: "medium",
-    candidates: [
-      { teamApiId: 1, probability: 0.6, etaMinutes: 15 },
-      { teamApiId: 2, probability: 0.4, etaMinutes: 40 },
-    ],
     reason: "Richting oost.",
     ...overrides,
   };
@@ -61,17 +57,12 @@ beforeEach(clearTestDb);
 afterAll(disconnectTestDb);
 
 describe("recomputeArea", () => {
-  test("stores pin, candidates with names/eta/walk minutes, confidence and why", async () => {
+  test("stores pin, confidence and why", async () => {
     await alpha();
     const { predictor, prompts } = fakePredictor([answer()]);
     const dto = await serviceAt(30, predictor).recomputeArea("Alpha");
     expect(prompts).toHaveLength(1);
     expect(dto.pin).toEqual({ lat: O[1], lng: O[0] + 0.005 });
-    expect(dto.candidates.map((candidate) => [candidate.name, candidate.walkMinutes])).toEqual([
-      ["Rijn", 10],
-      ["Valken", 20],
-    ]);
-    expect(dto.candidates[0].eta).toEqual(at(45));
     expect(dto.confidence).toBe("medium");
     expect(dto.why).toBe("Richting oost.");
     expect(dto.stale).toBe(false);
@@ -156,7 +147,7 @@ describe("recomputeArea", () => {
     const dto = await serviceAt(45, failing.predictor).recomputeArea("alpha");
     expect(dto.stale).toBe(true);
     expect(dto.error).toBe("Gemini-verzoek mislukt (HTTP 503)");
-    expect(dto.candidates).toHaveLength(2);
+    expect(dto.pin).not.toBeNull();
     expect(dto.updatedAt).toEqual(at(30));
   });
 
@@ -179,7 +170,7 @@ describe("recomputeArea", () => {
     }
   });
 
-  test("failure keeps earlier pin/candidates but refreshes lastObservation", async () => {
+  test("failure keeps earlier pin but refreshes lastObservation", async () => {
     await alpha();
     await serviceAt(30, fakePredictor([answer()]).predictor).recomputeArea("alpha");
     const newer: LngLat = moveM(O, 500, 500);
@@ -188,7 +179,6 @@ describe("recomputeArea", () => {
     const dto = await serviceAt(45, fakePredictor([err(), err()]).predictor).recomputeArea("alpha");
     expect(dto.stale).toBe(true);
     expect(dto.pin).not.toBeNull();
-    expect(dto.candidates).toHaveLength(2);
     expect(dto.lastObservation?.time).toEqual(at(35));
     expect(dto.lastObservation?.lng).toBeCloseTo(newer[0], 6);
     const stored = await Prediction.findOne({ area: "alpha" }).lean();
@@ -199,7 +189,7 @@ describe("recomputeArea", () => {
   test("manual visits reach the prompt and win over Gemini", async () => {
     await alpha();
     await GroupVisit.create({ area: "alpha", teamApiId: 1, round: 1, state: VisitState.Visited, source: VisitSource.Manual });
-    const { predictor, prompts } = fakePredictor([answer({ candidates: [{ teamApiId: 2, probability: 1, etaMinutes: 5 }] })]);
+    const { predictor, prompts } = fakePredictor([answer()]);
     const dto = await serviceAt(30, predictor).recomputeArea("alpha");
     expect(prompts[0]).toContain('"manualVisits":[{"teamApiId":1,"state":"visited"}]');
     expect(dto.visitedTeamApiIds).toEqual([1]);
@@ -243,7 +233,7 @@ describe("recomputeDue", () => {
         maxRunning = Math.max(maxRunning, running);
         await new Promise((resolve) => setTimeout(resolve, 20));
         running--;
-        return prompt.includes('"area":"bravo"') ? answer({ candidates: [{ teamApiId: 3, probability: 1, etaMinutes: 1 }] }) : answer();
+        return prompt.includes('"area":"bravo"') ? answer() : answer();
       },
     };
     const service = serviceAt(0, predictor);

@@ -22,9 +22,8 @@ Task:
 1. Decide which groups were already visited in the current round (from the trail passing close to them, and manualVisits).
 2. Decide the round (the current one, or the next if every group was visited).
 3. Estimate where the foxes are right now (pin), taking elapsed time since the last trail point, walking speed and likely stops into account.
-4. Rank the 3 most likely groups not yet visited in this round with probability (summing to 1) and etaMinutes = minutes from now until they arrive there.
-5. confidence: high when a trail point is recent and the direction is clear, low when the last point is old or ambiguous.
-6. reason: one short Dutch sentence, at most 15 words.
+4. confidence: high when a trail point is recent and the direction is clear, low when the last point is old or ambiguous.
+5. reason: one short Dutch sentence, at most 15 words.
 Answer only with the JSON object.`;
 
 export const PREDICTION_SCHEMA: Record<string, unknown> = {
@@ -34,17 +33,9 @@ export const PREDICTION_SCHEMA: Record<string, unknown> = {
     visitedTeamApiIds: { type: "ARRAY", items: { type: "INTEGER" } },
     pin: { type: "OBJECT", properties: { lat: { type: "NUMBER" }, lng: { type: "NUMBER" } }, required: ["lat", "lng"] },
     confidence: { type: "STRING", enum: ["low", "medium", "high"] },
-    candidates: {
-      type: "ARRAY",
-      items: {
-        type: "OBJECT",
-        properties: { teamApiId: { type: "INTEGER" }, probability: { type: "NUMBER" }, etaMinutes: { type: "INTEGER" } },
-        required: ["teamApiId", "probability", "etaMinutes"],
-      },
-    },
     reason: { type: "STRING" },
   },
-  required: ["round", "visitedTeamApiIds", "pin", "confidence", "candidates", "reason"],
+  required: ["round", "visitedTeamApiIds", "pin", "confidence", "reason"],
 };
 
 export function buildPrompt(facts: AreaFacts): string {

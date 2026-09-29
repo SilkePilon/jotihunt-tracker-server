@@ -92,9 +92,7 @@ await Area.updateOne({ name: "Oscar" }, { $set: { status: "orange", updatedAt: n
 for (const area of ["alpha", "oscar"]) {
   const prediction = await predictionService.recomputeArea(area);
   console.log(`${area}: confidence=${prediction.confidence} stale=${prediction.stale} round=${prediction.round} ${prediction.reason ?? prediction.why}`);
-  for (const candidate of prediction.candidates) {
-    console.log(`  ${candidate.name}: ${Math.round(candidate.probability * 100)}%, eta ${candidate.eta.toISOString()} (${candidate.walkMinutes} min lopen)`);
-  }
+  console.log(`  pin: ${prediction.pin ? `${prediction.pin.lat.toFixed(5)}, ${prediction.pin.lng.toFixed(5)}` : "geen"}`);
 }
 console.log(`Stored predictions: ${(await listPredictions()).length}`);
 await mongoose.disconnect();

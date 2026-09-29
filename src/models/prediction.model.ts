@@ -17,7 +17,6 @@ const PredictionSchema = new mongoose.Schema(
     lastObservation: { type: mongoose.Schema.Types.Mixed, default: null },
     pin: { type: mongoose.Schema.Types.Mixed, default: null },
     confidence: { type: String, enum: ["low", "medium", "high"], default: null },
-    candidates: { type: mongoose.Schema.Types.Mixed, default: () => [] },
     visitedTeamApiIds: { type: [Number], default: () => [] },
     why: { type: String, default: "" },
     // Not exposed by the API: inputs fingerprint and the time of the last (possibly failed) attempt

@@ -13,7 +13,7 @@ Replace the deterministic fox prediction (scoring, tour planner, learning, zones
 | Who predicts | Gemini. The server only gathers facts. |
 | Extra inputs | ORS walking minutes from the last position to every group. No transit, no unsolved hint text, no feedback from past predictions. |
 | Visited groups | Gemini infers them from the trail. Manual Bezocht / Niet bezocht overrides are passed as hard facts. The automatic 300 m detection is removed. |
-| Output | One best-guess pin, plus the top 3 groups with probability and ETA. No zone polygons. |
+| Output | One best-guess pin, without a ranking of the next groups. No zone polygons. |
 | Trigger | When the inputs change (new marker, status, manual visit), or 10 minutes after the last prediction. Red status = paused, no call. |
 | Model | `GEMINI_PREDICTION_MODEL`, default `gemini-pro-latest`. |
 | Reasoning | One Dutch sentence of at most 15 words, hidden behind an ⓘ icon. |
@@ -49,14 +49,11 @@ Replace the deterministic fox prediction (scoring, tour planner, learning, zones
      "visitedTeamApiIds": [1, 2],
      "pin": {"lat": 52.0, "lng": 5.9},
      "confidence": "low" | "medium" | "high",
-     "candidates": [{"teamApiId": 3, "probability": 0.6, "etaMinutes": 15}],
-     "reason": "Loopt noordwaarts langs de Rijn, Valken ligt op route."
+     "reason": "Loopt noordwaarts langs de Rijn."
    }
    ```
 4. **`validate.ts`: `validatePrediction(raw, facts)`**. Pure function. It:
-   - drops candidate ids that do not belong to the area, and visited ids;
-   - keeps at most 3 candidates and normalises their probabilities to a sum of 1;
-   - clamps `etaMinutes` (minutes from now) to 0–600, and clamps `round` to the current or the next round;
+   - drops visited ids that do not belong to the area, and clamps `round` to the current or the next round;
    - rejects a pin more than 15 km from the last trail point;
    - truncates the reason to 120 characters.
 
@@ -69,7 +66,7 @@ Replace the deterministic fox prediction (scoring, tour planner, learning, zones
 
 ### Prediction document (`Prediction` model)
 
-`area, status, paused, reason?, updatedAt, signature, stale, error?, estimate, lastObservation{time,lng,lat,kind}, pin{lat,lng}|null, confidence, candidates[{teamApiId,name,lng,lat,probability,eta,walkMinutes}], visitedTeamApiIds[], why`.
+`area, status, paused, reason?, updatedAt, signature, stale, error?, estimate, lastObservation{time,lng,lat,kind}, pin{lat,lng}|null, confidence, visitedTeamApiIds[], why`.
 
 `GET /predictions` returns everything except `signature`.
 
@@ -81,13 +78,11 @@ Replace the deterministic fox prediction (scoring, tour planner, learning, zones
   - The area name and a confidence dot (red / orange / green).
   - The age ("2m"). It turns grey with a warning icon when `stale`.
   - An ⓘ popover that shows `why`.
-  - Three rows, each with the group name, a % bar and an ETA chip.
   - Tapping the card flies the map to the pin.
   - A paused area shows a single muted "gepauzeerd" line.
 - **Map layer `Predictions.tsx`**:
   - A pulsing fox pin in the area colour at `pin`.
   - A dashed line from `lastObservation` to the pin.
-  - The top 3 groups get a ring and a badge "62% 14:20".
   - The zone fills are removed.
   - Groups in `visitedTeamApiIds` get the existing check badge, via `GET /visits`, which lists AI visits as `source: "auto"`.
 - **`VisitControls`**: unchanged buttons (Bezocht / Niet bezocht / Auto = remove the override).
@@ -103,7 +98,7 @@ Replace the deterministic fox prediction (scoring, tour planner, learning, zones
 
 - `facts.test.ts`: trail order, walk minutes with the router mocked, the fallback `estimate` flag, and the signature changing on relevant changes only.
 - `prompt.test.ts`: the rules and the facts appear in the prompt, snapshot-free (contains checks).
-- `validate.test.ts`: unknown ids, visited ids, normalisation, ETA and round clamping, a pin too far away, empty output.
+- `validate.test.ts`: unknown ids, visited ids, round clamping, a pin too far away, non-object output.
 - `gemini-predictor.test.ts`: http mocked; request shape, error mapping, key never in the message.
 - `prediction.service.test.ts`: paused, no trail, due logic (signature or 10 min), retry, stale, one call at a time.
 - Client: `lib/prediction.ts` GeoJSON builder tests updated.
