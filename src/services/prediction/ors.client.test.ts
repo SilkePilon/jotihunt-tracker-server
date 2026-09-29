@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { USER_AGENT } from "./constants";
 import { createThrottle, DailyCounter, MinuteBudget, type HttpPost } from "./http";
-import { createOrsRouter, ORS_MINUTE_LIMITS, parseOrsIsochrones, parseOrsMatrix, parseOrsRoute } from "./ors.client";
+import { createOrsRouter, ORS_MINUTE_LIMITS, parseOrsMatrix } from "./ors.client";
 import { RoutingUnavailableError } from "./routing";
 
 const sampleMatrix = {
@@ -9,24 +9,6 @@ const sampleMatrix = {
   distances: [[0, 1000.2, null]],
   sources: [{ location: [5.48, 52.08] }],
   destinations: [{ location: [5.48, 52.08] }, { location: [5.49, 52.08] }, { location: [5.5, 52.09] }],
-};
-const sampleRoute = {
-  type: "FeatureCollection",
-  features: [
-    {
-      type: "Feature",
-      properties: { summary: { distance: 1234.5, duration: 888.8 } },
-      geometry: { type: "LineString", coordinates: [[5.48, 52.08], [5.485, 52.081], [5.49, 52.081]] },
-    },
-  ],
-};
-const ring = [[[5.48, 52.08], [5.49, 52.08], [5.49, 52.09], [5.48, 52.08]]];
-const sampleIsochrones = {
-  type: "FeatureCollection",
-  features: [
-    { type: "Feature", properties: { group_index: 0, value: 600, center: [5.48, 52.08] }, geometry: { type: "Polygon", coordinates: ring } },
-    { type: "Feature", properties: { group_index: 0, value: 1200, center: [5.48, 52.08] }, geometry: { type: "Polygon", coordinates: ring } },
-  ],
 };
 
 const immediate = <T>(task: () => Promise<T>) => task();
@@ -37,19 +19,6 @@ describe("ORS parsers", () => {
     expect(() => parseOrsMatrix({})).toThrow(RoutingUnavailableError);
   });
 
-  test("directions", () => {
-    const route = parseOrsRoute(sampleRoute);
-    expect(route.line).toHaveLength(3);
-    expect(route.distanceM).toBe(1234.5);
-    expect(route.durationS).toBe(888.8);
-    expect(() => parseOrsRoute({ features: [] })).toThrow(RoutingUnavailableError);
-  });
-
-  test("isochrones keyed by minutes", () => {
-    const rings = parseOrsIsochrones(sampleIsochrones);
-    expect(Object.keys(rings).map(Number)).toEqual([10, 20]);
-    expect(rings[10]).toEqual({ type: "Polygon", coordinates: ring });
-  });
 });
 
 describe("createOrsRouter", () => {
@@ -81,30 +50,17 @@ describe("createOrsRouter", () => {
     expect(result.durationsS[0][1]).toBe(720.5);
   });
 
-  test("requests directions and isochrones", async () => {
-    const bodies: Record<string, unknown> = {};
-    const post: HttpPost = async (url, body) => {
-      bodies[url] = body;
-      return { data: url.includes("isochrones") ? sampleIsochrones : sampleRoute };
-    };
-    const router = createOrsRouter("secret", { post, schedule: immediate });
-    await router.route([5.48, 52.08], [5.49, 52.081]);
-    await router.isochrones([5.48, 52.08], [10, 20]);
-    expect(bodies["https://api.openrouteservice.org/v2/directions/foot-walking/geojson"]).toEqual({ coordinates: [[5.48, 52.08], [5.49, 52.081]] });
-    expect(bodies["https://api.openrouteservice.org/v2/isochrones/foot-walking"]).toEqual({ locations: [[5.48, 52.08]], range: [600, 1200], range_type: "time" });
-  });
-
   test("HTTP errors and exhausted quota become RoutingUnavailableError", async () => {
     const failing = createOrsRouter("secret", { post: async () => Promise.reject(new Error("403")), schedule: immediate });
-    await expect(failing.route([5.48, 52.08], [5.49, 52.08])).rejects.toBeInstanceOf(RoutingUnavailableError);
+    await expect(failing.matrix([[5, 52]], [[5.1, 52]])).rejects.toBeInstanceOf(RoutingUnavailableError);
 
-    const post = mock<HttpPost>(async () => ({ data: sampleRoute }));
+    const post = mock<HttpPost>(async () => ({ data: sampleMatrix }));
     const exhausted = createOrsRouter("secret", {
       post,
       schedule: immediate,
-      counters: { matrix: new DailyCounter(0), directions: new DailyCounter(0), isochrones: new DailyCounter(0) },
+      counters: { matrix: new DailyCounter(0) },
     });
-    await expect(exhausted.route([5.48, 52.08], [5.49, 52.08])).rejects.toBeInstanceOf(RoutingUnavailableError);
+    await expect(exhausted.matrix([[5, 52]], [[5.1, 52]])).rejects.toBeInstanceOf(RoutingUnavailableError);
     expect(post).not.toHaveBeenCalled();
   });
 });
@@ -122,7 +78,7 @@ describe("ORS error classification", () => {
   async function failureFor(error: unknown) {
     const router = createOrsRouter("secret", { post: async () => Promise.reject(error), schedule: immediate });
     try {
-      await router.route([5.48, 52.08], [5.49, 52.08]);
+      await router.matrix([[5, 52]], [[5.1, 52]]);
     } catch (caught) {
       return caught as RoutingUnavailableError;
     }
@@ -134,7 +90,6 @@ describe("ORS error classification", () => {
       const error = await failureFor(httpError(status, `Request failed with status code ${status}`));
       expect(error).toBeInstanceOf(RoutingUnavailableError);
       expect(error.kind).toBe("request");
-      expect(error.permanent).toBe(false);
     }
   });
 
@@ -142,7 +97,6 @@ describe("ORS error classification", () => {
     for (const status of [401, 403]) {
       const error = await failureFor(httpError(status, `Request failed with status code ${status}`));
       expect(error.kind).toBe("permanent");
-      expect(error.permanent).toBe(true);
     }
   });
 
@@ -159,8 +113,8 @@ describe("ORS error classification", () => {
   });
 
   test("a missing key is permanent", async () => {
-    const router = createOrsRouter(undefined, { post: async () => ({ data: sampleRoute }), schedule: immediate });
-    await expect(router.route([5.48, 52.08], [5.49, 52.08])).rejects.toMatchObject({ kind: "permanent" });
+    const router = createOrsRouter(undefined, { post: async () => ({ data: sampleMatrix }), schedule: immediate });
+    await expect(router.matrix([[5, 52]], [[5.1, 52]])).rejects.toMatchObject({ kind: "permanent" });
   });
 
   test("the error message never contains the API key", async () => {
@@ -174,7 +128,7 @@ describe("ORS error classification", () => {
 
 describe("ORS per-minute budgets", () => {
   test("uses the free-plan per-minute limits", () => {
-    expect(ORS_MINUTE_LIMITS).toEqual({ isochrones: 20, matrix: 40, directions: 40 });
+    expect(ORS_MINUTE_LIMITS).toEqual({ matrix: 40 });
   });
 
   test("an exhausted endpoint waits for the minute to roll over instead of failing", async () => {
@@ -187,20 +141,18 @@ describe("ORS per-minute budgets", () => {
         clock += ms;
       },
     };
-    const post = mock<HttpPost>(async (url) => ({ data: url.includes("isochrones") ? sampleIsochrones : sampleRoute }));
+    const post = mock<HttpPost>(async () => ({ data: sampleMatrix }));
     const router = createOrsRouter("secret", {
       post,
       schedule: immediate,
-      budgets: { isochrones: new MinuteBudget(2, time), matrix: new MinuteBudget(40, time), directions: new MinuteBudget(40, time) },
+      budgets: { matrix: new MinuteBudget(2, time) },
     });
-    await router.isochrones([5.48, 52.08], [10]);
-    await router.isochrones([5.48, 52.08], [10]);
-    // Other endpoints have their own budget.
-    await router.route([5.48, 52.08], [5.49, 52.08]);
+    await router.matrix([[5, 52]], [[5.1, 52]]);
+    await router.matrix([[5, 52]], [[5.1, 52]]);
     expect(sleeps).toEqual([]);
-    await router.isochrones([5.48, 52.08], [10]);
+    await router.matrix([[5, 52]], [[5.1, 52]]);
     expect(sleeps).toEqual([60_000]);
-    expect(post).toHaveBeenCalledTimes(4);
+    expect(post).toHaveBeenCalledTimes(3);
   });
 
   test("keeps ≥1 req/s spacing after a per-minute budget wait (fake clock)", async () => {
@@ -213,9 +165,9 @@ describe("ORS per-minute budgets", () => {
     };
     // Real MinuteBudget instance (values are irrelevant), with `acquire` overridden so the second
     // call alone waits ~45 s for the per-minute budget — simulating a burst hitting the limit.
-    const isochronesBudget = new MinuteBudget(1, time);
+    const matrixBudget = new MinuteBudget(1, time);
     let acquireCalls = 0;
-    isochronesBudget.acquire = async () => {
+    matrixBudget.acquire = async () => {
       acquireCalls++;
       if (acquireCalls === 2) await time.sleep(45_000);
     };
@@ -223,17 +175,17 @@ describe("ORS per-minute budgets", () => {
     const sendTimes: number[] = [];
     const post: HttpPost = async () => {
       sendTimes.push(clock);
-      return { data: sampleIsochrones };
+      return { data: sampleMatrix };
     };
     const router = createOrsRouter("secret", {
       post,
       schedule: createThrottle(1000, time),
-      budgets: { isochrones: isochronesBudget, matrix: new MinuteBudget(40, time), directions: new MinuteBudget(40, time) },
+      budgets: { matrix: matrixBudget },
     });
 
-    await router.isochrones([5.48, 52.08], [10]);
-    await router.isochrones([5.48, 52.08], [10]); // waits ~45 s for the budget before sending
-    await router.isochrones([5.48, 52.08], [10]); // must still be ≥ 1 s behind the previous *send*
+    await router.matrix([[5, 52]], [[5.1, 52]]);
+    await router.matrix([[5, 52]], [[5.1, 52]]); // waits ~45 s for the budget before sending
+    await router.matrix([[5, 52]], [[5.1, 52]]); // must still be ≥ 1 s behind the previous *send*
 
     expect(sendTimes).toEqual([0, 45_000, 46_000]);
     expect(sendTimes[2] - sendTimes[1]).toBeGreaterThanOrEqual(1000);

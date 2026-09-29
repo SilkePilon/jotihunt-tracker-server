@@ -1,8 +1,7 @@
 import { DETOUR_FACTOR, WALK_M_PER_MIN } from "./constants";
 import { distanceM } from "./geo";
 import type { WalkingRouter } from "./routing";
-import type { LngLat, PolygonGeometry } from "./types";
-import { circleZone } from "./zones";
+import type { LngLat } from "./types";
 
 /** Walking time estimate: straight line × 1.3 at 5 km/h, in seconds. */
 export function straightLineSeconds(a: LngLat, b: LngLat): number {
@@ -16,13 +15,5 @@ export const straightLineRouter: WalkingRouter = {
       durationsS: sources.map((source) => destinations.map((destination) => straightLineSeconds(source, destination))),
       distancesM: sources.map((source) => destinations.map((destination) => distanceM(source, destination) * DETOUR_FACTOR)),
     };
-  },
-  async route(a, b) {
-    return { line: [a, b], distanceM: distanceM(a, b) * DETOUR_FACTOR, durationS: straightLineSeconds(a, b) };
-  },
-  async isochrones(center, rangesMin) {
-    const rings: Record<number, PolygonGeometry> = {};
-    for (const minutes of rangesMin) rings[minutes] = circleZone(center, minutes);
-    return rings;
   },
 };
