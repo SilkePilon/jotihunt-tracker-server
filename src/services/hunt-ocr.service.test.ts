@@ -47,7 +47,7 @@ function setup(reader: StickerReader | null) {
 let user: UserType;
 
 async function upload(overrides: Partial<NewHuntReport> = {}) {
-  return createHuntReport({ area: "alpha", kind: "hunt", photo: { buffer: PHOTO, mimetype: "image/jpeg" }, location: [5.9, 52.2], ...overrides }, user);
+  return createHuntReport({ area: "alpha", photo: { buffer: PHOTO, mimetype: "image/jpeg" }, location: [5.9, 52.2], ...overrides }, user);
 }
 
 async function stored(id: string) {

@@ -12,7 +12,6 @@ import {
   resolvePhotoExtension,
   submitDeadline,
   type FieldSource,
-  type HuntKind,
   type HuntReportStatus,
   type OcrStatus,
 } from "./hunt-report.helpers";
@@ -35,7 +34,6 @@ export interface NewHuntReport {
   huntCode?: string;
   /** Optional: normally read from the photo by OCR */
   huntTime?: Date;
-  kind: HuntKind;
   photo: { buffer: Buffer; mimetype: string };
   /** [lng, lat] of the phone at registration */
   location?: [number, number];
@@ -57,7 +55,6 @@ export interface HuntReportView {
   huntTimeKnown: boolean;
   huntCodeSource: FieldSource | null;
   huntTimeSource: FieldSource | null;
-  kind: HuntKind;
   reportedBy: string;
   reportedByName: string;
   submittedAt: string | null;
@@ -91,7 +88,6 @@ export function toHuntReportView(report: HuntReportDocument, now: Date, duplicat
     huntTimeKnown: Boolean(report.huntTime),
     huntCodeSource: fieldSource(report.huntCode, report.huntCodeSource),
     huntTimeSource: fieldSource(report.huntTime, report.huntTimeSource),
-    kind: report.kind as HuntKind,
     reportedBy: report.reportedBy.toString(),
     reportedByName: report.reportedByName,
     submittedAt: report.submittedAt ? report.submittedAt.toISOString() : null,
@@ -178,7 +174,6 @@ export async function createHuntReport(input: NewHuntReport, user: UserType): Pr
       huntTime,
       huntCodeSource: huntCode ? "manual" : undefined,
       huntTimeSource: huntTime ? "manual" : undefined,
-      kind: input.kind,
       photo,
       reportedBy: user._id,
       reportedByName: user.name,

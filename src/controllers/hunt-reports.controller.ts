@@ -5,7 +5,6 @@ import { readFile } from "node:fs/promises";
 import { logger } from "..";
 import { createGeminiClient, DEFAULT_GEMINI_MODEL, GeminiError } from "../services/gemini.client";
 import { createHuntOcr } from "../services/hunt-ocr.service";
-import type { HuntKind } from "../services/hunt-report.helpers";
 import {
   createHuntReport,
   deleteHuntReport,
@@ -58,7 +57,7 @@ export function getHuntReports(_req: Request, res: Response) {
 
 export function postHuntReport(req: Request, res: Response) {
   if (!req.file) return res.status(400).json({ message: "Foto ontbreekt of is geen JPEG, PNG of WebP." });
-  const { area, huntCode, huntTime, kind, lng, lat, uploadId } = req.body as Record<string, string | undefined>;
+  const { area, huntCode, huntTime, lng, lat, uploadId } = req.body as Record<string, string | undefined>;
   const location: [number, number] | undefined = lng !== undefined && lat !== undefined ? [Number(lng), Number(lat)] : undefined;
   return respond(res, 201, async () =>
     queueReading(
@@ -67,8 +66,6 @@ export function postHuntReport(req: Request, res: Response) {
           area: area!,
           huntCode: huntCode || undefined,
           huntTime: huntTime ? new Date(huntTime) : undefined,
-          // Only hunts are registered in the app; "kind" stays for older reports and API clients
-          kind: (kind as HuntKind | undefined) ?? "hunt",
           photo: { buffer: req.file!.buffer, mimetype: req.file!.mimetype },
           location,
           uploadId: uploadId || undefined,

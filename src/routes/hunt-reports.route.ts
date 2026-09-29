@@ -4,7 +4,7 @@ import * as huntReportsController from "../controllers/hunt-reports.controller";
 import verifyToken from "../middleware/auth.middleware";
 import { photoUpload } from "../middleware/photo-upload.middleware";
 import { validate } from "../middleware/validate.middleware";
-import { HUNT_AREAS, HUNT_KINDS } from "../services/hunt-report.helpers";
+import { HUNT_AREAS } from "../services/hunt-report.helpers";
 
 const router = express.Router();
 
@@ -21,7 +21,6 @@ router.post(
       body("huntCode").optional({ values: "falsy" }).isString().trim().isLength({ min: 1, max: 64 }).withMessage("Ongeldige huntcode."),
       body("huntTime").optional({ values: "falsy" }).isISO8601().withMessage("Ongeldige tijd."),
       body("area").isIn(HUNT_AREAS).withMessage("Onbekend deelgebied."),
-      body("kind").optional().isIn(HUNT_KINDS).withMessage("Soort moet hunt of tegenhunt zijn."),
       body("lng").optional().isFloat({ min: -180, max: 180 }).withMessage("Ongeldige lengtegraad."),
       body("lat").optional().isFloat({ min: -90, max: 90 }).withMessage("Ongeldige breedtegraad."),
       body("uploadId").optional().isUUID().withMessage("Ongeldig upload-ID."),

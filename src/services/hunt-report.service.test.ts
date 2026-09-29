@@ -28,7 +28,6 @@ function input(overrides: Partial<NewHuntReport> = {}): NewHuntReport {
     area: "alpha",
     huntCode: " Gy3M 8XI ",
     huntTime,
-    kind: "hunt",
     photo: { buffer: Buffer.from([0xff, 0xd8, 0xff]), mimetype: "image/jpeg" },
     ...overrides,
   };
@@ -180,7 +179,6 @@ describe("existing reports from before OCR", () => {
       area: "alpha",
       huntCode: "OLD1",
       huntTime,
-      kind: "hunt",
       photo: "old.jpg",
       reportedBy: merida._id,
       reportedByName: "merida",
@@ -295,7 +293,7 @@ describe("requestHuntReportRead", () => {
   test("also clears values from before OCR", async () => {
     const merida = await makeUser("merida");
     const hq = await makeUser("hq", true);
-    const { insertedId } = await HuntReport.collection.insertOne({ area: "alpha", huntCode: "OLD1", huntTime, kind: "hunt", photo: "old.jpg", reportedBy: merida._id, reportedByName: "merida", createdAt: huntTime });
+    const { insertedId } = await HuntReport.collection.insertOne({ area: "alpha", huntCode: "OLD1", huntTime, photo: "old.jpg", reportedBy: merida._id, reportedByName: "merida", createdAt: huntTime });
     const view = await requestHuntReportRead(insertedId.toString(), hq);
     expect(view).toMatchObject({ huntCode: null, huntTimeKnown: false, ocrStatus: "pending" });
   });

@@ -1,6 +1,6 @@
 import mongoose, { HydratedDocument, InferSchemaType } from "mongoose";
 import { pointSchema } from "./point";
-import { FIELD_SOURCES, HUNT_AREAS, HUNT_KINDS, OCR_STATUSES } from "../services/hunt-report.helpers";
+import { FIELD_SOURCES, HUNT_AREAS, OCR_STATUSES } from "../services/hunt-report.helpers";
 
 /** Last result of this code on jotihunt.nl, copied from the scraper (which only keeps the latest 15 hunts). */
 const SiteResultSchema = new mongoose.Schema(
@@ -40,7 +40,6 @@ const HuntReportSchema = new mongoose.Schema(
     /** Missing on reports from before OCR (entered by hand, so manual) */
     huntCodeSource: { type: String, enum: FIELD_SOURCES, required: false },
     huntTimeSource: { type: String, enum: FIELD_SOURCES, required: false },
-    kind: { type: String, enum: HUNT_KINDS, required: true },
     /** File name in UPLOADS_DIR */
     photo: { type: String, required: true },
     reportedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },

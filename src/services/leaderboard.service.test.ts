@@ -36,7 +36,6 @@ async function seed() {
     area: "alpha",
     huntCode: "AB1",
     huntTime: new Date(),
-    kind: "hunt",
     photo: "p.jpg",
     reportedBy: merida._id,
     reportedByName: "Merida",
