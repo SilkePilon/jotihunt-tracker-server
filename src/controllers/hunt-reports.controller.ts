@@ -67,7 +67,8 @@ export function postHuntReport(req: Request, res: Response) {
           area: area!,
           huntCode: huntCode || undefined,
           huntTime: huntTime ? new Date(huntTime) : undefined,
-          kind: kind as HuntKind,
+          // Only hunts are registered in the app; "kind" stays for older reports and API clients
+          kind: (kind as HuntKind | undefined) ?? "hunt",
           photo: { buffer: req.file!.buffer, mimetype: req.file!.mimetype },
           location,
           uploadId: uploadId || undefined,
