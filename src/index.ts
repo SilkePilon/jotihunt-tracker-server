@@ -14,6 +14,7 @@ import predictionsRoute from "./routes/predictions.route";
 import visitsRoute from "./routes/visits.route";
 import demoRoute from "./routes/demo.route";
 import { demoGate, initDemoMode } from "./demo/database-switch";
+import { installDemoWorld } from "./demo/demo-world";
 import retrieveJotihuntAreas from "./crons/jotihunt-areas.cron";
 import retrieveJotihuntArticles from "./crons/jotihunt-articles.cron";
 import retrieveJotihuntLogos from "./crons/jotihunt-logos.cron";
@@ -106,6 +107,7 @@ if (!db) {
   process.exit(1);
 }
 logger.info("Trying to connect to MongoDB...");
+installDemoWorld((message) => logger.info(message));
 // Connects to the real database, or to a freshly generated demo database when demo mode was left on
 await initDemoMode(db, { logger: { info: (message) => logger.info(message), warn: (message) => logger.warn(message), error: (message, error) => logger.error(message, error) } }).then((state) => {
   logger.info(`Connected to MongoDB${state.enabled ? " (demo mode)" : ""}!`);

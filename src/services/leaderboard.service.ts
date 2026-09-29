@@ -2,7 +2,7 @@ import { HintCell, HintCellStatus } from "../models/hint-cell.model";
 import { HuntReport } from "../models/hunt-report.model";
 import { User } from "../models/user.model";
 import type { TraccarApi } from "./traccar-api";
-import { buildLeaderboard, distanceWindow, type DeviceSummary, type Leaderboard } from "./leaderboard.helpers";
+import { buildLeaderboard, distanceWindow, type DeviceSummary, type DistanceWindow, type Leaderboard } from "./leaderboard.helpers";
 
 const KNOTS_TO_KMH = 1.852;
 const CACHE_MS = 60_000;
@@ -14,6 +14,8 @@ export interface LeaderboardDeps {
   huntEnd?: string;
   now?: () => Date;
   onError?: (error: unknown) => void;
+  /** Demo mode: distances from the simulated trackers instead of Traccar (null when not simulating) */
+  simulated?: (now: Date) => { from: Date; summaries: Map<number, DeviceSummary> } | null;
 }
 
 export function createLeaderboardService(deps: LeaderboardDeps) {
@@ -48,9 +50,10 @@ export function createLeaderboardService(deps: LeaderboardDeps) {
       HuntReport.find({}, { reportedBy: 1, site: 1 }).lean(),
       HintCell.find({ status: HintCellStatus.Solved, claimedBy: { $ne: null } }, { claimedBy: 1 }).lean(),
     ]);
-    const window = distanceWindow(current, deps.huntStart, deps.huntEnd);
+    const simulated = deps.simulated?.(current) ?? null;
+    const window: DistanceWindow = simulated ? { from: simulated.from, to: current, kind: "hunt" } : distanceWindow(current, deps.huntStart, deps.huntEnd);
     const deviceIds = users.map((user) => user.tracker?.deviceId).filter((id): id is number => typeof id === "number");
-    const { map, available } = await summaries(deviceIds, window.from, window.to);
+    const { map, available } = simulated ? { map: simulated.summaries, available: true } : await summaries(deviceIds, window.from, window.to);
 
     const value = buildLeaderboard({
       users: users.map((user) => ({ id: user._id.toString(), name: user.name, deviceId: user.tracker?.deviceId })),

@@ -40,3 +40,19 @@ export function parseRdAnswer(text: string): RdAnswer | null {
   const [lng, lat] = proj4("RD", "WGS84", [x, y]);
   return { x, y, lng, lat };
 }
+
+/** RD coordinates (metres) of a WGS84 position. */
+export function toRd(lng: number, lat: number): { x: number; y: number } {
+  const [x, y] = proj4("WGS84", "RD", [lng, lat]);
+  return { x, y };
+}
+
+/**
+ * Format a WGS84 position as an RD hint answer in hectometres, "XXXX YYYY" (the format parseRdAnswer reads back to
+ * within ~71 m of the position).
+ */
+export function formatRdAnswer(lng: number, lat: number): string {
+  const { x, y } = toRd(lng, lat);
+  const part = (value: number) => String(Math.round(value / 100)).padStart(4, "0");
+  return `${part(x)} ${part(y)}`;
+}

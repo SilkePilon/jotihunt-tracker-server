@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { parseRdAnswer } from "./rd-answer";
+import { distanceM } from "./prediction/geo";
+import { formatRdAnswer, parseRdAnswer, toRd } from "./rd-answer";
 
 describe("parseRdAnswer", () => {
   test("parses 4+4 digits and converts to WGS84", () => {
@@ -26,4 +27,22 @@ describe("parseRdAnswer", () => {
       expect(parseRdAnswer(input)).toBeNull();
     },
   );
+});
+
+describe("formatRdAnswer", () => {
+  test("formats hectometres 'XXXX YYYY' that parse back within ~71 m", () => {
+    for (const [lng, lat] of [
+      [5.38763888888889, 52.15616055555555],
+      [5.9, 52.1],
+      [6.12345, 51.98765],
+    ]) {
+      const answer = formatRdAnswer(lng, lat);
+      expect(answer).toMatch(/^\d{4} \d{4}$/);
+      const parsed = parseRdAnswer(answer)!;
+      expect(distanceM([parsed.lng, parsed.lat], [lng, lat])).toBeLessThan(72);
+    }
+    const amersfoort = parseRdAnswer("1550 4630")!;
+    expect(formatRdAnswer(amersfoort.lng, amersfoort.lat)).toBe("1550 4630");
+    expect(Math.round(toRd(amersfoort.lng, amersfoort.lat).x)).toBe(155000);
+  });
 });
