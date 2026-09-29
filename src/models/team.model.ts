@@ -42,6 +42,11 @@ const TeamSchema = new mongoose.Schema({
     type: pointSchema,
     required: true,
   },
+  /** Group logo from the public jotihunt.nl/subscriptions page (cdn.jotihunt.net), when the group uploaded one */
+  logoUrl: {
+    type: String,
+    required: false,
+  },
 });
 
 export const Team = mongoose.model("Team", TeamSchema);

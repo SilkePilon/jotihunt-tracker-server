@@ -14,6 +14,7 @@ import predictionsRoute from "./routes/predictions.route";
 import visitsRoute from "./routes/visits.route";
 import retrieveJotihuntAreas from "./crons/jotihunt-areas.cron";
 import retrieveJotihuntArticles from "./crons/jotihunt-articles.cron";
+import retrieveJotihuntLogos from "./crons/jotihunt-logos.cron";
 import scrapeJotihuntWebsite from "./crons/jotihunt-scraper.cron";
 import recomputePredictions from "./crons/prediction.cron";
 import winston from "winston";
@@ -160,6 +161,10 @@ if (!process.env.TRACCARR_API_URL || !process.env.TRACCARR_API_TOKEN) {
 if (!process.env.TRACCAR_CLIENT_URL) {
   logger.warn("TRACCAR_CLIENT_URL not set, the tracker onboarding card shows a configuration warning");
 }
+
+// Group logos from the public jotihunt.nl/subscriptions page: at startup and every 6 hours
+void retrieveJotihuntLogos();
+cron.schedule("0 7 */6 * * *", retrieveJotihuntLogos, { name: "jotihunt-logos", noOverlap: true });
 
 // Fox prediction: recompute changed areas every minute (and every area at least every 5 minutes)
 cron.schedule("30 * * * * *", recomputePredictions, { name: "fox-prediction", noOverlap: true });
