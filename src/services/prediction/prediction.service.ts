@@ -140,15 +140,18 @@ export function createPredictionService(deps: PredictionDeps) {
     } catch (error) {
       if (error instanceof DemoSwitchedError) throw error;
       const previous = await Prediction.findOne({ area: inputs.area }, { _id: 0, __v: 0, signature: 0, attemptedAt: 0 }).lean();
-      const kept = (previous as PredictionDto | null) ?? dto;
+      // Only a real earlier prediction (has a pin) is worth keeping; status-only docs are not.
+      const base = previous && (previous as PredictionDto).pin ? (previous as PredictionDto) : dto;
+      const { reason: _reason, ...rest } = base;
+      const kept: PredictionDto = { ...rest, status: inputs.status, paused: false, lastObservation: dto.lastObservation };
       assertGeneration(generation);
       // Keep the old signature so the next tick still sees the new inputs as changed
       await Prediction.updateOne(
         { area: inputs.area },
-        { $set: { ...kept, status: inputs.status, stale: true, error: errorMessage(error), attemptedAt: at }, $setOnInsert: { signature: "" } },
+        { $set: { ...kept, stale: true, error: errorMessage(error), attemptedAt: at }, $unset: { reason: "" }, $setOnInsert: { signature: "" } },
         { upsert: true },
       );
-      return { ...kept, status: inputs.status, stale: true, error: errorMessage(error) };
+      return { ...kept, stale: true, error: errorMessage(error) };
     }
   }
 

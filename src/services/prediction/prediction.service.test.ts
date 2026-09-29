@@ -123,6 +123,42 @@ describe("recomputeArea", () => {
     expect(dto.updatedAt).toEqual(at(30));
   });
 
+  test("failure after a status-only doc does not inherit paused/reason", async () => {
+    await alpha();
+    await setAreaStatus("Alpha", "red");
+    const paused = await serviceAt(10, null).recomputeArea("alpha");
+    expect(paused.paused).toBe(true);
+    await setAreaStatus("Alpha", "green");
+    const err = () => new GeminiError("Gemini-verzoek mislukt (HTTP 503)", true, 503);
+    const dto = await serviceAt(20, fakePredictor([err(), err()]).predictor).recomputeArea("alpha");
+    const stored = await Prediction.findOne({ area: "alpha" }).lean();
+    for (const doc of [dto, stored as unknown as Record<string, unknown>]) {
+      expect(doc.status).toBe("green");
+      expect(doc.paused).toBe(false);
+      expect(doc.reason).toBeUndefined();
+      expect(doc.stale).toBe(true);
+      expect(doc.error).toBe("Gemini-verzoek mislukt (HTTP 503)");
+      expect(doc.lastObservation).not.toBeNull();
+    }
+  });
+
+  test("failure keeps earlier pin/candidates but refreshes lastObservation", async () => {
+    await alpha();
+    await serviceAt(30, fakePredictor([answer()]).predictor).recomputeArea("alpha");
+    const newer: LngLat = moveM(O, 500, 500);
+    await addObservation("alpha", at(35), newer);
+    const err = () => new GeminiError("Gemini-verzoek mislukt (HTTP 503)", true, 503);
+    const dto = await serviceAt(45, fakePredictor([err(), err()]).predictor).recomputeArea("alpha");
+    expect(dto.stale).toBe(true);
+    expect(dto.pin).not.toBeNull();
+    expect(dto.candidates).toHaveLength(2);
+    expect(dto.lastObservation?.time).toEqual(at(35));
+    expect(dto.lastObservation?.lng).toBeCloseTo(newer[0], 6);
+    const stored = await Prediction.findOne({ area: "alpha" }).lean();
+    expect(stored?.lastObservation?.time).toEqual(at(35));
+    expect(stored?.pin).not.toBeNull();
+  });
+
   test("manual visits reach the prompt and win over Gemini", async () => {
     await alpha();
     await GroupVisit.create({ area: "alpha", teamApiId: 1, round: 1, state: VisitState.Visited, source: VisitSource.Manual });
