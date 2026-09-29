@@ -4,7 +4,12 @@ import distance from "@turf/distance";
 import { lineString, point } from "@turf/helpers";
 import turfLength from "@turf/length";
 import nearestPointOnLine from "@turf/nearest-point-on-line";
-import type { LngLat, PolygonGeometry } from "./types";
+import type { LngLat } from "./types";
+
+export interface PolygonGeometry {
+  type: "Polygon";
+  coordinates: number[][][];
+}
 
 const METERS_PER_DEGREE_LAT = 111_320;
 

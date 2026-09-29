@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { GroupVisit } from "../../models/group-visit.model";
+import { GroupVisit, VisitSource, VisitState } from "../../models/group-visit.model";
 import { MarkerType } from "../../models/marker.model";
 import { Prediction } from "../../models/prediction.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../../test/db";
@@ -38,8 +38,8 @@ describe("loadAreaInputs", () => {
   test("manual visits of the stored round only", async () => {
     await seedAlpha();
     await Prediction.create({ area: "alpha", updatedAt: at(0), round: 2 });
-    await GroupVisit.create({ area: "alpha", teamApiId: 1, round: 1, state: "visited", source: "manual" });
-    await GroupVisit.create({ area: "alpha", teamApiId: 2, round: 2, state: "not_visited", source: "manual" });
+    await GroupVisit.create({ area: "alpha", teamApiId: 1, round: 1, state: VisitState.Visited, source: VisitSource.Manual });
+    await GroupVisit.create({ area: "alpha", teamApiId: 2, round: 2, state: VisitState.NotVisited, source: VisitSource.Manual });
     const inputs = await loadAreaInputs("alpha");
     expect(inputs.round).toBe(2);
     expect(inputs.manualVisits).toEqual([{ teamApiId: 2, state: "not_visited" }]);
@@ -73,7 +73,7 @@ describe("gatherFacts", () => {
       at(120),
     );
     const last = inputs.trail[1];
-    expect(from).toEqual([last.lng, last.lat]);
+    expect(from as LngLat | null).toEqual([last.lng, last.lat]);
     expect(facts.groups.map((group) => group.walkMinutes)).toEqual([10, 11]);
     expect(facts.estimate).toBe(true);
     expect(facts.now).toEqual(at(120));

@@ -3,14 +3,11 @@ import { Area } from "../models/area.model";
 import { GroupVisit } from "../models/group-visit.model";
 import { Marker, MarkerType } from "../models/marker.model";
 import { Prediction } from "../models/prediction.model";
-import { PredictionModel } from "../models/prediction-model.model";
 import { RoutingCache } from "../models/routing-cache.model";
 import { Team } from "../models/team.model";
-import { TransitStop } from "../models/transit-stop.model";
 import { moveM } from "../services/prediction/geo";
-import { predictionService, stopSource } from "../services/prediction/instance";
+import { predictionService } from "../services/prediction/instance";
 import { listPredictions } from "../services/prediction/prediction.service";
-import { refreshTransitStops } from "../services/prediction/transit-stop.service";
 import type { LngLat } from "../services/prediction/types";
 
 // Seeds synthetic fox-prediction data so the feature can be tried before the hunt:
@@ -54,8 +51,8 @@ if (process.argv.includes("--clean")) {
   await Team.deleteMany({ apiId: { $gte: 990000 } });
   await removeSeededMarkers();
   await GroupVisit.deleteMany({ teamApiId: { $gte: 990000 } });
-  await Promise.all([Prediction.deleteMany({}), PredictionModel.deleteMany({}), RoutingCache.deleteMany({}), TransitStop.deleteMany({})]);
-  console.log("Removed seeded fox prediction data (teams, markers, visits, predictions, models, routing cache, transit stops)");
+  await Promise.all([Prediction.deleteMany({}), RoutingCache.deleteMany({})]);
+  console.log("Removed seeded fox prediction data (teams, markers, visits, predictions, routing cache)");
   await mongoose.disconnect();
   process.exit(0);
 }
@@ -92,18 +89,11 @@ await Marker.insertMany([
 await Area.updateOne({ name: "Alpha" }, { $set: { status: "green", updatedAt: new Date() } }, { upsert: true });
 await Area.updateOne({ name: "Oscar" }, { $set: { status: "orange", updatedAt: new Date() } }, { upsert: true });
 
-try {
-  console.log(`Transit stops stored: ${await refreshTransitStops(stopSource)}`);
-} catch (error) {
-  console.warn("Transit stops not fetched:", error instanceof Error ? error.message : error);
-}
-
 for (const area of ["alpha", "oscar"]) {
   const prediction = await predictionService.recomputeArea(area);
-  console.log(`${area}: mode=${prediction.mode} estimate=${prediction.estimate} transitUnavailable=${prediction.transitUnavailable} round=${prediction.round}`);
+  console.log(`${area}: confidence=${prediction.confidence} stale=${prediction.stale} round=${prediction.round} ${prediction.reason ?? prediction.why}`);
   for (const candidate of prediction.candidates) {
-    const via = candidate.transitLabel ? `transit (${candidate.transitLabel})` : candidate.via;
-    console.log(`  ${candidate.name}: ${Math.round(candidate.probability * 100)}% via ${via}, eta ${candidate.eta.toISOString()}${candidate.overdue ? " (overdue)" : ""}`);
+    console.log(`  ${candidate.name}: ${Math.round(candidate.probability * 100)}%, eta ${candidate.eta.toISOString()} (${candidate.walkMinutes} min lopen)`);
   }
 }
 console.log(`Stored predictions: ${(await listPredictions()).length}`);

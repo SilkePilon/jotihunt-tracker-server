@@ -122,7 +122,7 @@ await huntOcr
   .then((count) => count > 0 && logger.info(`Resumed reading ${count} hunt report photo(s)`))
   .catch((error) => logger.error("Could not resume hunt report reading", error));
 if (!process.env.GEMINI_API_KEY?.trim()) {
-  logger.warn("GEMINI_API_KEY not set, hunt codes and times are not read from photos (HQ enters them by hand)");
+  logger.warn("GEMINI_API_KEY not set, hunt photos are not read and fox predictions are off");
 }
 
 // Start the server
@@ -165,8 +165,8 @@ if (!process.env.TRACCAR_CLIENT_URL) {
 void retrieveJotihuntLogos();
 cron.schedule("0 7 */6 * * *", retrieveJotihuntLogos, { name: "jotihunt-logos", noOverlap: true });
 
-// Fox prediction: recompute changed areas every minute (and every area at least every 5 minutes)
+// Fox prediction (Gemini): recompute changed areas every minute (and every area at least every 10 minutes)
 cron.schedule("30 * * * * *", recomputePredictions, { name: "fox-prediction", noOverlap: true });
 if (!process.env.ORS_API_KEY) {
-  logger.warn("ORS_API_KEY not set, fox prediction uses straight-line estimates");
+  logger.warn("ORS_API_KEY not set, fox prediction uses straight-line walking times");
 }

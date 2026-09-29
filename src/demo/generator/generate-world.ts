@@ -8,7 +8,6 @@ import { Hunt } from "../../models/hunt.model";
 import { HuntReport } from "../../models/hunt-report.model";
 import { Marker, MarkerType } from "../../models/marker.model";
 import { Team } from "../../models/team.model";
-import { TransitStop } from "../../models/transit-stop.model";
 import { User } from "../../models/user.model";
 import { floorToHour, syncArticles } from "../../services/article-sync.service";
 import { moveM } from "../../services/prediction/geo";
@@ -36,8 +35,6 @@ export interface RealTeam {
 export interface WorldSources {
   /** Real teams (with logos) */
   teams(): Promise<RealTeam[]>;
-  /** Real transit stops, so the prediction doesn't need Overpass */
-  transitStops(): Promise<Record<string, unknown>[]>;
 }
 
 export interface WorldOptions {
@@ -129,7 +126,7 @@ async function applyCellPlans(plans: CellPlan[], routes: Map<DemoArea, FoxRoute>
 }
 
 /**
- * Fill the (fresh) demo database: teams and transit stops copied from the real database, areas, fox routes, the
+ * Fill the (fresh) demo database: teams copied from the real database, areas, fox routes, the
  * real 2025 articles re-timed with their hint cells, markers, 8 demo hunters, hunt reports with sticker photos and
  * the simulated trackers. Deterministic for the same teams and `now` (apart from passwords and photo file names).
  */
@@ -137,13 +134,11 @@ export async function generateDemoWorld(now: Date, options: WorldOptions): Promi
   const log = options.log ?? (() => undefined);
   const huntStart = demoHuntStart(now);
 
-  // Teams (with logos) assigned to areas geographically; transit stops as they are
+  // Teams (with logos) assigned to areas geographically
   const realTeams = await options.sources.teams();
   const groups: GroupPoint[] = realTeams.map((team) => ({ apiId: team.apiId, lng: team.location.coordinates[0], lat: team.location.coordinates[1] }));
   const areaOf = assignAreas(groups, createRng(DEMO_SEED + 1));
   if (realTeams.length) await Team.collection.insertMany(realTeams.map((team) => ({ ...team, area: areaOf.get(team.apiId) ?? null })));
-  const stops = await options.sources.transitStops();
-  if (stops.length) await TransitStop.collection.insertMany(stops, { ordered: false });
 
   const areaPlans = planAreas(now, createRng(DEMO_SEED + 2));
   await Area.insertMany(areaPlans);

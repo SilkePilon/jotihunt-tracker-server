@@ -10,7 +10,6 @@ import { Hunt } from "../../models/hunt.model";
 import { HuntReport } from "../../models/hunt-report.model";
 import { Marker, MarkerType } from "../../models/marker.model";
 import { Team } from "../../models/team.model";
-import { TransitStop } from "../../models/transit-stop.model";
 import { User } from "../../models/user.model";
 import { listHuntReports } from "../../services/hunt-report.service";
 import { demoUploadsDir } from "../../services/photo-store";
@@ -72,10 +71,6 @@ beforeAll(async () => {
   await withRealDb(async (db) => {
     await db.dropDatabase();
     await db.collection("teams").insertMany(seedTeams());
-    await db.collection("transitstops").insertMany([
-      { osmId: 1, name: "Station Midden", kind: "train", location: { type: "Point", coordinates: [5.85, 52.15] } },
-      { osmId: 2, name: "Bushalte Noord", kind: "bus", location: { type: "Point", coordinates: [5.5, 52.3] } },
-    ]);
     await db.collection("users").insertOne({ email: "hq@test.nl", password: "x", name: "HQ", admin: true, requiresPasswordChange: false });
   });
   installDemoWorld();
@@ -99,7 +94,7 @@ describe("demo world generator (full run)", () => {
     await switchDemoMode(true);
     const now = new Date();
 
-    // Areas, teams with areas and logos, transit stops
+    // Areas, teams with areas and logos
     expect(await Area.countDocuments()).toBe(9);
     const areaStatuses = (await Area.find().lean()).map((area) => area.status);
     expect(areaStatuses.filter((status) => status === "red")).toHaveLength(2);
@@ -108,7 +103,6 @@ describe("demo world generator (full run)", () => {
     expect(await Team.countDocuments({ area: "Oscar" })).toBe(4);
     expect(new Set(await Team.distinct("area")).size).toBe(9);
     expect(await Team.countDocuments({ logoUrl: { $exists: true } })).toBe(14);
-    expect(await TransitStop.countDocuments()).toBe(2);
 
     // Articles and hint cells
     expect(await Article.countDocuments()).toBe(15);

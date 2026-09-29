@@ -1,6 +1,5 @@
 import express from "express";
 import * as adminController from "../controllers/admin.controller";
-import * as predictionsController from "../controllers/predictions.controller";
 import * as trackerController from "../controllers/tracker.controller";
 import { VEHICLES } from "../services/tracker-onboarding.helpers";
 import verifyToken, { isAdmin } from "../middleware/auth.middleware";
@@ -72,6 +71,5 @@ router.put(
   ],
   trackerController.putDeviceVehicle,
 );
-router.post("/transit-stops/refresh", [verifyToken, isAdmin], predictionsController.refreshStops);
 
 export default router;

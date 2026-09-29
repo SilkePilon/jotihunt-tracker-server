@@ -35,7 +35,7 @@ describe("createGeminiPredictor", () => {
   test("invalid JSON is a non-retryable GeminiError without the key", async () => {
     const { client } = http(reply("not json"));
     const predictor = createGeminiPredictor({ apiKey: KEY, model: "m", http: client });
-    const error = await predictor.predict("P").catch((caught) => caught);
+    const error = (await predictor.predict("P").catch((caught: unknown) => caught)) as GeminiError;
     expect(error).toBeInstanceOf(GeminiError);
     expect(error.retryable).toBe(false);
     expect(error.message).not.toContain(KEY);
