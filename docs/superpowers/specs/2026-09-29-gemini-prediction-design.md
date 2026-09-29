@@ -30,13 +30,13 @@ Replace the deterministic fox prediction (scoring, tour planner, learning, zones
 
 - `geo.ts`, `types.ts` (trimmed), `constants.ts`, `http.ts`.
 - `ors.client.ts`, `routing-cache.ts`, `straight-line.router.ts` and `routing.ts`, but only for the walking matrix.
-- `GroupVisit`, now only for manual overrides (`source: "manual"`). Existing automatic docs are deleted once on startup.
+- `GroupVisit`, now only for manual overrides (`source: "manual"`). Old automatic docs are ignored.
 - `GET /predictions`, `GET /visits`, `PUT /visits/:teamApiId`. `auto` removes the manual override.
 
 ### New units
 
 1. **`facts.ts`: `gatherFacts(area, now)`**. Pure data assembly from the DB plus the router. Returns:
-   - `area`, `status`, `now` (ISO, Europe/Amsterdam).
+   - `area`, `status`, `now`; the prompt shows times as Europe/Amsterdam "HH:MM" plus `minutesAgo`.
    - `trail`: every marker of the area, sorted by time: `{time, kind, lat, lng}`.
    - `groups`: every team in the area: `{teamApiId, name, lat, lng, walkMinutes}`. `walkMinutes` is measured from the last trail point, via the ORS matrix with straight-line fallback. `estimate=true` when the fallback was used.
    - `manualVisits`: `{teamApiId, state}`.
@@ -45,17 +45,18 @@ Replace the deterministic fox prediction (scoring, tour planner, learning, zones
 3. **`gemini-predictor.ts`: `predict(facts)`**. Calls Gemini with `responseMimeType: application/json` and a `responseSchema`, temperature 0.2, timeout 90 s. Reuses the `GeminiHttp` / `GeminiError` pattern from `gemini.client.ts`. The expected output:
    ```json
    {
+     "round": 1,
      "visitedTeamApiIds": [1, 2],
      "pin": {"lat": 52.0, "lng": 5.9},
      "confidence": "low" | "medium" | "high",
-     "candidates": [{"teamApiId": 3, "probability": 0.6, "eta": "14:20"}],
+     "candidates": [{"teamApiId": 3, "probability": 0.6, "etaMinutes": 15}],
      "reason": "Loopt noordwaarts langs de Rijn, Valken ligt op route."
    }
    ```
 4. **`validate.ts`: `validatePrediction(raw, facts)`**. Pure function. It:
    - drops candidate ids that do not belong to the area, and visited ids;
    - keeps at most 3 candidates and normalises their probabilities to a sum of 1;
-   - turns the ETA "HH:MM" into an ISO time on the correct day (after `now`, rolling over past midnight);
+   - clamps `etaMinutes` (minutes from now) to 0–600, and clamps `round` to the current or the next round;
    - rejects a pin more than 15 km from the last trail point;
    - truncates the reason to 120 characters.
 
@@ -88,7 +89,7 @@ Replace the deterministic fox prediction (scoring, tour planner, learning, zones
   - A dashed line from `lastObservation` to the pin.
   - The top 3 groups get a ring and a badge "62% 14:20".
   - The zone fills are removed.
-  - Groups in `visitedTeamApiIds` are dimmed.
+  - Groups in `visitedTeamApiIds` get the existing check badge, via `GET /visits`, which lists AI visits as `source: "auto"`.
 - **`VisitControls`**: unchanged buttons (Bezocht / Niet bezocht / Auto = remove the override).
 - **`HuntRegistrationDialog`**: the nearest area is based on the pin, with the last observation as fallback.
 
@@ -102,7 +103,7 @@ Replace the deterministic fox prediction (scoring, tour planner, learning, zones
 
 - `facts.test.ts`: trail order, walk minutes with the router mocked, the fallback `estimate` flag, and the signature changing on relevant changes only.
 - `prompt.test.ts`: the rules and the facts appear in the prompt, snapshot-free (contains checks).
-- `validate.test.ts`: unknown ids, visited ids, normalisation, the ETA crossing midnight, a pin too far away, empty output.
+- `validate.test.ts`: unknown ids, visited ids, normalisation, ETA and round clamping, a pin too far away, empty output.
 - `gemini-predictor.test.ts`: http mocked; request shape, error mapping, key never in the message.
 - `prediction.service.test.ts`: paused, no trail, due logic (signature or 10 min), retry, stale, one call at a time.
 - Client: `lib/prediction.ts` GeoJSON builder tests updated.
