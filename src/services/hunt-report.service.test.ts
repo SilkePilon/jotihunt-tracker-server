@@ -264,7 +264,7 @@ describe("setHuntReportFields", () => {
 });
 
 describe("requestHuntReportRead", () => {
-  test("resets the OCR values and keeps the manual ones", async () => {
+  test("clears the code and time, also values entered by hand, and reads again", async () => {
     const merida = await makeUser("merida");
     const hq = await makeUser("hq", true);
     const report = await createHuntReport(input({ huntTime: undefined }), merida);
@@ -273,7 +273,7 @@ describe("requestHuntReportRead", () => {
       { $set: { huntTime, huntTimeSource: "ocr", ocr: { status: "done", attempts: 1, codeConfidence: 0.9, timeConfidence: 0.4, rawTime: "12:03", readAt: new Date() } } },
     );
     const view = await requestHuntReportRead(report._id, hq);
-    expect(view).toMatchObject({ huntCode: "Gy3M8XI", huntCodeSource: "manual", huntTimeKnown: false, huntTimeSource: null, ocrStatus: "pending", timeConfidence: null });
+    expect(view).toMatchObject({ huntCode: null, huntCodeSource: null, huntTimeKnown: false, huntTimeSource: null, ocrStatus: "pending", timeConfidence: null });
     const stored = await HuntReport.findById(report._id);
     expect(stored!.huntTime).toBeNull();
     expect(stored!.ocr).toMatchObject({ status: "pending", attempts: 0 });
@@ -292,12 +292,12 @@ describe("requestHuntReportRead", () => {
     expect(marker.time).toEqual(expected);
   });
 
-  test("keeps values from before OCR (they count as manual)", async () => {
+  test("also clears values from before OCR", async () => {
     const merida = await makeUser("merida");
     const hq = await makeUser("hq", true);
     const { insertedId } = await HuntReport.collection.insertOne({ area: "alpha", huntCode: "OLD1", huntTime, kind: "hunt", photo: "old.jpg", reportedBy: merida._id, reportedByName: "merida", createdAt: huntTime });
     const view = await requestHuntReportRead(insertedId.toString(), hq);
-    expect(view).toMatchObject({ huntCode: "OLD1", huntTime: huntTime.toISOString(), ocrStatus: "pending" });
+    expect(view).toMatchObject({ huntCode: null, huntTimeKnown: false, ocrStatus: "pending" });
   });
 
   test("403 for non-admins", async () => {

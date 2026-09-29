@@ -263,22 +263,17 @@ export async function setHuntReportFields(id: string, fields: { huntCode?: strin
 }
 
 /** Forget the OCR-read values (manual ones stay) and mark the report for a new reading; the caller queues it. */
+/** Admin: let the AI read the photo again; the code and time are cleared (also values entered by hand). */
 export async function requestHuntReportRead(id: string, user: UserType): Promise<HuntReportView> {
   requireAdmin(user);
   const report = await findReport(id);
-  let resetMarker = false;
-  if (fieldSource(report.huntCode, report.huntCodeSource) !== "manual") {
-    report.huntCode = null;
-    report.huntCodeSource = undefined;
-  }
-  if (fieldSource(report.huntTime, report.huntTimeSource) !== "manual") {
-    report.huntTime = null;
-    report.huntTimeSource = undefined;
-    resetMarker = true;
-  }
+  report.huntCode = null;
+  report.huntCodeSource = undefined;
+  report.huntTime = null;
+  report.huntTimeSource = undefined;
   report.set("ocr", { status: "pending", attempts: 0 });
   await report.save();
-  if (resetMarker && report.markerId) await Marker.updateOne({ _id: report.markerId }, { $set: { time: toMinute(createdAtOf(report)) } });
+  if (report.markerId) await Marker.updateOne({ _id: report.markerId }, { $set: { time: toMinute(createdAtOf(report)) } });
   return viewOf(report);
 }
 
