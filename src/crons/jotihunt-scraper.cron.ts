@@ -1,4 +1,5 @@
 import { logger } from "..";
+import { skipInDemoMode } from "../demo/demo-mode";
 import { Hunt } from "../models/hunt.model";
 import { login, scrapeHunts } from "../services/jotihunt.service";
 import { linkScrapedHunts } from "../services/hunt-report.service";
@@ -7,6 +8,8 @@ import { Page } from "puppeteer";
 let isScrapingJotihuntWebsite = false;
 
 export default async function scrapeJotihuntWebsite() {
+  if (skipInDemoMode("jotihunt-scraper", (message) => logger.debug(message))) return;
+
   if (isScrapingJotihuntWebsite) {
     logger.warn("(CRON) Skipping Jotihunt website scrape because a previous run is still in progress.");
     return;

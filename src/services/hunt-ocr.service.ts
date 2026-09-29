@@ -26,6 +26,8 @@ export interface HuntOcr {
   resumePending(): Promise<number>;
   /** Resolves when the queue is empty (for tests) */
   idle(): Promise<void>;
+  /** Forget every waiting report (the database was switched); a reading in progress finishes on its own */
+  reset(): void;
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -151,6 +153,9 @@ export function createHuntOcr(deps: HuntOcrDeps): HuntOcr {
     },
     async idle() {
       while (draining) await draining;
+    },
+    reset() {
+      queue.length = 0;
     },
   };
 }

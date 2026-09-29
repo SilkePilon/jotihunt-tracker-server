@@ -65,5 +65,10 @@ export function createLeaderboardService(deps: LeaderboardDeps) {
     return value;
   }
 
-  return { get };
+  /** Forget the cached leaderboard (e.g. after a demo switch) */
+  function clearCache() {
+    cache = null;
+  }
+
+  return { get, clearCache };
 }

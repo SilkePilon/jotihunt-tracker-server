@@ -1,8 +1,11 @@
 import { logger } from "..";
+import { skipInDemoMode } from "../demo/demo-mode";
 import { Area } from "../models/area.model";
 import { getAreas } from "../services/jotihunt.service";
 
 export default async function retrieveJotihuntAreas() {
+  if (skipInDemoMode("jotihunt-areas", (message) => logger.debug(message))) return;
+
   logger.info("(CRON) Retrieving Jotihunt areas from API...");
 
   const apiAreas = await getAreas();

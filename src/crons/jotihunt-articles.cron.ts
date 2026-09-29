@@ -1,8 +1,11 @@
 import { logger } from "..";
+import { skipInDemoMode } from "../demo/demo-mode";
 import { getArticles } from "../services/jotihunt.service";
 import { syncArticles } from "../services/article-sync.service";
 
 export default async function retrieveJotihuntArticles() {
+  if (skipInDemoMode("jotihunt-articles", (message) => logger.debug(message))) return;
+
   logger.info("(CRON) Retrieving Jotihunt articles from API...");
 
   const apiArticles = await getArticles();

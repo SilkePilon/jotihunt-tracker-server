@@ -12,6 +12,8 @@ import adminRoute from "./routes/admin.route";
 import hintsRoute from "./routes/hints.route";
 import predictionsRoute from "./routes/predictions.route";
 import visitsRoute from "./routes/visits.route";
+import demoRoute from "./routes/demo.route";
+import { demoGate, initDemoMode } from "./demo/database-switch";
 import retrieveJotihuntAreas from "./crons/jotihunt-areas.cron";
 import retrieveJotihuntArticles from "./crons/jotihunt-articles.cron";
 import retrieveJotihuntLogos from "./crons/jotihunt-logos.cron";
@@ -69,6 +71,9 @@ app.use(cors());
 
 // Setup routes
 logger.info("Setting up routes...");
+// The demo switch itself is not gated; every other request waits for a running switch (see database-switch.ts)
+app.use("/demo", demoRoute);
+app.use(demoGate);
 app.use("/auth", authRoute);
 app.use("/tracker", trackerRoute);
 app.use("/markers", markersRoute);
@@ -102,8 +107,9 @@ if (!db) {
   process.exit(1);
 }
 logger.info("Trying to connect to MongoDB...");
-await mongoose.connect(db).then(() => {
-  logger.info("Connected to MongoDB!");
+// Connects to the real database, or to a freshly generated demo database when demo mode was left on
+await initDemoMode(db, { logger: { info: (message) => logger.info(message), warn: (message) => logger.warn(message), error: (message, error) => logger.error(message, error) } }).then((state) => {
+  logger.info(`Connected to MongoDB${state.enabled ? " (demo mode)" : ""}!`);
   if (debug) mongoose.set("debug", true);
 });
 
