@@ -113,6 +113,11 @@ export async function readRealCollection<T = Record<string, unknown>>(collection
   return (await stateStore.connection.collection(collection).find(filter).toArray()) as T[];
 }
 
+/** The store on the dedicated connection to the real database (also holds the other `settings` documents). */
+export function getDemoStateStore(): DemoStateStore {
+  return requireInit().store;
+}
+
 export function getDemoState(): DemoState {
   return { ...state };
 }

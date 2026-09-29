@@ -171,7 +171,7 @@ De server leest de huntcode en de handgeschreven tijd van de huntfoto met [Googl
 
 Het lezen gebeurt op de achtergrond, één foto tegelijk (bij netwerkfouten of drukte tot 3 pogingen). Is de code of tijd niet (zeker) gelezen, dan krijgt de hunt het label "Controleren" en kan HQ de waarden aanpassen of opnieuw laten lezen. Zonder key worden foto's niet gelezen en vult HQ code en tijd zelf in.
 
-**Vossenvoorspelling:** Gemini krijgt per vossengebied het spoor van markers (hints, spots, hunts) en de coördinaten van de groepen, en voorspelt daaruit een pin, de ronde en een korte uitleg. Dat kost ongeveer één Gemini Pro-aanroep per actief gebied per 10 minuten (of eerder bij nieuwe gegevens), altijd na elkaar (nooit tegelijk). Zonder `GEMINI_API_KEY` staat de vossenvoorspelling uit.
+**Vossenvoorspelling:** Gemini krijgt per vossengebied het spoor van markers (hints, spots, hunts) en de coördinaten van de groepen, en voorspelt daaruit een pin, de ronde en een korte uitleg. Dat kost ongeveer één Gemini Pro-aanroep per actief gebied per 10 minuten (of eerder bij nieuwe gegevens), altijd na elkaar (nooit tegelijk). Zonder `GEMINI_API_KEY` staat de vossenvoorspelling uit. Een admin kan de voorspelling ook helemaal uit- en aanzetten via Instellingen > Admin tools > "AI-voorspelling" (globaal, bewaard in de `settings` collectie; uit betekent geen Gemini/ORS-aanroepen en geen voorspellingen of bezoeken in de app).
 
 **Privacy:** de huntfoto's, het markerspoor en de coördinaten van de groepen worden naar Google gestuurd. Met een gratis (free tier) key mag Google de verstuurde gegevens gebruiken om hun producten te verbeteren; gebruik een betaalde key als je dat niet wilt. De key komt nooit in de logs of in antwoorden van de server.
 

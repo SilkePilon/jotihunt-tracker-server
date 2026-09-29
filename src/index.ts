@@ -13,7 +13,9 @@ import hintsRoute from "./routes/hints.route";
 import predictionsRoute from "./routes/predictions.route";
 import visitsRoute from "./routes/visits.route";
 import demoRoute from "./routes/demo.route";
-import { demoGate, initDemoMode } from "./demo/database-switch";
+import settingsRoute from "./routes/settings.route";
+import { initPredictionSetting } from "./settings/prediction-setting";
+import { demoGate, getDemoStateStore, initDemoMode } from "./demo/database-switch";
 import { installDemoWorld } from "./demo/demo-world";
 import retrieveJotihuntAreas from "./crons/jotihunt-areas.cron";
 import retrieveJotihuntArticles from "./crons/jotihunt-articles.cron";
@@ -87,6 +89,8 @@ app.use("/admin", adminRoute);
 app.use("/hints", hintsRoute);
 app.use("/predictions", predictionsRoute);
 app.use("/visits", visitsRoute);
+// After the demo gate: verifyToken reads the users of the default connection. The setting itself is global (real database).
+app.use("/settings", settingsRoute);
 
 // Fallback handlers (Express 5 forwards rejected promises from async handlers here)
 app.use((_req, res) => {
@@ -113,6 +117,9 @@ await initDemoMode(db, { logger: { info: (message) => logger.info(message), warn
   logger.info(`Connected to MongoDB${state.enabled ? " (demo mode)" : ""}!`);
   if (debug) mongoose.set("debug", true);
 });
+
+// Global settings live in the real database (also in demo mode); cached in memory from here on
+await initPredictionSetting(getDemoStateStore());
 
 // Index maintenance of the real database runs in initDemoMode (and again whenever demo mode is switched off)
 
