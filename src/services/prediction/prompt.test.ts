@@ -11,6 +11,7 @@ const facts: AreaFacts = {
   estimate: false,
   groups: [{ teamApiId: 7, name: "Scouting Rijn", lng: 5.5, lat: 52.1, walkMinutes: 23 }],
   trail: [{ id: "m1", time: new Date("2026-10-17T11:00:00Z"), kind: "hint", lng: 5.48, lat: 52.08 }],
+  previousVisited: [],
   manualVisits: [{ teamApiId: 7, state: "not_visited" }],
 };
 

@@ -5,6 +5,7 @@ import { Prediction } from "../../models/prediction.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../../test/db";
 import { addObservation, makeTeam, setAreaStatus } from "../../test/prediction-fixtures";
 import { GeminiError } from "../gemini.client";
+import { RETRY_DELAY_MS } from "./constants";
 import type { FoxPredictor } from "./gemini-predictor";
 import { moveM } from "./geo";
 import { createPredictionService, listPredictions } from "./prediction.service";
@@ -45,7 +46,7 @@ function fakePredictor(results: (unknown | Error)[]) {
 }
 
 function serviceAt(minutes: number, predictor: FoxPredictor | null) {
-  return createPredictionService({ predictor, walkMinutes: walk, now: () => at(minutes) });
+  return createPredictionService({ predictor, walkMinutes: walk, now: () => at(minutes), sleep: async () => {} });
 }
 
 async function alpha() {
@@ -110,6 +111,42 @@ describe("recomputeArea", () => {
     const dto = await serviceAt(30, predictor).recomputeArea("alpha");
     expect(prompts).toHaveLength(2);
     expect(dto.stale).toBe(false);
+  });
+
+  test("waits before the retry", async () => {
+    await alpha();
+    const waits: number[] = [];
+    const { predictor } = fakePredictor([answer({ pin: null }), answer()]);
+    const service = createPredictionService({ predictor, walkMinutes: walk, now: () => at(30), sleep: async (ms) => void waits.push(ms) });
+    await service.recomputeArea("alpha");
+    expect(waits).toEqual([RETRY_DELAY_MS]);
+  });
+
+  test("HTTP 429 is not retried: one call, stale result", async () => {
+    await alpha();
+    await serviceAt(30, fakePredictor([answer()]).predictor).recomputeArea("alpha");
+    const { predictor, prompts } = fakePredictor([new GeminiError("Gemini-verzoek mislukt (HTTP 429)", true, 429), answer()]);
+    const dto = await serviceAt(45, predictor).recomputeArea("alpha");
+    expect(prompts).toHaveLength(1);
+    expect(dto.stale).toBe(true);
+    expect(dto.error).toBe("Gemini-verzoek mislukt (HTTP 429)");
+  });
+
+  test("rapid recomputes of one area coalesce into at most one extra run", async () => {
+    await alpha();
+    let calls = 0;
+    const predictor: FoxPredictor = {
+      async predict() {
+        calls++;
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return answer();
+      },
+    };
+    const service = serviceAt(30, predictor);
+    const first = service.recomputeArea("alpha");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await Promise.all([first, service.recomputeArea("alpha"), service.recomputeArea("Alpha"), service.recomputeArea("alpha")]);
+    expect(calls).toBe(2);
   });
 
   test("two failures keep the last good prediction and mark it stale", async () => {

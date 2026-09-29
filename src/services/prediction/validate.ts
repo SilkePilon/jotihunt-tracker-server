@@ -28,10 +28,16 @@ export function validatePrediction(raw: unknown, facts: AreaFacts): ValidPredict
   if (!isRecord(raw)) throw new InvalidPredictionError("Antwoord is geen object");
   const known = new Set(facts.groups.map((group) => group.teamApiId));
 
-  const round = finite(raw.round) ? Math.min(facts.round + 1, Math.max(facts.round, Math.round(raw.round))) : facts.round;
-  const manualVisited = round === facts.round ? facts.manualVisits.filter((visit) => visit.state === "visited").map((visit) => visit.teamApiId) : [];
-  const manualNot = round === facts.round ? new Set(facts.manualVisits.filter((visit) => visit.state === "not_visited").map((visit) => visit.teamApiId)) : new Set();
   const aiVisited = Array.isArray(raw.visitedTeamApiIds) ? raw.visitedTeamApiIds.filter(finite) : [];
+  const currentManualVisited = facts.manualVisits.filter((visit) => visit.state === "visited").map((visit) => visit.teamApiId);
+  const currentManualNot = new Set(facts.manualVisits.filter((visit) => visit.state === "not_visited").map((visit) => visit.teamApiId));
+  // Gemini may only start the next round once (almost) every group is covered
+  const covered = new Set([...facts.previousVisited, ...aiVisited, ...currentManualVisited].filter((id) => known.has(id) && !currentManualNot.has(id)));
+  const mayAdvance = known.size > 0 && covered.size >= known.size - 1;
+  const rawRound = finite(raw.round) ? Math.round(raw.round) : facts.round;
+  const round = rawRound === facts.round + 1 && mayAdvance ? facts.round + 1 : facts.round;
+  const manualVisited = round === facts.round ? currentManualVisited : [];
+  const manualNot = round === facts.round ? currentManualNot : new Set<number>();
   const visited = [...new Set([...aiVisited, ...manualVisited])].filter((id) => known.has(id) && !manualNot.has(id)).sort((a, b) => a - b);
   const visitedSet = new Set(visited);
 

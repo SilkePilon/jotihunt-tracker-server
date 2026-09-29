@@ -24,6 +24,8 @@ export interface AreaInputs {
   area: string;
   status: string;
   round: number;
+  /** Groups the stored prediction already counted as visited (used to guard the round advance) */
+  previousVisited: number[];
   groups: GroupRef[];
   trail: TrailPoint[];
   manualVisits: ManualVisitFact[];
@@ -58,7 +60,7 @@ export async function loadAreaInputs(area: string): Promise<AreaInputs> {
     Area.findOne({ name: nameRegex }).lean(),
     Team.find({ area: nameRegex }).lean(),
     Marker.find({ area: nameRegex }).sort({ time: 1 }).lean(),
-    Prediction.findOne({ area }, { round: 1 }).lean(),
+    Prediction.findOne({ area }, { round: 1, visitedTeamApiIds: 1 }).lean(),
   ]);
   const round = stored?.round ?? 1;
   const visits = await GroupVisit.find({ area, round, source: VisitSource.Manual }).sort({ teamApiId: 1 }).lean();
@@ -66,6 +68,7 @@ export async function loadAreaInputs(area: string): Promise<AreaInputs> {
     area,
     status: areaDoc?.status ?? "unknown",
     round,
+    previousVisited: stored?.visitedTeamApiIds ?? [],
     groups: teams
       .map((team) => ({ teamApiId: team.apiId, name: team.name, lng: team.location.coordinates[0], lat: team.location.coordinates[1] }))
       .sort((a, b) => a.teamApiId - b.teamApiId),

@@ -10,6 +10,7 @@ const facts: AreaFacts = {
   estimate: false,
   groups: [1, 2, 3, 4].map((id) => ({ teamApiId: id, name: `G${id}`, lng: 5.48 + id * 0.01, lat: 52.08, walkMinutes: id * 10 })),
   trail: [{ id: "m", time: new Date("2026-10-17T11:00:00Z"), kind: "hint", lng: 5.48, lat: 52.08 }],
+  previousVisited: [],
   manualVisits: [
     { teamApiId: 4, state: "visited" },
     { teamApiId: 3, state: "not_visited" },
@@ -57,10 +58,20 @@ describe("validatePrediction", () => {
     expect(result.confidence).toBe("low");
   });
 
-  test("round clamped to current or next", () => {
-    expect(validatePrediction({ ...good, round: 5 }, facts).round).toBe(2);
-    expect(validatePrediction({ ...good, round: 0 }, facts).round).toBe(1);
-    expect(validatePrediction({ ...good, round: "x" }, facts).round).toBe(1);
+  test("round is the current one, or the next when covered", () => {
+    const covered = { ...facts, previousVisited: [1, 2, 3] };
+    expect(validatePrediction({ ...good, round: 2 }, covered).round).toBe(2);
+    expect(validatePrediction({ ...good, round: 5 }, covered).round).toBe(1);
+    expect(validatePrediction({ ...good, round: 0 }, covered).round).toBe(1);
+    expect(validatePrediction({ ...good, round: "x" }, covered).round).toBe(1);
+  });
+
+  test("round advance refused while too few groups are covered", () => {
+    expect(validatePrediction({ ...good, round: 2 }, facts).round).toBe(1);
+    // 3 of 4 covered, but a manual not_visited takes one away again
+    const notVisited = { ...facts, previousVisited: [1, 2, 3], manualVisits: [{ teamApiId: 1, state: "not_visited" as const }] };
+    expect(validatePrediction({ ...good, round: 2, visitedTeamApiIds: [] }, notVisited).round).toBe(1);
+    expect(validatePrediction({ ...good, round: 2 }, { ...facts, groups: [], previousVisited: [] }).round).toBe(1);
   });
 
   test("rejects a pin more than 15 km away or missing", () => {
@@ -79,7 +90,7 @@ describe("validatePrediction", () => {
   });
 
   test("old-round manual visits ignored when Gemini advances the round", () => {
-    const oldRoundManualVisits = { ...facts, manualVisits: [{ teamApiId: 1, state: "visited" as const }] };
+    const oldRoundManualVisits = { ...facts, previousVisited: [2, 3, 4], manualVisits: [{ teamApiId: 1, state: "visited" as const }] };
     const raw = { ...good, round: 2, visitedTeamApiIds: [], candidates: [{ teamApiId: 1, probability: 1, etaMinutes: 1 }] };
     const result = validatePrediction(raw, oldRoundManualVisits);
     expect(result.round).toBe(2);

@@ -104,8 +104,9 @@ JOTIHUNT_WEB_PASSWORD=password123
 HUNT_START_TIME=2025-10-18T10:00+02:00 # Pas dit aan naar de starttijd van de hunt van dat jaar.
 HUNT_END_TIME=2025-10-19T12:00+02:00 # Pas dit aan naar de eindtijd van de hunt van dat jaar.
 ORS_API_KEY= # Optioneel, voor de vossenvoorspelling (zie configuratie)
-GEMINI_API_KEY= # Optioneel, leest huntcode en tijd van de huntfoto (zie configuratie)
+GEMINI_API_KEY= # Optioneel, leest huntcode en tijd van de huntfoto en voorspelt de vossen (zie configuratie)
 GEMINI_MODEL=gemini-3.8-flash
+GEMINI_PREDICTION_MODEL=gemini-pro-latest
 
 # Client
 JWT_SECRET=verander-dit-naar-een-veilige-random-string-van-minimaal-32-tekens
@@ -155,22 +156,24 @@ Dit zijn de inloggegevens die je normaal gebruikt om in te loggen op [jotihunt.n
 Stel hier de start- en eindtijd van de hunt in. Let goed op de juiste tijdzone (bijv. `+02:00` voor Nederland tijdens zomertijd).
 
 #### `ORS_API_KEY` (optioneel)
-Wordt gebruikt door de vossenvoorspelling voor looptijden, looproutes en bereikbaarheidszones via [OpenRouteService](https://openrouteservice.org/).
+Wordt gebruikt door de vossenvoorspelling voor looptijden naar de groepen via [OpenRouteService](https://openrouteservice.org/).
 1. Maak een gratis account aan op [openrouteservice.org](https://openrouteservice.org/dev/#/signup).
 2. Maak in het dashboard een (gratis) token aan.
 3. Plak de key in de `.env` file bij `ORS_API_KEY`.
 
-Zonder key werkt de voorspelling ook, maar dan met schattingen (rechte lijn × 1,3 bij 5 km/u en cirkelvormige zones); de client toont dan "(schatting)".
-Reizen met het openbaar vervoer komen van [Transitous](https://transitous.org/) en de haltes van OpenStreetMap (Overpass API); daarvoor is geen key nodig. Er worden alleen coördinaten en tijden verstuurd, geen persoonsgegevens.
+Zonder key gebruikt de voorspelling rechte-lijn-schattingen (rechte lijn × 1,3 bij 5 km/u). Er worden alleen coördinaten verstuurd, geen persoonsgegevens.
 
-#### `GEMINI_API_KEY` en `GEMINI_MODEL` (optioneel)
+#### `GEMINI_API_KEY`, `GEMINI_MODEL` en `GEMINI_PREDICTION_MODEL` (optioneel)
 De server leest de huntcode en de handgeschreven tijd van de huntfoto met [Google Gemini](https://ai.google.dev/). Hunters hoeven dan alleen een foto te maken en de vossengroep te kiezen.
 1. Maak een API-key aan in [Google AI Studio](https://aistudio.google.com/apikey).
 2. Plak de key in de `.env` file bij `GEMINI_API_KEY`. `GEMINI_MODEL` is optioneel (standaard `gemini-3.8-flash`).
+3. De vossenvoorspelling gebruikt hetzelfde key en het model `GEMINI_PREDICTION_MODEL` (standaard `gemini-pro-latest`).
 
 Het lezen gebeurt op de achtergrond, één foto tegelijk (bij netwerkfouten of drukte tot 3 pogingen). Is de code of tijd niet (zeker) gelezen, dan krijgt de hunt het label "Controleren" en kan HQ de waarden aanpassen of opnieuw laten lezen. Zonder key worden foto's niet gelezen en vult HQ code en tijd zelf in.
 
-**Privacy:** de huntfoto's worden naar Google gestuurd. Met een gratis (free tier) key mag Google de verstuurde gegevens gebruiken om hun producten te verbeteren; gebruik een betaalde key als je dat niet wilt. De key komt nooit in de logs of in antwoorden van de server.
+**Vossenvoorspelling:** Gemini krijgt per vossengebied het spoor van markers (hints, spots, hunts) en de coördinaten van de groepen, en voorspelt daaruit de volgende groepen, een pin, de ronde en een korte uitleg. Dat kost ongeveer één Gemini Pro-aanroep per actief gebied per 10 minuten (of eerder bij nieuwe gegevens), altijd na elkaar (nooit tegelijk). Zonder `GEMINI_API_KEY` staat de vossenvoorspelling uit.
+
+**Privacy:** de huntfoto's, het markerspoor en de coördinaten van de groepen worden naar Google gestuurd. Met een gratis (free tier) key mag Google de verstuurde gegevens gebruiken om hun producten te verbeteren; gebruik een betaalde key als je dat niet wilt. De key komt nooit in de logs of in antwoorden van de server.
 
 #### `JWT_SECRET`
 Genereer een willekeurige, veilige string van minimaal 32 tekens. Deze wordt gebruikt om JWT tokens te ondertekenen voor de authenticatie.

@@ -31,13 +31,13 @@ export function createWalkMinutes(deps: { walking: WalkingRouter; fallback: Walk
     }
     try {
       const result = await deps.walking.matrix([from], to);
-      await writeCache(key, result, DAY_MS);
+      await writeCache(key, result, DAY_MS).catch(() => undefined); // the cache is best-effort
       breaker.openUntil = null;
       return { result, estimate: false };
     } catch (error) {
       if (!(error instanceof RoutingUnavailableError)) throw error;
       const result = await deps.fallback.matrix([from], to);
-      if (error.kind === "request") await writeCache(key, result, ORS_REQUEST_FALLBACK_TTL_MS, { estimate: true });
+      if (error.kind === "request") await writeCache(key, result, ORS_REQUEST_FALLBACK_TTL_MS, { estimate: true }).catch(() => undefined);
       else if (error.kind === "permanent") breaker.permanent = true;
       else breaker.openUntil = now().getTime() + ORS_COOLDOWN_MS;
       return { result, estimate: true };

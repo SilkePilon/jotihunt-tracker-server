@@ -106,7 +106,7 @@ export function onDemoSwitch(listener: DemoSwitchListener): () => void {
 
 /**
  * Read-only access to a collection of the REAL database (through the DemoState connection), for the demo generator
- * (teams, transit stops). Never write through this.
+ * (teams). Never write through this.
  */
 export async function readRealCollection<T = Record<string, unknown>>(collection: string, filter: Record<string, unknown> = {}): Promise<T[]> {
   const { store: stateStore } = requireInit();

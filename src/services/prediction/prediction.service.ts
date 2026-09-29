@@ -1,7 +1,7 @@
 import { Prediction } from "../../models/prediction.model";
 import { assertGeneration, currentGeneration, DemoSwitchedError, isDemoSwitchInProgress } from "../../demo/demo-mode";
 import { GeminiError } from "../gemini.client";
-import { FAILURE_BACKOFF_MS, RECOMPUTE_INTERVAL_MS } from "./constants";
+import { FAILURE_BACKOFF_MS, RECOMPUTE_INTERVAL_MS, RETRY_DELAY_MS } from "./constants";
 import { gatherFacts, listAreaNames, loadAreaInputs, signatureOf, type AreaInputs } from "./facts";
 import type { FoxPredictor } from "./gemini-predictor";
 import { buildPrompt } from "./prompt";
@@ -14,6 +14,8 @@ export interface PredictionDeps {
   predictor: FoxPredictor | null;
   walkMinutes: WalkMinutes;
   now?: () => Date;
+  /** Pause before a retry (default: real timer) */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export interface CandidateDto {
@@ -61,7 +63,9 @@ function errorMessage(error: unknown): string {
  */
 export function createPredictionService(deps: PredictionDeps) {
   const now = deps.now ?? (() => new Date());
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   let queue: Promise<unknown> = Promise.resolve();
+  const pending = new Map<string, Promise<PredictionDto>>();
 
   function serial<T>(task: () => Promise<T>): Promise<T> {
     const run = queue.then(task);
@@ -92,7 +96,8 @@ export function createPredictionService(deps: PredictionDeps) {
     try {
       return validatePrediction(await predictor.predict(prompt), facts);
     } catch (first) {
-      if (first instanceof GeminiError && !first.retryable && first.status !== undefined) throw first;
+      if (first instanceof GeminiError && ((!first.retryable && first.status !== undefined) || first.status === 429)) throw first;
+      await sleep(RETRY_DELAY_MS);
       return validatePrediction(await predictor.predict(prompt), facts);
     }
   }
@@ -158,8 +163,16 @@ export function createPredictionService(deps: PredictionDeps) {
   /** Recompute one area now (e.g. after a manual visit change). */
   function recomputeArea(area: string): Promise<PredictionDto> {
     const name = area.toLowerCase();
+    // A run that is queued but not started yet will load fresh inputs anyway: share it.
+    const queued = pending.get(name);
+    if (queued) return queued;
     const generation = currentGeneration();
-    return serial(async () => compute(await loadAreaInputs(name), generation));
+    const run = serial(async () => {
+      pending.delete(name);
+      return compute(await loadAreaInputs(name), generation);
+    });
+    pending.set(name, run);
+    return run;
   }
 
   /**

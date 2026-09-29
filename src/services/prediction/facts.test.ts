@@ -33,15 +33,17 @@ describe("loadAreaInputs", () => {
     expect(inputs.groups.map((group) => group.teamApiId)).toEqual([1, 2]);
     expect(inputs.trail.map((point) => point.kind)).toEqual(["hint", "spot"]);
     expect(inputs.manualVisits).toEqual([]);
+    expect(inputs.previousVisited).toEqual([]);
   });
 
   test("manual visits of the stored round only", async () => {
     await seedAlpha();
-    await Prediction.create({ area: "alpha", updatedAt: at(0), round: 2 });
+    await Prediction.create({ area: "alpha", updatedAt: at(0), round: 2, visitedTeamApiIds: [1, 2] });
     await GroupVisit.create({ area: "alpha", teamApiId: 1, round: 1, state: VisitState.Visited, source: VisitSource.Manual });
     await GroupVisit.create({ area: "alpha", teamApiId: 2, round: 2, state: VisitState.NotVisited, source: VisitSource.Manual });
     const inputs = await loadAreaInputs("alpha");
     expect(inputs.round).toBe(2);
+    expect(inputs.previousVisited).toEqual([1, 2]);
     expect(inputs.manualVisits).toEqual([{ teamApiId: 2, state: "not_visited" }]);
   });
 });

@@ -7,6 +7,8 @@ export const TOP_CANDIDATES = 3;
 export const RECOMPUTE_INTERVAL_MS = 10 * 60 * 1000;
 /** After a failed Gemini run, the area waits this long before trying again. */
 export const FAILURE_BACKOFF_MS = 2 * 60 * 1000;
+/** Wait before the single retry of a failed Gemini answer. */
+export const RETRY_DELAY_MS = 3000;
 /** A pin further than this from the last trail point is rejected. */
 export const MAX_PIN_DISTANCE_M = 15_000;
 /** Reasoning shown behind the ⓘ is cut to this many characters. */
