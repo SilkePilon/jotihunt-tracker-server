@@ -35,6 +35,12 @@ const UserSchema = new mongoose.Schema({
     default: true,
     required: true,
   },
+  /** Highest onboarding tour version this user has seen (client TOUR_VERSION); 0 = never. */
+  tutorialVersion: {
+    type: Number,
+    default: 0,
+    required: true,
+  },
   tracker: {
     type: TrackerSchema,
     required: false,
@@ -51,3 +57,10 @@ UserSchema.set("toJSON", {
 
 export const User = mongoose.model("User", UserSchema);
 export type UserType = HydratedDocument<InferSchemaType<typeof UserSchema>>;
+
+/** Record that the user has seen the onboarding tour up to `version`. Never lowers the stored version. */
+export async function setTutorialVersion(user: UserType, version: number): Promise<number> {
+  user.tutorialVersion = Math.max(user.tutorialVersion ?? 0, version);
+  await user.save();
+  return user.tutorialVersion;
+}

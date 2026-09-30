@@ -14,9 +14,14 @@ const updatePasswordValidator = [
     .withMessage("Wachtwoorden komen niet overeen"),
 ];
 
+const tutorialValidator = [
+  body("version").isInt({ min: 0 }).withMessage("Versie moet een getal van 0 of hoger zijn.").toInt(),
+];
+
 const router = express.Router();
 
 router.post("/login", authController.login);
 router.post("/update-password", [verifyToken, validate(updatePasswordValidator)], authController.updatePassword);
+router.post("/tutorial", [verifyToken, validate(tutorialValidator)], authController.updateTutorial);
 
 export default router;

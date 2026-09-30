@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { User } from "../models/user.model";
+import { setTutorialVersion, User } from "../models/user.model";
 import jwt from "jsonwebtoken";
 import { logger } from "..";
 
@@ -45,6 +45,7 @@ export async function login(req: Request, res: Response) {
         name: user.name,
         admin: user.admin,
         requiresPasswordChange: user.requiresPasswordChange,
+        tutorialVersion: user.tutorialVersion,
       },
     });
   } catch (error) {
@@ -70,4 +71,9 @@ export async function updatePassword(req: Request, res: Response) {
 
   await user.save();
   return res.status(200).json({ message: "Password updated" });
+}
+
+export async function updateTutorial(req: Request, res: Response) {
+  const tutorialVersion = await setTutorialVersion(req.user!, req.body.version);
+  return res.status(200).json({ tutorialVersion });
 }
