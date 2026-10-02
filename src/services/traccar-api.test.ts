@@ -83,19 +83,4 @@ describe("createTraccarApi", () => {
       headers: { Accept: "application/json" },
     });
   });
-
-  test("getSummary returns distance and top speed, or null without a row", async () => {
-    const { http, calls } = fakeHttp([[{ deviceId: 9, distance: 1234.5, maxSpeed: 20.5 }], []]);
-    const api = createTraccarApi(http);
-    const from = new Date("2026-10-16T22:00:00.000Z");
-    const to = new Date("2026-10-17T10:00:00.000Z");
-    expect(await api.getSummary(9, from, to)).toEqual({ distance: 1234.5, maxSpeed: 20.5 });
-    expect(await api.getSummary(9, from, to)).toBeNull();
-    expect(calls[0]).toEqual({
-      method: "get",
-      url: "/api/reports/summary",
-      params: { deviceId: 9, from: "2026-10-16T22:00:00.000Z", to: "2026-10-17T10:00:00.000Z" },
-      headers: { Accept: "application/json" },
-    });
-  });
 });

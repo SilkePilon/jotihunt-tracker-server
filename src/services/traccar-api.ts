@@ -42,8 +42,6 @@ export interface TraccarApi {
   getPosition(positionId: number): Promise<TraccarPositionDto | null>;
   /** Distance in metres from the summary report, or null when the report has no row. */
   getDistance(deviceId: number, from: Date, to: Date): Promise<number | null>;
-  /** Distance (m) and top speed (knots) from the summary report, or null when the report has no row for the device. */
-  getSummary(deviceId: number, from: Date, to: Date): Promise<{ distance: number; maxSpeed: number | null } | null>;
 }
 
 export function createTraccarApi(http: HttpClient): TraccarApi {
@@ -75,15 +73,6 @@ export function createTraccarApi(http: HttpClient): TraccarApi {
       });
       const row = data.find((summary) => summary.deviceId === deviceId);
       return typeof row?.distance === "number" ? row.distance : null;
-    },
-    async getSummary(deviceId, from, to) {
-      const { data } = await http.get<{ deviceId: number; distance?: number; maxSpeed?: number }[]>("/api/reports/summary", {
-        params: { deviceId, from: from.toISOString(), to: to.toISOString() },
-        headers: { Accept: "application/json" },
-      });
-      const row = data.find((summary) => summary.deviceId === deviceId);
-      if (!row) return null;
-      return { distance: typeof row.distance === "number" ? row.distance : 0, maxSpeed: typeof row.maxSpeed === "number" ? row.maxSpeed : null };
     },
   };
 }

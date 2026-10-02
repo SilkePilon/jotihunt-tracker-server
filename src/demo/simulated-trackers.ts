@@ -1,6 +1,5 @@
 import { moveM, bearingDeg } from "../services/prediction/geo";
 import type { LngLat } from "../services/prediction/types";
-import type { DeviceSummary } from "../services/leaderboard.helpers";
 import { groupIdForVehicle, type Vehicle, type VehicleGroups } from "../services/tracker-onboarding.helpers";
 import { MINUTE_MS } from "./generator/constants";
 
@@ -132,17 +131,6 @@ export function simulatedPositions(now: Date) {
       deviceName: hunter.name,
     };
   });
-}
-
-/** Leaderboard summaries of the demo devices; null when there is no simulation. */
-export function simulatedSummaries(now: Date): { from: Date; summaries: Map<number, DeviceSummary> } | null {
-  if (!simulation) return null;
-  const { huntStart } = simulation;
-  const summaries = new Map<number, DeviceSummary>();
-  for (const hunter of simulation.hunters) {
-    summaries.set(hunter.deviceId, { distanceM: hunterDistanceM(hunter, huntStart, now), maxSpeedKmh: Math.round(VEHICLE_SPEED_KMH[hunter.vehicle] * 1.3) });
-  }
-  return { from: huntStart, summaries };
 }
 
 /** Change the vehicle of a simulated device (admin "voertuig wijzigen"); null when it is not a demo device. */

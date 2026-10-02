@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { distanceM } from "../services/prediction/geo";
-import { hunterPosition, setSimulation, simulatedDevices, simulatedPositions, simulatedSummaries, type SimulatedHunter } from "./simulated-trackers";
+import { hunterPosition, setSimulation, simulatedDevices, simulatedPositions, type SimulatedHunter } from "./simulated-trackers";
 
 const huntStart = new Date("2026-10-17T09:00:00Z");
 const now = new Date("2026-10-17T15:00:00Z");
@@ -22,7 +22,6 @@ afterEach(() => setSimulation(null));
 describe("simulated trackers", () => {
   test("nothing without a simulation", () => {
     expect(simulatedDevices(now, { walking: 1, bike: 2, car: 3, motorcycle: undefined })).toEqual([]);
-    expect(simulatedSummaries(now)).toBeNull();
   });
 
   test("devices and positions in the Traccar shape; inactive ones 12 minutes old", () => {
@@ -48,13 +47,5 @@ describe("simulated trackers", () => {
     expect(moved).toBeGreaterThan(300);
     expect(moved).toBeLessThan(1200);
     expect(distanceM(a, car.centre)).toBeLessThan(car.radiusM * 1.4);
-  });
-
-  test("leaderboard distance: speed × moving time since hunt start", () => {
-    setSimulation({ huntStart, hunters: [hunter(900001, "walking"), hunter(900002, "walking", true)] });
-    const { from, summaries } = simulatedSummaries(now)!;
-    expect(from).toEqual(huntStart);
-    expect(summaries.get(900001)!.distanceM).toBe(Math.round(5 * 0.8 * 6 * 1000));
-    expect(summaries.get(900002)!.distanceM).toBeLessThan(summaries.get(900001)!.distanceM);
   });
 });
