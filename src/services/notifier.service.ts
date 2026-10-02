@@ -1,5 +1,5 @@
 import { Area } from "../models/area.model";
-import { Article } from "../models/article.model";
+import { Article, publicArticlesFilter } from "../models/article.model";
 import { HuntReport } from "../models/hunt-report.model";
 import { AppNotification, type AppNotificationDocument } from "../models/notification.model";
 import { NotifierState } from "../models/notifier-state.model";
@@ -12,9 +12,11 @@ import {
   HUNT_SUBMIT_WINDOW_MS,
   type NotificationInput,
 } from "./notifier.helpers";
+import { currentGeneration, runTracked } from "../demo/demo-mode";
 import { sendToAll } from "./push.service";
 
 const STATE_KEY = "notifier";
+const MAX_ARTICLES_PER_RUN = 3;
 
 interface NotifierOptions {
   now?: Date;
@@ -38,7 +40,7 @@ export async function runNotifier(options: NotifierOptions = {}): Promise<AppNot
   const areas = await Area.find({}, { name: 1, status: 1 }).lean();
 
   if (!state.initialized) {
-    const latest = await Article.findOne({}, { id: 1 }).sort({ id: -1 }).lean();
+    const latest = await Article.findOne(publicArticlesFilter(), { id: 1 }).sort({ id: -1 }).lean();
     state.areaStatus = new Map(areas.map((area) => [area.name, area.status]));
     state.lastArticleId = latest?.id ?? 0;
     state.initialized = true;
@@ -48,8 +50,14 @@ export async function runNotifier(options: NotifierOptions = {}): Promise<AppNot
 
   const inputs: NotificationInput[] = diffAreaStatus(Object.fromEntries(state.areaStatus), areas).map(buildFoxStatusNotification);
 
-  const articles = await Article.find({ id: { $gt: state.lastArticleId } }, { id: 1, title: 1, type: 1, endTime: 1 }).sort({ id: 1 }).lean();
-  inputs.push(...articles.map(buildArticleNotification));
+  const articles = await Article.find(
+    { $and: [publicArticlesFilter(), { id: { $gt: state.lastArticleId } }] },
+    { id: 1, title: 1, type: 1, endTime: 1 },
+  )
+    .sort({ id: 1 })
+    .lean();
+  // After a demo stint a backlog can pile up: announce only the newest few (lastArticleId still advances past all)
+  inputs.push(...articles.slice(-MAX_ARTICLES_PER_RUN).map(buildArticleNotification));
 
   // Hunt time can lie before the upload, so look back a bit further than the submit window
   const open = await HuntReport.find(
@@ -84,9 +92,10 @@ export async function runNotifier(options: NotifierOptions = {}): Promise<AppNot
   if (articles.length > 0) state.lastArticleId = articles[articles.length - 1].id;
   await state.save();
 
+  const generation = currentGeneration();
   for (const notification of created) {
-    Promise.resolve()
-      .then(() => send(notification))
+    // Tracked, so a database switch waits for it and a push started before a switch never touches the other database
+    runTracked(() => Promise.resolve().then(() => send(notification)), { generation })
       .catch((error) => log.error("Pushing a notification failed", error));
   }
   return created;

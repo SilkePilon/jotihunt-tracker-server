@@ -52,6 +52,19 @@ describe("sendToAll", () => {
     await sendToAll(notification("broadcast"), silent);
     expect(calls).toEqual(["https://push/b"]);
   });
+  test("failed push logs no raw error (endpoint is a secret)", async () => {
+    setPushSender({
+      async sendNotification() {
+        throw Object.assign(new Error("boom"), { statusCode: 500, body: "x".repeat(500), endpoint: "https://push/secret-token" });
+      },
+    });
+    await subscribe("a", "https://push/secret-token");
+    const logged: unknown[][] = [];
+    await sendToAll(notification("hint"), { error: (...args) => void logged.push(args), warn() {} });
+    expect(logged).toHaveLength(1);
+    expect(logged[0][1]).toEqual({ statusCode: 500, message: "boom", body: "x".repeat(200) });
+    expect(JSON.stringify(logged)).not.toContain("secret-token");
+  });
   test("removes subscriptions the push service reports gone", async () => {
     await subscribe("a", "https://push/gone");
     const result = await sendToAll(notification("hint"), silent);

@@ -47,6 +47,26 @@ describe("runNotifier", () => {
     expect(await AppNotification.countDocuments()).toBe(2);
   });
 
+  test("seeded articles (id >= 900000) are not announced and do not block real ones", async () => {
+    await setAreas({ Alpha: "red" });
+    await Article.create({ id: 900001, title: "Seed", type: "hint", publishAt: now, content: "x" });
+    await run();
+    expect((await NotifierState.findOne())?.lastArticleId).toBe(0);
+    await Article.create({ id: 900002, title: "Seed 2", type: "hint", publishAt: now, content: "x" });
+    expect(await run()).toHaveLength(0);
+    await Article.create({ id: 5, title: "Echt", type: "news", publishAt: now, content: "x" });
+    expect(await run()).toHaveLength(1);
+    expect((await NotifierState.findOne())?.lastArticleId).toBe(5);
+  });
+
+  test("announces at most the newest 3 new articles but advances past all", async () => {
+    await run();
+    for (let id = 1; id <= 5; id++) await Article.create({ id, title: `A${id}`, type: "news", publishAt: now, content: "x" });
+    expect(await run()).toHaveLength(3);
+    expect((await NotifierState.findOne())?.lastArticleId).toBe(5);
+    expect(await run()).toHaveLength(0);
+  });
+
   test("a partial area read does not forget statuses", async () => {
     await setAreas({ Alpha: "red", Bravo: "red" });
     await run();

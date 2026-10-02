@@ -1,11 +1,7 @@
-import { Article } from "../models/article.model";
+import { Article, publicArticlesFilter } from "../models/article.model";
 import { Request, Response } from "express";
 
-// Seeded test hint articles use ids >= 900000 (see src/scripts/seed-hint.ts) and are
-// excluded from the public list.
-export function publicArticlesFilter() {
-  return { id: { $lt: 900000 } };
-}
+export { publicArticlesFilter };
 
 export async function getArticles(_req: Request, res: Response) {
   // Articles are upserted in place (never wiped/reinserted), so natural insertion order

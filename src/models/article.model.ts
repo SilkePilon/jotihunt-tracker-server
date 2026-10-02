@@ -41,3 +41,11 @@ const ArticleSchema = new mongoose.Schema({
 });
 
 export const Article = mongoose.model("Article", ArticleSchema);
+
+/**
+ * Seeded test hint articles use ids >= 900000 (see src/scripts/seed-hint.ts); they are excluded from the public
+ * list and from notifications.
+ */
+export function publicArticlesFilter() {
+  return { id: { $lt: 900000 } };
+}

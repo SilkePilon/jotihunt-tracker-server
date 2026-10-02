@@ -42,7 +42,7 @@ export function isPushConfigured(): boolean {
   try {
     webpush.setVapidDetails(process.env.VAPID_SUBJECT?.trim() || "mailto:jotihunt@example.com", publicKey, privateKey);
   } catch (error) {
-    console.error("Invalid VAPID configuration, push notifications are off", error);
+    console.error("Invalid VAPID configuration, push notifications are off", (error as Error)?.message);
     return (configured = false);
   }
   return (configured = true);
@@ -105,14 +105,17 @@ export async function sendToAll(notification: PushNotificationInput, log: PushLo
               await PushSubscription.deleteOne({ endpoint: subscription.endpoint });
               result.removed++;
             } else {
-              log.error(`Push to ${endpointHost(subscription.endpoint)} failed`, error);
+              // Never log the raw error: WebPushError carries the endpoint URL (a capability token), headers and body
+              const { statusCode, message, body } = error as { statusCode?: number; message?: string; body?: unknown };
+              log.error(`Push to ${endpointHost(subscription.endpoint)} failed`, { statusCode, message, body: String(body ?? "").slice(0, 200) });
             }
           }
         }),
       );
     }
   } catch (error) {
-    log.error("Sending push notifications failed", error);
+    // Mongo/other errors only: keep the message, not the object
+    log.error("Sending push notifications failed", { message: (error as Error)?.message });
   }
   return result;
 }
