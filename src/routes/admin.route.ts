@@ -1,5 +1,6 @@
 import express from "express";
 import * as adminController from "../controllers/admin.controller";
+import * as notificationsController from "../controllers/notifications.controller";
 import * as trackerController from "../controllers/tracker.controller";
 import { VEHICLES } from "../services/tracker-onboarding.helpers";
 import verifyToken, { isAdmin } from "../middleware/auth.middleware";
@@ -57,6 +58,11 @@ const router = express.Router();
 
 router.get("/users", [verifyToken, isAdmin], adminController.getUsers);
 router.post("/users", [verifyToken, isAdmin, validate(createValidator)], adminController.createUser);
+router.post(
+  "/broadcast",
+  [verifyToken, isAdmin, validate([body("message").isString().trim().isLength({ min: 1, max: 200 }).withMessage("Bericht moet 1 tot 200 tekens zijn.")])],
+  notificationsController.broadcast,
+);
 router.delete("/users/:id", [verifyToken, isAdmin, validate(deleteValidator)], adminController.deleteUser);
 router.put("/users/:id", [verifyToken, isAdmin, validate(updateValidator)], adminController.updateUser);
 router.put(

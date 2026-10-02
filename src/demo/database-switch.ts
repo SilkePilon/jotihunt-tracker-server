@@ -291,6 +291,9 @@ async function enterDemo(): Promise<Date> {
   await Promise.all(Object.values(mongoose.models).map((model) => model.createIndexes()));
   const users = await stateStore.connection.collection("users").find().toArray();
   if (users.length > 0) await connection.collection("users").insertMany(users);
+  // Push endpoints too, so notifications of the demo world reach the devices that were subscribed
+  const pushSubscriptions = await stateStore.connection.collection("pushsubscriptions").find().toArray();
+  if (pushSubscriptions.length > 0) await connection.collection("pushsubscriptions").insertMany(pushSubscriptions);
   await clearDemoUploads();
   const now = new Date();
   await generator(now);

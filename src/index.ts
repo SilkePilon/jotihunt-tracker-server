@@ -11,6 +11,8 @@ import adminRoute from "./routes/admin.route";
 import hintsRoute from "./routes/hints.route";
 import predictionsRoute from "./routes/predictions.route";
 import visitsRoute from "./routes/visits.route";
+import notificationsRoute from "./routes/notifications.route";
+import pushRoute from "./routes/push.route";
 import demoRoute from "./routes/demo.route";
 import settingsRoute from "./routes/settings.route";
 import { initPredictionSetting } from "./settings/prediction-setting";
@@ -89,6 +91,8 @@ app.use("/admin", adminRoute);
 app.use("/hints", hintsRoute);
 app.use("/predictions", predictionsRoute);
 app.use("/visits", visitsRoute);
+app.use("/notifications", notificationsRoute);
+app.use("/push", pushRoute);
 // After the demo gate: verifyToken reads the users of the default connection. The setting itself is global (real database).
 app.use("/settings", settingsRoute);
 
