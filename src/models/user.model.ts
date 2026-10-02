@@ -41,6 +41,12 @@ const UserSchema = new mongoose.Schema({
     default: 0,
     required: true,
   },
+  /** Opt-out notification settings, shared by all of the user's devices (push) and in-app sounds */
+  notificationPrefs: {
+    disabledTypes: { type: [String], required: true, default: [] },
+    /** Highest "Meldingen" dialog version shown (client NOTIFICATIONS_PROMPT_VERSION); 0 = never */
+    promptedVersion: { type: Number, required: true, default: 0 },
+  },
   tracker: {
     type: TrackerSchema,
     required: false,

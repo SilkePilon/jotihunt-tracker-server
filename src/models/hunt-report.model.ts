@@ -50,6 +50,8 @@ const HuntReportSchema = new mongoose.Schema(
     submittedAt: { type: Date, required: false },
     submittedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: false },
     submittedByName: { type: String, required: false },
+    /** When the "10 minutes left" notification was created (at most once per report) */
+    deadlineWarnedAt: { type: Date, required: false, default: null },
     site: { type: SiteResultSchema, required: false },
     ocr: { type: OcrSchema, required: false },
   },
