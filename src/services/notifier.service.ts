@@ -56,13 +56,26 @@ export async function runNotifier(options: NotifierOptions = {}): Promise<AppNot
     { submittedAt: null, deadlineWarnedAt: null, createdAt: { $gte: new Date(now.getTime() - 3 * HUNT_SUBMIT_WINDOW_MS) } },
     { area: 1, huntTime: 1, createdAt: 1, reportedByName: 1, submittedAt: 1, deadlineWarnedAt: 1 },
   ).lean();
+  const claimedIds: unknown[] = [];
   for (const report of dueDeadlineWarnings(open, now)) {
     // Conditional claim: two overlapping runs never both warn
     const claim = await HuntReport.updateOne({ _id: report._id, deadlineWarnedAt: null }, { $set: { deadlineWarnedAt: now } });
-    if (claim.modifiedCount === 1) inputs.push(buildDeadlineNotification(report, now));
+    if (claim.modifiedCount === 1) {
+      claimedIds.push(report._id);
+      inputs.push(buildDeadlineNotification(report, now));
+    }
   }
 
-  const created = inputs.length > 0 ? await AppNotification.insertMany(inputs.map((input) => ({ ...input, createdAt: new Date() }))) : [];
+  let created: AppNotificationDocument[] = [];
+  try {
+    if (inputs.length > 0) created = await AppNotification.insertMany(inputs.map((input) => ({ ...input, createdAt: new Date() })));
+  } catch (error) {
+    // Release the claims so the next run re-detects the warnings instead of losing them
+    if (claimedIds.length > 0) {
+      await HuntReport.updateMany({ _id: { $in: claimedIds }, deadlineWarnedAt: now }, { $set: { deadlineWarnedAt: null } });
+    }
+    throw error;
+  }
 
   // Merge: areas missing from a partial read keep their last known status
   const areaStatus = new Map(state.areaStatus);
@@ -72,7 +85,9 @@ export async function runNotifier(options: NotifierOptions = {}): Promise<AppNot
   await state.save();
 
   for (const notification of created) {
-    send(notification).catch((error) => log.error("Pushing a notification failed", error));
+    Promise.resolve()
+      .then(() => send(notification))
+      .catch((error) => log.error("Pushing a notification failed", error));
   }
   return created;
 }

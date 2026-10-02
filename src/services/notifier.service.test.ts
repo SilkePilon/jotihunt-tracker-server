@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Area } from "../models/area.model";
 import { Article } from "../models/article.model";
 import { HuntReport } from "../models/hunt-report.model";
@@ -63,6 +63,38 @@ describe("runNotifier", () => {
     await HuntReport.create({ area: "alpha", photo: "q.jpg", reportedBy: user._id, reportedByName: "Sam", huntTime: new Date(now.getTime() - 21 * MIN), createdAt: new Date(now.getTime() - 21 * MIN), submittedAt: now });
     const created = await run();
     expect(created.map((notification) => notification.type)).toEqual(["hunt-deadline"]);
+    expect(await run()).toHaveLength(0);
+  });
+
+  test("a failed insert releases the deadline claim so the next run warns", async () => {
+    await run();
+    const user = await User.create({ email: "s@t.nl", password: "x", name: "Sam" });
+    const report = await HuntReport.create({ area: "bravo", photo: "p.jpg", reportedBy: user._id, reportedByName: "Sam", huntTime: new Date(now.getTime() - 21 * MIN), createdAt: new Date(now.getTime() - 21 * MIN) });
+    const spy = spyOn(AppNotification, "insertMany").mockRejectedValueOnce(new Error("boom"));
+    try {
+      await expect(run()).rejects.toThrow("boom");
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await HuntReport.findById(report._id))?.deadlineWarnedAt ?? null).toBeNull();
+    const created = await run();
+    expect(created.map((notification) => notification.type)).toEqual(["hunt-deadline"]);
+  });
+
+  test("a failing push does not fail the run", async () => {
+    await setAreas({ Alpha: "red" });
+    await run();
+    await setAreas({ Alpha: "green" });
+    const errors: string[] = [];
+    const created = await runNotifier({
+      now,
+      send: () => Promise.reject(new Error("push down")),
+      log: { error: (message) => void errors.push(message) },
+    });
+    expect(created).toHaveLength(1);
+    expect(await AppNotification.countDocuments()).toBe(1);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(errors).toHaveLength(1);
     expect(await run()).toHaveLength(0);
   });
 });
