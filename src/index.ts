@@ -21,6 +21,8 @@ import retrieveJotihuntArticles from "./crons/jotihunt-articles.cron";
 import retrieveJotihuntLogos from "./crons/jotihunt-logos.cron";
 import scrapeJotihuntWebsite from "./crons/jotihunt-scraper.cron";
 import recomputePredictions from "./crons/prediction.cron";
+import notify from "./crons/notifier.cron";
+import { isPushConfigured } from "./services/push.service";
 import winston from "winston";
 import mongoose from "mongoose";
 import expressWinston from "express-winston";
@@ -174,4 +176,10 @@ cron.schedule("0 7 */6 * * *", retrieveJotihuntLogos, { name: "jotihunt-logos", 
 cron.schedule("30 * * * * *", recomputePredictions, { name: "fox-prediction", noOverlap: true });
 if (!process.env.ORS_API_KEY) {
   logger.warn("ORS_API_KEY not set, fox prediction uses straight-line walking times");
+}
+
+// Notifications: fox status changes, new articles and hunt deadlines (push + in-app feed)
+cron.schedule("*/10 * * * * *", notify, { name: "notifier", noOverlap: true });
+if (!isPushConfigured()) {
+  logger.warn("VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY not set, push notifications are off (in-app alerts still work)");
 }
