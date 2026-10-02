@@ -39,8 +39,21 @@ export function isPushConfigured(): boolean {
   const publicKey = vapidPublicKey();
   const privateKey = process.env.VAPID_PRIVATE_KEY?.trim();
   if (!publicKey || !privateKey) return (configured = false);
-  webpush.setVapidDetails(process.env.VAPID_SUBJECT?.trim() || "mailto:jotihunt@example.com", publicKey, privateKey);
+  try {
+    webpush.setVapidDetails(process.env.VAPID_SUBJECT?.trim() || "mailto:jotihunt@example.com", publicKey, privateKey);
+  } catch (error) {
+    console.error("Invalid VAPID configuration, push notifications are off", error);
+    return (configured = false);
+  }
   return (configured = true);
+}
+
+function endpointHost(endpoint: string): string {
+  try {
+    return new URL(endpoint).host;
+  } catch {
+    return "onbekend";
+  }
 }
 
 /** Tests only */
@@ -92,7 +105,7 @@ export async function sendToAll(notification: PushNotificationInput, log: PushLo
               await PushSubscription.deleteOne({ endpoint: subscription.endpoint });
               result.removed++;
             } else {
-              log.error(`Push to ${new URL(subscription.endpoint).host} failed`, error);
+              log.error(`Push to ${endpointHost(subscription.endpoint)} failed`, error);
             }
           }
         }),

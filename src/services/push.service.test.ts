@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import webpush from "web-push";
 import { PushSubscription } from "../models/push-subscription.model";
 import { User } from "../models/user.model";
@@ -61,9 +61,43 @@ describe("sendToAll", () => {
   test("does nothing without VAPID keys", async () => {
     await subscribe("a", "https://push/a");
     const saved = process.env.VAPID_PRIVATE_KEY;
-    delete process.env.VAPID_PRIVATE_KEY;
-    resetPushConfig();
-    expect(await sendToAll(notification("hint"), silent)).toEqual({ sent: 0, removed: 0 });
-    process.env.VAPID_PRIVATE_KEY = saved;
+    try {
+      delete process.env.VAPID_PRIVATE_KEY;
+      resetPushConfig();
+      expect(await sendToAll(notification("hint"), silent)).toEqual({ sent: 0, removed: 0 });
+    } finally {
+      process.env.VAPID_PRIVATE_KEY = saved;
+      resetPushConfig();
+    }
+  });
+  test("resolves without sending when the VAPID keys are invalid", async () => {
+    await subscribe("a", "https://push/a");
+    const saved = process.env.VAPID_PUBLIC_KEY;
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      process.env.VAPID_PUBLIC_KEY = "not-a-key";
+      resetPushConfig();
+      expect(await sendToAll(notification("hint"), silent)).toEqual({ sent: 0, removed: 0 });
+      expect(calls).toEqual([]);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      errorSpy.mockRestore();
+      process.env.VAPID_PUBLIC_KEY = saved;
+      resetPushConfig();
+    }
+  });
+  test("a malformed endpoint does not stop the batch", async () => {
+    await subscribe("a", "not a url/fail");
+    await subscribe("b", "https://push/b");
+    setPushSender({
+      async sendNotification(subscription) {
+        if (subscription.endpoint.endsWith("/fail")) throw new Error("boom");
+        calls.push(subscription.endpoint);
+        return {};
+      },
+    });
+    const result = await sendToAll(notification("hint"), silent);
+    expect(result.sent).toBe(1);
+    expect(calls).toEqual(["https://push/b"]);
   });
 });
