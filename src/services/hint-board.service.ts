@@ -2,10 +2,11 @@ import mongoose from "mongoose";
 import { Article } from "../models/article.model";
 import { HintCell, HintCellStatus, HintCheck } from "../models/hint-cell.model";
 import { Marker, MarkerType } from "../models/marker.model";
-import "../models/user.model"; // registers the User model for populate
+import { User } from "../models/user.model"; // also registers the User model for populate
 import { parseRdAnswer } from "./rd-answer";
 import { isDuplicateKeyError } from "../utils/mongo";
 import { ServiceError } from "../http/service-error";
+import { currentGeneration } from "../demo/demo-mode";
 
 type Id = mongoose.Types.ObjectId | string;
 
@@ -27,15 +28,70 @@ async function updateCell(articleId: number, area: string, update: mongoose.Upda
   return cell;
 }
 
+/** How long a built board is shared between requests (every hunter polls it every 3 s). */
+const BOARD_CACHE_MS = 1_500;
 /** Attempts of a compare-and-set before giving up with a 409 (only under heavy contention on one cell). */
 const MAX_ATTEMPTS = 5;
 
+let boardVersion = 0;
+let boardCache: { version: number; generation: number; builtAt: number; json: Promise<string> } | null = null;
+
+/** Call after every write to hint cells (or hint articles) so the next board request rebuilds. */
+export function invalidateBoardCache() {
+  boardVersion++;
+  boardCache = null;
+}
+
+type UserRef = { _id: mongoose.Types.ObjectId; name: string } | null;
+
+/**
+ * The same shape as populate(populateUsers) on lean cells, with one user query instead of one per path.
+ */
+async function populateBoardUsers<T extends { claimedBy?: unknown; checkedBy?: unknown; notes?: { user?: unknown }[] }>(cells: T[]) {
+  const ids = new Set<string>();
+  for (const cell of cells) {
+    if (cell.claimedBy) ids.add(String(cell.claimedBy));
+    if (cell.checkedBy) ids.add(String(cell.checkedBy));
+    for (const note of cell.notes ?? []) if (note.user) ids.add(String(note.user));
+  }
+  const users = ids.size > 0 ? await User.find({ _id: { $in: [...ids] } }, { name: 1 }).lean() : [];
+  const byId = new Map(users.map((user) => [String(user._id), { _id: user._id, name: user.name } as UserRef]));
+  const lookup = (id: unknown): UserRef => byId.get(String(id)) ?? null;
+  for (const cell of cells) {
+    if (cell.claimedBy) cell.claimedBy = lookup(cell.claimedBy);
+    if (cell.checkedBy) cell.checkedBy = lookup(cell.checkedBy);
+    for (const note of cell.notes ?? []) if (note.user) note.user = lookup(note.user);
+  }
+  return cells;
+}
+
 export async function getBoard() {
-  const articles = await Article.find({ type: "hint" }, { _id: 0, id: 1, title: 1, publishAt: 1, content: 1 })
-    .sort({ publishAt: -1 })
-    .lean();
-  const cells = await HintCell.find().populate(populateUsers).lean();
-  return { articles, cells };
+  const [articles, cells] = await Promise.all([
+    Article.find({ type: "hint" }, { _id: 0, id: 1, title: 1, publishAt: 1, content: 1 }).sort({ publishAt: -1 }).lean(),
+    HintCell.find().lean(),
+  ]);
+  return { articles, cells: await populateBoardUsers(cells) };
+}
+
+/**
+ * The board as JSON, built at most once per ~1.5 s for all users (and rebuilt right after any hint write or a
+ * database switch). Concurrent requests share one build.
+ */
+export function getBoardJson(): Promise<string> {
+  const generation = currentGeneration();
+  const cached = boardCache;
+  if (cached && cached.version === boardVersion && cached.generation === generation && Date.now() - cached.builtAt < BOARD_CACHE_MS) {
+    return cached.json;
+  }
+  const version = boardVersion;
+  const json = getBoard().then((board) => JSON.stringify(board));
+  const entry = { version, generation, builtAt: Date.now(), json };
+  boardCache = entry;
+  // A failed build is not shared
+  json.catch(() => {
+    if (boardCache === entry) boardCache = null;
+  });
+  return json;
 }
 
 export async function claimCell(articleId: number, area: string, userId: Id) {
@@ -48,7 +104,10 @@ export async function claimCell(articleId: number, area: string, userId: Id) {
     { $set: { status: HintCellStatus.Solving, claimedBy: userId, claimedAt: new Date() } },
     { returnDocument: "after" },
   ).populate(populateUsers);
-  if (cell) return cell;
+  if (cell) {
+    invalidateBoardCache();
+    return cell;
+  }
 
   const existing = await findCellOr404(articleId, area);
   const message =
@@ -67,7 +126,10 @@ export async function releaseCell(articleId: number, area: string, user: { _id: 
     { $set: { status: HintCellStatus.Open }, $unset: { claimedBy: 1, claimedAt: 1 } },
     { returnDocument: "after" },
   ).populate(populateUsers);
-  if (cell) return cell;
+  if (cell) {
+    invalidateBoardCache();
+    return cell;
+  }
 
   await findCellOr404(articleId, area);
   throw new ServiceError(409, "Dit vak is niet door jou geclaimd");
@@ -201,20 +263,25 @@ export async function solveCell(articleId: number, area: string, userId: Id, ans
     // Answer changed from a coordinate to a word: remove the marker we created earlier
     if (!rd && cell.markerId) await deleteMarkerIfUnlinked(cell.markerId);
     if (rd) await syncHintMarker(cell._id);
+    invalidateBoardCache();
     return findCellOr404(articleId, area);
   }
   throw busyError();
 }
 
 export async function setCheck(articleId: number, area: string, userId: Id, check: HintCheck) {
-  if (check === HintCheck.Unchecked) {
-    return updateCell(articleId, area, { $set: { check }, $unset: { checkedBy: 1 } });
-  }
-  return updateCell(articleId, area, { $set: { check, checkedBy: userId } });
+  const cell =
+    check === HintCheck.Unchecked
+      ? await updateCell(articleId, area, { $set: { check }, $unset: { checkedBy: 1 } })
+      : await updateCell(articleId, area, { $set: { check, checkedBy: userId } });
+  invalidateBoardCache();
+  return cell;
 }
 
 export async function addNote(articleId: number, area: string, userId: Id, text: string) {
-  return updateCell(articleId, area, { $push: { notes: { user: userId, text, createdAt: new Date() } } });
+  const cell = await updateCell(articleId, area, { $push: { notes: { user: userId, text, createdAt: new Date() } } });
+  invalidateBoardCache();
+  return cell;
 }
 
 /**
@@ -255,6 +322,7 @@ export async function setStatus(
     if (updated.matchedCount === 0) continue;
 
     if (cell.markerId) await deleteMarkerIfUnlinked(cell.markerId);
+    invalidateBoardCache();
     return findCellOr404(articleId, area);
   }
   throw busyError();

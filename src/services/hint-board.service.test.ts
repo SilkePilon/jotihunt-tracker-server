@@ -5,7 +5,8 @@ import { Marker, MarkerType } from "../models/marker.model";
 import { User } from "../models/user.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { ServiceError } from "../http/service-error";
-import { addNote, claimCell, getBoard, releaseCell, setCheck, setStatus, solveCell } from "./hint-board.service";
+import { nextGeneration } from "../demo/demo-mode";
+import { addNote, claimCell, getBoard, getBoardJson, invalidateBoardCache, releaseCell, setCheck, setStatus, solveCell } from "./hint-board.service";
 
 const slotTime = new Date("2026-10-17T12:00:00.000Z");
 
@@ -45,6 +46,54 @@ describe("getBoard", () => {
     const board = await getBoard();
     expect(board.articles.map((article) => article.id)).toEqual([2, 1]);
     expect((board.cells[0].claimedBy as unknown as { name: string }).name).toBe("merida");
+  });
+});
+
+describe("getBoard JSON", () => {
+  const populateUsers = [
+    { path: "claimedBy", select: "name" },
+    { path: "checkedBy", select: "name" },
+    { path: "notes.user", select: "name" },
+  ];
+
+  test("is identical to the populate()-based board, also for deleted users", async () => {
+    const [a, b, gone] = await Promise.all([makeUser("a"), makeUser("b"), makeUser("gone"), makeCell("alpha"), makeCell("bravo"), makeCell("charlie")]);
+    await Article.create({ id: 1, title: "Hint 1", type: "hint", publishAt: new Date("2026-10-17T12:00:00Z"), content: "a" });
+    await claimCell(1, "alpha", a._id);
+    await solveCell(1, "bravo", b._id, "2126 4692");
+    await setCheck(1, "bravo", a._id, HintCheck.Verified);
+    await addNote(1, "bravo", gone._id, "weg");
+    await addNote(1, "bravo", a._id, "hier");
+    await claimCell(1, "charlie", gone._id);
+    await User.deleteOne({ _id: gone._id });
+
+    const articles = await Article.find({ type: "hint" }, { _id: 0, id: 1, title: 1, publishAt: 1, content: 1 }).sort({ publishAt: -1 }).lean();
+    const cells = await HintCell.find().populate(populateUsers).lean();
+    invalidateBoardCache();
+    expect(await getBoardJson()).toBe(JSON.stringify({ articles, cells }));
+  });
+
+  test("is shared for a moment, rebuilt after a write or a database switch", async () => {
+    const user = await makeUser("merida");
+    await makeCell();
+    invalidateBoardCache();
+    const first = await getBoardJson();
+    // A write that bypasses the service is not seen while cached
+    await HintCell.updateOne({ area: "alpha" }, { $set: { snippet: "stil" } });
+    expect(await getBoardJson()).toBe(first);
+    nextGeneration();
+    const afterSwitch = await getBoardJson();
+    expect(afterSwitch).toContain("stil");
+    await claimCell(1, "alpha", user._id);
+    expect(JSON.parse(await getBoardJson()).cells[0].status).toBe(HintCellStatus.Solving);
+  });
+
+  test("concurrent requests share one build", async () => {
+    await makeCell();
+    invalidateBoardCache();
+    const [x, y] = [getBoardJson(), getBoardJson()];
+    expect(x).toBe(y);
+    await x;
   });
 });
 

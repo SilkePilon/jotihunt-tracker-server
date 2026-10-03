@@ -7,8 +7,10 @@ function cellKey(req: Request) {
   return { articleId: Number(req.params.articleId), area: String(req.params.area).toLowerCase() };
 }
 
-export function getBoard(_req: Request, res: Response) {
-  return respond(res, 200, () => board.getBoard());
+/** Sent as prebuilt JSON (shared between users for ~1.5 s); same body and headers as res.json(board). */
+export async function getBoard(_req: Request, res: Response) {
+  const json = await board.getBoardJson();
+  return res.status(200).type("json").send(json);
 }
 
 export function parseAnswer(req: Request, res: Response) {
