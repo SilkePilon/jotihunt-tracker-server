@@ -1,8 +1,10 @@
-import express, { NextFunction, Request, Response } from "express";
+import express, { Request, Response } from "express";
 import expressWinston from "express-winston";
 import cors from "cors";
+import compression from "compression";
 import { logger } from "./logger";
 import { demoGate } from "./demo/database-switch";
+import { errorHandler } from "./middleware/error.middleware";
 import authRoute from "./routes/auth.route";
 import trackerRoute from "./routes/tracker.route";
 import markersRoute from "./routes/markers.route";
@@ -21,15 +23,34 @@ import demoRoute from "./routes/demo.route";
 import settingsRoute from "./routes/settings.route";
 
 export const app = express();
+app.disable("x-powered-by");
+app.use((_req, res, next) => {
+  // Browsers must never sniff a served file (e.g. an uploaded photo) into another type
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  next();
+});
+// Polled JSON (hint board, hunt reports, predictions) shrinks 5-10x. ETags are computed on the uncompressed body
+// before compression, so conditional requests still get a 304.
+app.use(compression());
 app.use(express.json());
 // Express 5 leaves req.body undefined when no body parser matched; keep the Express 4 behaviour of an empty object
 app.use((req, _res, next) => {
   req.body ??= {};
   next();
 });
-// Never write credentials (user JWTs, cookies) from request headers to the logs
-app.use(expressWinston.logger({ winstonInstance: logger, headerBlacklist: ["authorization", "cookie"] }));
-app.use(cors());
+// Never write credentials (user JWTs, cookies) from request headers to the logs. Successful reads are not logged:
+// every hunter polls a dozen endpoints every few seconds, which filled gigabytes of logs per event.
+app.use(
+  expressWinston.logger({
+    winstonInstance: logger,
+    headerBlacklist: ["authorization", "cookie"],
+    // 4xx as warn, 5xx as error (so failing requests also land in error.log)
+    statusLevels: true,
+    skip: (req: Request, res: Response) => isQuietRequest(req.method, res.statusCode),
+  }),
+);
+// Let browsers cache the CORS preflight for a day (it was ~45% of all requests)
+app.use(cors({ maxAge: 86400 }));
 
 // The demo switch itself is not gated; every other request waits for a running switch (see database-switch.ts)
 app.use("/demo", demoRoute);
@@ -51,13 +72,13 @@ app.use("/push", pushRoute);
 // After the demo gate: verifyToken reads the users of the default connection. The setting itself is global (real database).
 app.use("/settings", settingsRoute);
 
-// Fallback handlers (Express 5 forwards rejected promises from async handlers here)
+// Fallback handlers
 app.use((_req, res) => {
   res.status(404).json({ message: "Not found" });
 });
-app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
-  logger.error(`Unhandled error on ${req.method} ${req.originalUrl}`, err);
-  if (res.headersSent) return;
-  const { status = 500, message } = (err ?? {}) as { status?: number; message?: string };
-  res.status(status).json({ message: status >= 500 ? "Internal server error" : message });
-});
+app.use(errorHandler);
+
+/** Successful reads and preflights are too frequent to log; errors and writes are always logged. */
+export function isQuietRequest(method: string, statusCode: number): boolean {
+  return statusCode < 400 && (method === "GET" || method === "HEAD" || method === "OPTIONS");
+}

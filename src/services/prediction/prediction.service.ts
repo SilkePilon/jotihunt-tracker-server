@@ -1,7 +1,8 @@
+import { AREAS } from "../../constants/areas";
 import { Prediction } from "../../models/prediction.model";
 import { assertGeneration, currentGeneration, DemoSwitchedError, isDemoSwitchInProgress } from "../../demo/demo-mode";
 import { GeminiError } from "../gemini.client";
-import { FAILURE_BACKOFF_MS, RECOMPUTE_INTERVAL_MS, RETRY_DELAY_MS } from "./constants";
+import { FAILURE_BACKOFF_MS, GEMINI_PAUSE_MAX_MS, GEMINI_PAUSE_MS, RECOMPUTE_INTERVAL_MS, RETRY_DELAY_MS } from "./constants";
 import { gatherFacts, listAreaNames, loadAreaInputs, signatureOf, type AreaInputs } from "./facts";
 import type { FoxPredictor } from "./gemini-predictor";
 import { buildPrompt } from "./prompt";
@@ -35,9 +36,22 @@ export interface PredictionDto {
   why: string;
 }
 
-/** Stored predictions for the API (without the signature and the attempt time). */
+/** Stored predictions of the known areas for the API (without the signature and the attempt time). */
 export async function listPredictions() {
-  return Prediction.find({}, { _id: 0, __v: 0, signature: 0, attemptedAt: 0, candidates: 0 }).sort({ area: 1 }).lean();
+  return Prediction.find({ area: { $in: AREAS } }, { _id: 0, __v: 0, signature: 0, attemptedAt: 0, candidates: 0 }).sort({ area: 1 }).lean();
+}
+
+/** Gemini is not called while the circuit breaker is open. */
+class GeminiPausedError extends GeminiError {
+  constructor(remainingMs: number) {
+    super(`AI gepauzeerd na fouten, nieuwe poging over ${Math.ceil(remainingMs / 60_000)} min`, true);
+  }
+}
+
+/** Rate limited, overloaded or not answering: give Gemini a break instead of asking for every area. */
+function isOverloaded(error: unknown): boolean {
+  if (!(error instanceof GeminiError) || error instanceof GeminiPausedError) return false;
+  return error.status === 429 || error.status === 503 || (error.retryable && error.status === undefined);
 }
 
 function errorMessage(error: unknown): string {
@@ -55,6 +69,9 @@ export function createPredictionService(deps: PredictionDeps) {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   let queue: Promise<unknown> = Promise.resolve();
   const pending = new Map<string, Promise<PredictionDto>>();
+  // Circuit breaker for Gemini (see isOverloaded)
+  let pausedUntil = 0;
+  let pauses = 0;
 
   function serial<T>(task: () => Promise<T>): Promise<T> {
     const run = queue.then(task);
@@ -107,7 +124,10 @@ export function createPredictionService(deps: PredictionDeps) {
 
     const facts = await gatherFacts(inputs, deps.walkMinutes, at);
     try {
+      const remaining = pausedUntil - at.getTime();
+      if (remaining > 0) throw new GeminiPausedError(remaining);
       const result = await askGemini(deps.predictor, buildPrompt(facts), facts);
+      pauses = 0;
       return store({
         ...dto,
         round: result.round,
@@ -119,6 +139,10 @@ export function createPredictionService(deps: PredictionDeps) {
       });
     } catch (error) {
       if (error instanceof DemoSwitchedError) throw error;
+      if (isOverloaded(error)) {
+        pausedUntil = now().getTime() + Math.min(GEMINI_PAUSE_MS * 2 ** pauses, GEMINI_PAUSE_MAX_MS);
+        pauses++;
+      }
       const previous = await Prediction.findOne({ area: inputs.area }, { _id: 0, __v: 0, signature: 0, attemptedAt: 0, candidates: 0 }).lean();
       // Only a real earlier prediction (has a pin) is worth keeping; status-only docs are not.
       const base = previous && (previous as PredictionDto).pin ? (previous as PredictionDto) : dto;
@@ -158,6 +182,8 @@ export function createPredictionService(deps: PredictionDeps) {
     const recomputed: string[] = [];
     const failed: { area: string; error: unknown }[] = [];
     const generation = currentGeneration();
+    // Predictions of names that are not an area (e.g. from a broken /areas answer) are never shown: drop them
+    await Prediction.deleteMany({ area: { $nin: AREAS } });
     for (const area of await listAreaNames()) {
       if (isDemoSwitchInProgress() || generation !== currentGeneration()) break;
       try {

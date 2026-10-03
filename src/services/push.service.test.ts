@@ -3,7 +3,7 @@ import webpush from "web-push";
 import { PushSubscription } from "../models/push-subscription.model";
 import { User } from "../models/user.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
-import { resetPushConfig, sendToAll, setPushSender } from "./push.service";
+import { resetPushConfig, sendToAll, setPushDeadline, setPushSender } from "./push.service";
 
 const silent = { error() {}, warn() {} };
 const calls: string[] = [];
@@ -64,6 +64,30 @@ describe("sendToAll", () => {
     expect(logged).toHaveLength(1);
     expect(logged[0][1]).toEqual({ statusCode: 500, message: "boom", body: "x".repeat(200) });
     expect(JSON.stringify(logged)).not.toContain("secret-token");
+  });
+  test("a hanging push service does not block the batch: deadline, and web-push gets a timeout", async () => {
+    const options: unknown[] = [];
+    setPushSender({
+      async sendNotification(subscription, _payload, requestOptions) {
+        options.push(requestOptions);
+        if (subscription.endpoint.endsWith("/hang")) return new Promise(() => {});
+        return {};
+      },
+    });
+    setPushDeadline(200);
+    try {
+      await subscribe("a", "https://push/hang");
+      await subscribe("b", "https://push/b");
+      const logged: unknown[][] = [];
+      const started = Date.now();
+      const result = await sendToAll(notification("hint"), { error: (...args) => void logged.push(args), warn() {} });
+      expect(Date.now() - started).toBeLessThan(2000);
+      expect(result).toEqual({ sent: 1, removed: 0 });
+      expect(logged).toHaveLength(1);
+      expect(options.every((option) => (option as { timeout?: number }).timeout === 10_000)).toBe(true);
+    } finally {
+      setPushDeadline(15_000);
+    }
   });
   test("removes subscriptions the push service reports gone", async () => {
     await subscribe("a", "https://push/gone");

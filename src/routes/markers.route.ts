@@ -3,6 +3,7 @@ import { body, param } from "express-validator";
 import * as markersController from "../controllers/markers.controller";
 import verifyToken from "../middleware/auth.middleware";
 import { validate } from "../middleware/validate.middleware";
+import { limitUserWrites } from "../middleware/rate-limit";
 import { AREAS } from "../constants/areas";
 import { MarkerType } from "../models/marker.model";
 
@@ -18,7 +19,7 @@ const createValidator = [
 const router = express.Router();
 
 router.get("/", verifyToken, markersController.getMarkers);
-router.post("/", [verifyToken, validate(createValidator)], markersController.createMarker);
+router.post("/", [verifyToken, limitUserWrites(), validate(createValidator)], markersController.createMarker);
 router.delete("/:id", [verifyToken, validate([param("id").isMongoId().withMessage("Invalid marker id")])], markersController.deleteMarker);
 
 export default router;

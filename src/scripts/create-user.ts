@@ -1,12 +1,12 @@
 import mongoose from "mongoose";
 import {parseArgs} from "util";
-import {User} from "../models/user.model";
+import {hashPassword, User} from "../models/user.model";
 
 async function createUser(email: string, password: string, name: string, admin: boolean = false) {
     try {
         await mongoose.connect(process.env.MONGO_URI!);
 
-        const hashedPassword = await Bun.password.hash(password);
+        const hashedPassword = await hashPassword(password);
         const user = new User({
             email: email.toLowerCase(),
             password: hashedPassword,

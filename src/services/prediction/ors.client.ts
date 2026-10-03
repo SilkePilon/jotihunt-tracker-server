@@ -1,4 +1,5 @@
 import axios from "axios";
+import { MB } from "../http-limits";
 import { USER_AGENT } from "./constants";
 import { createThrottle, DailyCounter, MinuteBudget, type HttpPost, type Schedule } from "./http";
 import { RoutingUnavailableError, type MatrixResult, type RoutingFailureKind, type WalkingRouter } from "./routing";
@@ -8,6 +9,8 @@ export const ORS_BASE_URL = "https://api.openrouteservice.org/v2";
 export const ORS_DAILY_LIMITS = { matrix: 500 } as const;
 /** Free-plan per-minute limits per endpoint; a burst beyond these is queued, not failed. */
 export const ORS_MINUTE_LIMITS = { matrix: 40 } as const;
+/** Total time per ORS request */
+export const ORS_DEADLINE_MS = 15_000;
 type OrsEndpoint = keyof typeof ORS_DAILY_LIMITS;
 
 export interface OrsDeps {
@@ -62,7 +65,11 @@ export function createOrsRouter(apiKey: string | undefined, deps: OrsDeps = {}):
             Accept: "application/json, application/geo+json",
             "User-Agent": USER_AGENT,
           },
-          timeout: 15_000,
+          timeout: ORS_DEADLINE_MS,
+          signal: AbortSignal.timeout(ORS_DEADLINE_MS),
+          // A matrix of a few dozen points is a few KB
+          maxContentLength: 5 * MB,
+          maxBodyLength: 1 * MB,
         });
         return response.data;
       } catch (error) {

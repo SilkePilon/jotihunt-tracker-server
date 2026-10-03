@@ -1,11 +1,13 @@
 import mongoose from "mongoose";
+import { readdir, stat } from "node:fs/promises";
+import path from "node:path";
 import { HuntReport, type HuntReportDocument } from "../models/hunt-report.model";
-import { Marker, MarkerType, type MarkerDocument } from "../models/marker.model";
+import { Marker, MarkerType } from "../models/marker.model";
 import type { UserType } from "../models/user.model";
 import { ServiceError } from "../http/service-error";
 import { fieldSource, HUNT_AREAS, normalizeHuntCode, resolvePhotoExtension } from "./hunt-report.helpers";
-import { compareAge, createdAtOf, findDuplicateOf, toHuntReportView, type HuntReportView } from "./hunt-report.view";
-import { deletePhoto, photoFilePath, savePhoto } from "./photo-store";
+import { compareAge, createdAtOf, findDuplicateOf, toHuntReportView, VIEW_FIELDS, type HuntReportView, type HuntReportViewSource } from "./hunt-report.view";
+import { deletePhoto, photoFilePath, savePhoto, uploadsDir } from "./photo-store";
 import { isDuplicateKeyError } from "../utils/mongo";
 
 export type { DuplicateOf, HuntReportView } from "./hunt-report.view";
@@ -39,6 +41,30 @@ function toMinute(date: Date): Date {
   return time;
 }
 
+/** Save a loaded report; 404 when it was deleted meanwhile (a concurrent DELETE). */
+async function saveReport(report: HuntReportDocument) {
+  try {
+    await report.save();
+  } catch (error) {
+    if (error instanceof mongoose.Error.DocumentNotFoundError) throw new ServiceError(404, "Hunt niet gevonden.");
+    throw error;
+  }
+}
+
+/**
+ * Move the report's hunt marker to the report's effective time (the read/entered time, else the upload time), as
+ * stored now. Re-checks the report afterwards, so the last of concurrent edits always leaves its own time on the marker.
+ */
+export async function syncHuntMarkerTime(reportId: mongoose.Types.ObjectId | string): Promise<void> {
+  for (let round = 0; round < 5; round++) {
+    const report = await HuntReport.findById(reportId).select("markerId huntTime createdAt").lean();
+    if (!report?.markerId) return;
+    await Marker.updateOne({ _id: report.markerId }, { $set: { time: toMinute(report.huntTime ?? report.createdAt) } });
+    const after = await HuntReport.findById(reportId).select("huntTime").lean();
+    if (!after || (after.huntTime?.getTime() ?? null) === (report.huntTime?.getTime() ?? null)) return;
+  }
+}
+
 /** The report an earlier attempt of the same upload (same phone-generated id, same user) already created. */
 async function existingUpload(uploadId: string | undefined, user: UserType): Promise<HuntReportView | null> {
   if (!uploadId) return null;
@@ -59,16 +85,14 @@ export async function createHuntReport(input: NewHuntReport, user: UserType): Pr
   if (!extension) throw new ServiceError(400, "Foto moet een JPEG, PNG of WebP zijn.");
 
   let photo: string | null = null;
-  let marker: MarkerDocument | null = null;
+  let report: HuntReportDocument | null = null;
+  let markerCreated = false;
+  // The report is stored before its marker, so a crash in between never leaves a hunt marker without a report
+  const markerId = input.location ? new mongoose.Types.ObjectId() : undefined;
 
   try {
     photo = await savePhoto(input.photo.buffer, extension);
-    // Until the time is read the marker uses the upload time; the OCR queue moves it to the read time
-    marker = input.location
-      ? await Marker.create({ area: input.area, time: huntTime ?? toMinute(new Date()), type: MarkerType.Hunt, location: { type: "Point", coordinates: input.location } })
-      : null;
-
-    const report = await HuntReport.create({
+    report = await HuntReport.create({
       area: input.area as (typeof HUNT_AREAS)[number],
       huntCode,
       huntTime,
@@ -78,15 +102,27 @@ export async function createHuntReport(input: NewHuntReport, user: UserType): Pr
       reportedBy: user._id,
       reportedByName: user.name,
       location: input.location ? { type: "Point", coordinates: input.location } : undefined,
-      markerId: marker?._id,
+      markerId,
       uploadId: input.uploadId,
       ocr: { status: huntCode && huntTime ? "done" : "pending", attempts: 0 },
     });
+    if (markerId && input.location) {
+      // Until the time is read the marker uses the upload time; the OCR queue moves it to the read time
+      await Marker.create({
+        _id: markerId,
+        area: input.area,
+        time: toMinute(huntTime ?? createdAtOf(report)),
+        type: MarkerType.Hunt,
+        location: { type: "Point", coordinates: input.location },
+      });
+      markerCreated = true;
+    }
     return await viewOf(report);
   } catch (error) {
     // Clean up side effects
+    if (report) await HuntReport.deleteOne({ _id: report._id }).catch(() => undefined);
+    if (markerCreated) await Marker.deleteOne({ _id: markerId }).catch(() => undefined);
     if (photo) await deletePhoto(photo).catch(() => undefined);
-    if (marker) await Marker.deleteOne({ _id: marker._id });
     // Two attempts of the same upload raced: return the one that won
     if (isDuplicateKeyError(error)) {
       const retried = await existingUpload(input.uploadId, user);
@@ -97,8 +133,8 @@ export async function createHuntReport(input: NewHuntReport, user: UserType): Pr
 }
 
 export async function listHuntReports(now = new Date()): Promise<HuntReportView[]> {
-  const reports = await HuntReport.find();
-  const firstByCode = new Map<string, HuntReportDocument>();
+  const reports: HuntReportViewSource[] = await HuntReport.find().select(VIEW_FIELDS).lean();
+  const firstByCode = new Map<string, HuntReportViewSource>();
   for (const report of [...reports].sort(compareAge)) {
     if (report.huntCode && !firstByCode.has(report.huntCode)) firstByCode.set(report.huntCode, report);
   }
@@ -128,7 +164,7 @@ export async function setHuntReportSubmitted(id: string, submitted: boolean, use
     report.submittedBy = undefined;
     report.submittedByName = undefined;
   }
-  await report.save();
+  await saveReport(report);
   return viewOf(report);
 }
 
@@ -141,8 +177,11 @@ export async function setHuntReportFields(id: string, fields: { huntCode?: strin
   if (fields.huntTime !== undefined && Number.isNaN(fields.huntTime.getTime())) throw new ServiceError(400, "Ongeldige tijd.");
   const report = await findReport(id);
   if (huntCode !== undefined) {
-    // The jotihunt.nl result belonged to the old code
-    if (huntCode !== report.huntCode) report.site = undefined;
+    if (huntCode !== report.huntCode) {
+      // The jotihunt.nl result belonged to the old code; always $unset, also one the scraper stored after this load
+      report.site = undefined;
+      report.markModified("site");
+    }
     report.huntCode = huntCode;
     report.huntCodeSource = "manual";
   }
@@ -152,8 +191,8 @@ export async function setHuntReportFields(id: string, fields: { huntCode?: strin
   }
   const bothManual = fieldSource(report.huntCode, report.huntCodeSource) === "manual" && fieldSource(report.huntTime, report.huntTimeSource) === "manual";
   if (bothManual && (report.ocr?.status === "pending" || report.ocr?.status === "reading")) report.set("ocr.status", "done");
-  await report.save();
-  if (fields.huntTime !== undefined && report.markerId) await Marker.updateOne({ _id: report.markerId }, { $set: { time: report.huntTime } });
+  await saveReport(report);
+  if (fields.huntTime !== undefined) await syncHuntMarkerTime(report._id);
   return viewOf(report);
 }
 
@@ -167,8 +206,8 @@ export async function requestHuntReportRead(id: string, user: UserType): Promise
   report.huntTime = null;
   report.huntTimeSource = undefined;
   report.set("ocr", { status: "pending", attempts: 0 });
-  await report.save();
-  if (report.markerId) await Marker.updateOne({ _id: report.markerId }, { $set: { time: toMinute(createdAtOf(report)) } });
+  await saveReport(report);
+  await syncHuntMarkerTime(report._id);
   return viewOf(report);
 }
 
@@ -177,7 +216,13 @@ export async function deleteHuntReport(id: string, user: UserType): Promise<void
   const report = await findReport(id);
   if (report.submittedAt) throw new ServiceError(409, "Deze hunt is al ingestuurd en kan niet meer verwijderd worden.");
   if (report.site) throw new ServiceError(409, "Deze hunt staat al op jotihunt.nl en kan niet meer verwijderd worden.");
-  await HuntReport.deleteOne({ _id: report._id });
+  // Conditional: a report submitted or linked to jotihunt.nl since it was loaded above is never deleted
+  const { deletedCount } = await HuntReport.deleteOne({ _id: report._id, submittedAt: null, site: null });
+  if (deletedCount === 0) {
+    const current = await HuntReport.findById(report._id).select("_id").lean();
+    if (!current) throw new ServiceError(404, "Hunt niet gevonden.");
+    throw new ServiceError(409, "Deze hunt is net ingestuurd of staat al op jotihunt.nl en kan niet meer verwijderd worden.");
+  }
   if (report.markerId) await Marker.deleteOne({ _id: report.markerId });
   await deletePhoto(report.photo).catch(() => undefined);
 }
@@ -185,4 +230,64 @@ export async function deleteHuntReport(id: string, user: UserType): Promise<void
 export async function huntReportPhotoPath(id: string): Promise<string> {
   const report = await findReport(id);
   return photoFilePath(report.photo);
+}
+
+/** Photo files this old without a report are leftovers of a crash between storing the photo and the report. */
+export const ORPHAN_PHOTO_AGE_MS = 60 * 60 * 1000;
+
+/**
+ * Remove photo files of the current mode's uploads directory that no report refers to and that are older than
+ * ORPHAN_PHOTO_AGE_MS (an upload in progress stores its report within moments). Never runs on a database without
+ * reports (fresh or restored: its photos may belong to reports that are not there yet). Returns how many were removed.
+ */
+export async function removeOrphanPhotos(now = Date.now()): Promise<number> {
+  const dir = uploadsDir();
+  const entries = await readdir(dir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  });
+  const files = entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
+  if (files.length === 0) return 0;
+  const referenced = new Set<string>(await HuntReport.distinct("photo"));
+  if (referenced.size === 0) return 0;
+  let removed = 0;
+  for (const name of files) {
+    if (referenced.has(name)) continue;
+    const { mtimeMs } = await stat(path.join(dir, name));
+    if (now - mtimeMs < ORPHAN_PHOTO_AGE_MS) continue;
+    await deletePhoto(name);
+    removed++;
+  }
+  return removed;
+}
+
+/** Reports this old whose marker is missing lost it to a crash between storing the report and its marker. */
+const MISSING_MARKER_AGE_MS = 60 * 1000;
+
+/**
+ * Create the hunt marker of reports that point to a marker that does not exist (a crash between storing the report
+ * and its marker). Only reports older than a minute, so an upload in progress is never raced. A marker deleted on the
+ * map also unlinks it from its report, so it is never brought back. Returns how many markers were created.
+ */
+export async function restoreMissingHuntMarkers(now = Date.now()): Promise<number> {
+  const reports = await HuntReport.find({ markerId: { $exists: true }, location: { $exists: true }, createdAt: { $lt: new Date(now - MISSING_MARKER_AGE_MS) } })
+    .select("area markerId location huntTime createdAt")
+    .lean();
+  if (reports.length === 0) return 0;
+  const existing = new Set((await Marker.find({ _id: { $in: reports.map((report) => report.markerId) } }).select("_id").lean()).map((marker) => String(marker._id)));
+  let restored = 0;
+  for (const report of reports) {
+    if (!report.markerId || !report.location || existing.has(String(report.markerId))) continue;
+    await Marker.create({
+      _id: report.markerId,
+      area: report.area,
+      time: toMinute(report.huntTime ?? report.createdAt),
+      type: MarkerType.Hunt,
+      location: { type: "Point", coordinates: report.location.coordinates },
+    }).catch((error) => {
+      if (!isDuplicateKeyError(error)) throw error;
+    });
+    restored++;
+  }
+  return restored;
 }

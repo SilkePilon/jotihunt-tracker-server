@@ -82,7 +82,9 @@ export async function scrapeHunts(): Promise<WebHunt[]> {
     await page.goto(websiteUrl + "/hunts", { waitUntil: "networkidle2" });
   }
 
-  const hunts = await page.evaluate(() => {
+  const scraped = await page.evaluate(() => {
+    // No table at all: not the hunts page (e.g. a Cloudflare challenge or an error page)
+    if (!document.querySelector("table")) return null;
     const rows = Array.from(document.querySelectorAll("table tbody tr"));
     return rows.flatMap((row) => {
       const columns = Array.from(row.querySelectorAll("td"));
@@ -99,6 +101,8 @@ export async function scrapeHunts(): Promise<WebHunt[]> {
       ];
     });
   });
+  if (scraped === null) throw new Error(`No hunts table on ${page.url()}`);
+  const hunts = scraped.filter((hunt) => hunt.huntCode?.trim());
 
   logger.debug(`(SCRAPER) Found ${hunts.length} hunts from website.`);
   return hunts;

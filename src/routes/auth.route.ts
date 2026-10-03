@@ -32,10 +32,19 @@ const loginLimiter = limitFailures({
   failureStatus: 401,
   key: (req) => `${req.ip}|${String(req.body?.email ?? "").trim().toLowerCase()}`,
 });
+// Per address regardless of e-mail, so trying many different addresses is limited too. Not cleared by a success
+// (one valid account must not reset it); 100 is far above the mistypes of a whole team behind one address.
+const loginIpLimiter = limitFailures({
+  windowMs: 15 * 60 * 1000,
+  maxFailures: 100,
+  failureStatus: 401,
+  resetOnSuccess: false,
+  key: (req) => String(req.ip),
+});
 
 const router = express.Router();
 
-router.post("/login", loginLimiter, validate(loginValidator), authController.login);
+router.post("/login", loginIpLimiter, loginLimiter, validate(loginValidator), authController.login);
 router.post("/update-password", [verifyToken, validate(updatePasswordValidator)], authController.updatePassword);
 router.post("/tutorial", [verifyToken, validate(tutorialValidator)], authController.updateTutorial);
 

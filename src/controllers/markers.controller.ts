@@ -5,10 +5,11 @@ import { Marker, MarkerType } from "../models/marker.model";
 import { HuntReport } from "../models/hunt-report.model";
 import { HintCell } from "../models/hint-cell.model";
 import { isDuplicateKeyError } from "../utils/mongo";
+import { sendCachedJson } from "../services/response-cache";
 
+/** Polled by every hunter: one shared body for a moment (cleared by every marker write) */
 export async function getMarkers(_req: Request, res: Response) {
-  const markers = await Marker.find().lean();
-  return res.status(200).json(markers);
+  return sendCachedJson(res, "markers", () => Marker.find().lean());
 }
 
 /** Body is validated by markers.route.ts */

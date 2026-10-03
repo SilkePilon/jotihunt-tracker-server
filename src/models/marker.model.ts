@@ -1,5 +1,6 @@
 import mongoose, { HydratedDocument, InferSchemaType } from "mongoose";
 import { pointSchema } from "./point";
+import { invalidateOnWrite } from "../services/response-cache";
 
 export enum MarkerType {
   Hint = "hint",
@@ -29,6 +30,9 @@ const MarkerSchema = new mongoose.Schema({
 });
 
 MarkerSchema.index({ area: 1, time: 1 }, { unique: true, partialFilterExpression: { type: "hint" } });
+
+// GET /markers is cached for a moment; every write clears it
+invalidateOnWrite(MarkerSchema, "markers");
 
 export const Marker = mongoose.model("Marker", MarkerSchema);
 export type MarkerDocument = HydratedDocument<InferSchemaType<typeof MarkerSchema>>;

@@ -1,8 +1,9 @@
+import mongoose from "mongoose";
 import { currentGeneration, runTracked } from "../demo/demo-mode";
 import { HuntReport, type HuntReportDocument } from "../models/hunt-report.model";
-import { Marker } from "../models/marker.model";
 import { GeminiError, type StickerReader } from "./gemini.client";
 import { fieldSource, photoMimeType } from "./hunt-report.helpers";
+import { syncHuntMarkerTime } from "./hunt-report.service";
 import { resolveReadTime, type StickerReading } from "./sticker-ocr.helpers";
 
 export const MAX_ATTEMPTS = 3;
@@ -21,7 +22,7 @@ export interface HuntOcrDeps {
 }
 
 export interface HuntOcr {
-  /** Queue a report for reading (no-op when it is already waiting) */
+  /** Queue a report for reading (no-op when it is already waiting or being read) */
   enqueue(id: string): void;
   /** Queue every report left pending/reading (e.g. by a restart); returns how many */
   resumePending(): Promise<number>;
@@ -41,6 +42,8 @@ const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(r
 export function createHuntOcr(deps: HuntOcrDeps): HuntOcr {
   const sleep = deps.sleep ?? defaultSleep;
   const queue: string[] = [];
+  /** The report being read now; queueing it again would read the same photo twice */
+  let reading: string | null = null;
   let draining: Promise<void> | null = null;
 
   /** onError must never break the queue */
@@ -68,10 +71,10 @@ export function createHuntOcr(deps: HuntOcrDeps): HuntOcr {
       report.huntCode = reading.code;
       report.huntCodeSource = reading.code ? "ocr" : undefined;
     }
-    let movedTime: Date | null = null;
+    let timeChanged = false;
     if (fieldSource(report.huntTime, report.huntTimeSource) !== "manual") {
-      movedTime = reading.time ? resolveReadTime(reading.time, report.get("createdAt") as Date) : null;
-      report.huntTime = movedTime;
+      timeChanged = true;
+      report.huntTime = reading.time ? resolveReadTime(reading.time, report.get("createdAt") as Date) : null;
       report.huntTimeSource = reading.time ? "ocr" : undefined;
     }
     report.set("ocr", {
@@ -85,8 +88,14 @@ export function createHuntOcr(deps: HuntOcrDeps): HuntOcr {
       stickerBox: reading.box ?? undefined,
     });
     if (currentGeneration() !== generation) return;
-    await report.save();
-    if (movedTime && report.markerId) await Marker.updateOne({ _id: report.markerId }, { $set: { time: movedTime } });
+    try {
+      await report.save();
+    } catch (error) {
+      // Deleted while it was being read
+      if (error instanceof mongoose.Error.DocumentNotFoundError) return;
+      throw error;
+    }
+    if (timeChanged) await syncHuntMarkerTime(report._id);
   }
 
   /** One attempt; resolves with the wait before the next attempt, or null when the reading is finished. */
@@ -151,10 +160,13 @@ export function createHuntOcr(deps: HuntOcrDeps): HuntOcr {
     try {
       while (queue.length > 0) {
         const id = queue.shift()!;
+        reading = id;
         try {
           await read(id);
         } catch (error) {
           notifyError(error, id);
+        } finally {
+          reading = null;
         }
       }
     } finally {
@@ -163,7 +175,7 @@ export function createHuntOcr(deps: HuntOcrDeps): HuntOcr {
   }
 
   function enqueue(id: string) {
-    if (!queue.includes(id)) queue.push(id);
+    if (id !== reading && !queue.includes(id)) queue.push(id);
     // No await between the loop's empty check and `draining = null`, so a new id is never left behind
     draining ??= drain();
   }

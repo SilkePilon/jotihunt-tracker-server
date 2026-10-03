@@ -117,4 +117,63 @@ describe("runNotifier", () => {
     expect(errors).toHaveLength(1);
     expect(await run()).toHaveLength(0);
   });
+
+  test("overlapping first runs store the state once and do not fail", async () => {
+    await setAreas({ Alpha: "red" });
+    const results = await Promise.allSettled(Array.from({ length: 5 }, () => run()));
+    expect(results.every((result) => result.status === "fulfilled")).toBe(true);
+    expect(await NotifierState.countDocuments()).toBe(1);
+    expect((await NotifierState.findOne())?.initialized).toBe(true);
+  });
+
+  test("overlapping runs announce a fox status change and a new article once", async () => {
+    await setAreas({ Alpha: "red", Bravo: "red" });
+    await run();
+    for (let round = 0; round < 10; round++) {
+      await setAreas({ Alpha: round % 2 ? "red" : "green", Bravo: "red" });
+      await Article.create({ id: round + 1, title: `A${round}`, type: "news", publishAt: now, content: "x" });
+      sent.length = 0;
+      await AppNotification.deleteMany({});
+      const created = await Promise.all([run(), run(), run()]);
+      expect(created.flat().map((notification) => notification.type).sort()).toEqual(["article", "fox-status"]);
+      expect(await AppNotification.countDocuments()).toBe(2);
+      expect(sent).toHaveLength(2);
+    }
+  });
+
+  test("a failed insert rolls the state back so the next run announces the change", async () => {
+    await setAreas({ Alpha: "red" });
+    await run();
+    await setAreas({ Alpha: "green" });
+    const spy = spyOn(AppNotification, "insertMany").mockRejectedValueOnce(new Error("boom"));
+    try {
+      await expect(run()).rejects.toThrow("boom");
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await run()).map((notification) => notification.type)).toEqual(["fox-status"]);
+    expect(await run()).toHaveLength(0);
+  });
+
+  test("a state without a version (older documents) still works", async () => {
+    await setAreas({ Alpha: "red" });
+    await NotifierState.collection.insertOne({ key: "notifier", areaStatus: { Alpha: "red" }, lastArticleId: 0, initialized: true });
+    await setAreas({ Alpha: "green" });
+    expect(await run()).toHaveLength(1);
+    expect(await run()).toHaveLength(0);
+  });
+
+  test("a hanging push stops counting as running work", async () => {
+    const { activeWorkCount } = await import("../demo/demo-mode");
+    await setAreas({ Alpha: "red" });
+    await run();
+    await setAreas({ Alpha: "green" });
+    const errors: string[] = [];
+    const before = activeWorkCount();
+    await runNotifier({ now, send: () => new Promise(() => {}), log: { error: (message) => void errors.push(message) }, pushTrackLimitMs: 50 });
+    expect(activeWorkCount()).toBe(before + 1);
+    await Bun.sleep(100);
+    expect(activeWorkCount()).toBe(before);
+    expect(errors).toEqual(["Pushing a notification failed"]);
+  });
 });

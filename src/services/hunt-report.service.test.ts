@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import mongoose from "mongoose";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { HuntReport } from "../models/hunt-report.model";
@@ -8,12 +9,16 @@ import { User } from "../models/user.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { ServiceError } from "../http/service-error";
 import { linkScrapedHunts } from "./hunt-report-sync.service";
+import { findDuplicateOf, toHuntReportView } from "./hunt-report.view";
 import {
   createHuntReport,
   deleteHuntReport,
   huntReportPhotoPath,
   listHuntReports,
+  ORPHAN_PHOTO_AGE_MS,
+  removeOrphanPhotos,
   requestHuntReportRead,
+  restoreMissingHuntMarkers,
   setHuntReportFields,
   setHuntReportSubmitted,
   type NewHuntReport,
@@ -126,6 +131,21 @@ describe("createHuntReport", () => {
     expect(await HuntReport.countDocuments()).toBe(0);
     const uploadsDir = process.env.UPLOADS_DIR!;
     expect(readdirSync(uploadsDir)).toHaveLength(0);
+  });
+
+  test("cleans up the report, marker and photo when a step after the marker fails", async () => {
+    const user = await makeUser("merida");
+    const spy = spyOn(HuntReport, "find").mockImplementationOnce((() => {
+      throw new Error("boom");
+    }) as never);
+    try {
+      await expect(createHuntReport(input({ location: [5.9, 52.2] }), user)).rejects.toThrow("boom");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await HuntReport.countDocuments()).toBe(0);
+    expect(await Marker.countDocuments()).toBe(0);
+    expect(readdirSync(process.env.UPLOADS_DIR!)).toHaveLength(0);
   });
 
   test("a duplicate code is accepted and flagged with the first reporter", async () => {
@@ -451,5 +471,214 @@ describe("listHuntReports", () => {
     await createHuntReport(input({ huntCode: undefined, huntTime: undefined }), merida);
     const views = await listHuntReports();
     expect(views.map((view) => view.huntCode)).toEqual([null, "OLD1"]);
+  });
+});
+
+/** Let the service load the report, then run `meanwhile` (a concurrent request) before it continues. */
+function afterLoad(meanwhile: () => Promise<unknown>) {
+  const original = HuntReport.findById.bind(HuntReport);
+  return spyOn(HuntReport, "findById").mockImplementationOnce(((id: string) =>
+    original(id).then(async (report) => {
+      await meanwhile();
+      return report;
+    })) as never);
+}
+
+describe("races with a concurrent request", () => {
+  test("a report submitted after the delete loaded it is not deleted: 409", async () => {
+    const merida = await makeUser("merida");
+    const admin = await makeUser("admin", true);
+    const report = await createHuntReport(input({ location: [5.9, 52.2] }), merida);
+    const spy = afterLoad(() => HuntReport.updateOne({ _id: report._id }, { $set: { submittedAt: new Date() } }));
+    await expectReportError(deleteHuntReport(report._id, admin), 409);
+    spy.mockRestore();
+    expect(await HuntReport.countDocuments()).toBe(1);
+    expect(await Marker.countDocuments()).toBe(1);
+    expect(existsSync(await huntReportPhotoPath(report._id))).toBe(true);
+  });
+
+  test("a report linked to jotihunt.nl after the delete loaded it is not deleted: 409", async () => {
+    const merida = await makeUser("merida");
+    const admin = await makeUser("admin", true);
+    const report = await createHuntReport(input(), merida);
+    const spy = afterLoad(() => linkScrapedHunts([{ huntCode: "Gy3M8XI", status: "Goedgekeurd", points: 5 }]));
+    await expectReportError(deleteHuntReport(report._id, admin), 409);
+    spy.mockRestore();
+    expect(await HuntReport.countDocuments()).toBe(1);
+  });
+
+  test("a report deleted by someone else meanwhile: 404", async () => {
+    const merida = await makeUser("merida");
+    const admin = await makeUser("admin", true);
+    const report = await createHuntReport(input(), merida);
+    const spy = afterLoad(() => HuntReport.deleteOne({ _id: report._id }));
+    await expectReportError(deleteHuntReport(report._id, admin), 404);
+    spy.mockRestore();
+  });
+
+  test("PATCH, submitted and read of a report deleted meanwhile answer 404, not 500", async () => {
+    const merida = await makeUser("merida");
+    const admin = await makeUser("admin", true);
+    const edits = [
+      (id: string) => setHuntReportFields(id, { huntCode: "NEW1", huntTime: new Date("2026-10-17T15:00:00Z") }, admin),
+      (id: string) => setHuntReportSubmitted(id, true, admin),
+      (id: string) => requestHuntReportRead(id, admin),
+    ];
+    for (const edit of edits) {
+      const report = await createHuntReport(input({ location: [5.9, 52.2] }), merida);
+      const spy = afterLoad(() => HuntReport.deleteOne({ _id: report._id }));
+      await expectReportError(edit(report._id), 404);
+      spy.mockRestore();
+    }
+  });
+
+  test("concurrent time edits leave the marker at the report's final time", async () => {
+    const merida = await makeUser("merida");
+    const admin = await makeUser("admin", true);
+    for (let round = 0; round < 5; round++) {
+      const report = await createHuntReport(input({ location: [5.9, 52.2] }), merida);
+      await Promise.all([
+        ...Array.from({ length: 8 }, (_, i) => setHuntReportFields(report._id, { huntTime: new Date(`2026-10-17T14:${10 + i}:00Z`) }, admin)),
+        requestHuntReportRead(report._id, admin),
+      ]);
+      const stored = (await HuntReport.findById(report._id).lean())!;
+      const marker = (await Marker.findById(stored.markerId).lean())!;
+      const expected = new Date(stored.huntTime ?? stored.createdAt);
+      expected.setSeconds(0, 0);
+      expect(marker.time.toISOString()).toBe(expected.toISOString());
+    }
+  });
+
+  test("a time edit finishing first never leaves its older time on the marker", async () => {
+    const merida = await makeUser("merida");
+    const admin = await makeUser("admin", true);
+    const report = await createHuntReport(input({ location: [5.9, 52.2] }), merida);
+    const original = Marker.updateOne.bind(Marker);
+    // Edit A saved 14:10; before A moves the marker, edit B saves and moves it to 14:20; then A's marker update lands
+    const spy = spyOn(Marker, "updateOne").mockImplementationOnce((async (...args: Parameters<typeof original>) => {
+      await setHuntReportFields(report._id, { huntTime: new Date("2026-10-17T14:20:00Z") }, admin);
+      return original(...args);
+    }) as never);
+    await setHuntReportFields(report._id, { huntTime: new Date("2026-10-17T14:10:00Z") }, admin);
+    spy.mockRestore();
+    const stored = (await HuntReport.findById(report._id).lean())!;
+    expect(stored.huntTime!.toISOString()).toBe("2026-10-17T14:20:00.000Z");
+    expect((await Marker.findById(stored.markerId).lean())!.time.toISOString()).toBe("2026-10-17T14:20:00.000Z");
+  });
+
+  test("a code change clears a scraped result for the old code stored after the report was loaded", async () => {
+    const merida = await makeUser("merida");
+    const admin = await makeUser("admin", true);
+    const report = await createHuntReport(input({ huntCode: "OLD1" }), merida);
+    const spy = afterLoad(() => linkScrapedHunts([{ huntCode: "OLD1", status: "Goedgekeurd", points: 5 }]));
+    await setHuntReportFields(report._id, { huntCode: "NEW1" }, admin);
+    spy.mockRestore();
+    const [view] = await listHuntReports();
+    expect(view).toMatchObject({ huntCode: "NEW1", site: null });
+  });
+
+  test("a scraped result is not stored on a report whose code was changed meanwhile", async () => {
+    const merida = await makeUser("merida");
+    const admin = await makeUser("admin", true);
+    const report = await createHuntReport(input({ huntCode: "OLD1" }), merida);
+    const original = HuntReport.bulkWrite.bind(HuntReport);
+    const spy = spyOn(HuntReport, "bulkWrite").mockImplementationOnce((async (...args: Parameters<typeof original>) => {
+      await setHuntReportFields(report._id, { huntCode: "NEW1" }, admin);
+      return original(...args);
+    }) as never);
+    expect(await linkScrapedHunts([{ huntCode: "OLD1", status: "Goedgekeurd", points: 5 }])).toBe(0);
+    spy.mockRestore();
+    const [view] = await listHuntReports();
+    expect(view).toMatchObject({ huntCode: "NEW1", site: null });
+  });
+});
+
+describe("crash safety of uploads", () => {
+  test("the report exists before its marker is created", async () => {
+    const merida = await makeUser("merida");
+    let reportsWhenMarkerCreated = -1;
+    const original = Marker.create.bind(Marker);
+    const spy = spyOn(Marker, "create").mockImplementationOnce((async (...args: unknown[]) => {
+      reportsWhenMarkerCreated = await HuntReport.countDocuments({ markerId: { $exists: true } });
+      return (original as (...a: unknown[]) => unknown)(...args);
+    }) as never);
+    const view = await createHuntReport(input({ location: [5.9, 52.2] }), merida);
+    spy.mockRestore();
+    expect(reportsWhenMarkerCreated).toBe(1);
+    const stored = (await HuntReport.findById(view._id).lean())!;
+    expect(String((await Marker.findOne().lean())!._id)).toBe(String(stored.markerId));
+  });
+
+  test("restoreMissingHuntMarkers recreates a marker lost between report and marker, not for fresh or unlinked reports", async () => {
+    const merida = await makeUser("merida");
+    const lost = await createHuntReport(input({ location: [5.9, 52.2] }), merida);
+    const fresh = await createHuntReport(input({ huntCode: "FRESH", location: [5.8, 52.1] }), merida);
+    const unlinked = await createHuntReport(input({ huntCode: "GONE", location: [5.7, 52.0] }), merida);
+    const kept = await createHuntReport(input({ huntCode: "KEPT", location: [5.6, 51.9] }), merida);
+    const lostMarkerId = (await HuntReport.findById(lost._id).lean())!.markerId;
+    await Marker.deleteMany({ _id: { $ne: (await HuntReport.findById(kept._id).lean())!.markerId } });
+    await HuntReport.updateOne({ _id: unlinked._id }, { $unset: { markerId: 1 } });
+    // Only the fresh report was stored just now
+    await HuntReport.collection.updateMany({ _id: { $ne: new mongoose.Types.ObjectId(fresh._id) } }, { $set: { createdAt: new Date(Date.now() - 10 * 60_000) } });
+    expect(await restoreMissingHuntMarkers()).toBe(1);
+    const markers = await Marker.find().lean();
+    expect(markers).toHaveLength(2);
+    const restored = markers.find((marker) => String(marker._id) === String(lostMarkerId))!;
+    expect(restored).toMatchObject({ area: "alpha", type: MarkerType.Hunt });
+    expect(restored.time.toISOString()).toBe("2026-10-17T12:03:00.000Z");
+    expect(restored.location!.coordinates).toEqual([5.9, 52.2]);
+    expect(await restoreMissingHuntMarkers()).toBe(0);
+  });
+
+  /** A photo file in the uploads directory, `ageMs` old */
+  function photoFile(name: string, ageMs: number, dir = process.env.UPLOADS_DIR!) {
+    mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, name);
+    writeFileSync(file, "x");
+    const time = new Date(Date.now() - ageMs);
+    utimesSync(file, time, time);
+    return file;
+  }
+
+  test("removeOrphanPhotos removes old photos without a report only", async () => {
+    const merida = await makeUser("merida");
+    const report = await createHuntReport(input(), merida);
+    const kept = await huntReportPhotoPath(report._id);
+    utimesSync(kept, new Date(0), new Date(0));
+    const orphan = photoFile("orphan.jpg", ORPHAN_PHOTO_AGE_MS + 60_000);
+    const fresh = photoFile("uploading.jpg", 1_000);
+    const demo = photoFile("demo-photo.jpg", ORPHAN_PHOTO_AGE_MS + 60_000, path.join(process.env.UPLOADS_DIR!, "demo"));
+    expect(await removeOrphanPhotos()).toBe(1);
+    expect(existsSync(orphan)).toBe(false);
+    expect(existsSync(kept)).toBe(true);
+    expect(existsSync(fresh)).toBe(true);
+    expect(existsSync(demo)).toBe(true);
+  });
+
+  test("removeOrphanPhotos never runs on a database without reports, nor without a directory", async () => {
+    expect(await removeOrphanPhotos()).toBe(0);
+    const orphan = photoFile("orphan.jpg", ORPHAN_PHOTO_AGE_MS + 60_000);
+    expect(await removeOrphanPhotos()).toBe(0);
+    expect(existsSync(orphan)).toBe(true);
+  });
+});
+
+describe("listHuntReports from lean documents", () => {
+  test("gives exactly the views built from full documents", async () => {
+    const merida = await makeUser("merida");
+    const admin = await makeUser("admin", true);
+    const first = await createHuntReport(input({ huntCode: "DUP1", location: [5.9, 52.2], uploadId: "u1" }), merida);
+    await createHuntReport(input({ huntCode: "DUP1" }), merida);
+    const unread = await createHuntReport(input({ huntCode: undefined, huntTime: undefined }), merida);
+    await HuntReport.updateOne({ _id: unread._id }, { $set: { ocr: { status: "failed", attempts: 3, error: "Lezen mislukt.", codeConfidence: 0.4, timeConfidence: 0.2, stickerBox: [1, 2, 3, 4], rawTime: "11:00", readAt: new Date() } } });
+    await setHuntReportSubmitted(first._id, true, admin);
+    await linkScrapedHunts([{ huntCode: "DUP1", status: "Goedgekeurd", points: 5 }]);
+    await HuntReport.collection.insertOne({ area: "bravo", huntCode: "OLD1", huntTime, photo: "old.jpg", reportedBy: merida._id, reportedByName: "merida", createdAt: huntTime });
+
+    const now = new Date("2026-10-17T12:10:00Z");
+    const documents = await HuntReport.find();
+    const expected = await Promise.all(documents.map(async (report) => toHuntReportView(report, now, await findDuplicateOf(report))));
+    expected.sort((a, b) => b.huntTime.localeCompare(a.huntTime));
+    expect(await listHuntReports(now)).toEqual(expected);
   });
 });

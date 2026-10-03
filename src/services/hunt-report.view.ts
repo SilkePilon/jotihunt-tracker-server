@@ -1,4 +1,4 @@
-import { HuntReport, type HuntReportDocument } from "../models/hunt-report.model";
+import { HuntReport, type HuntReportRecord } from "../models/hunt-report.model";
 import {
   effectiveHuntTime,
   fieldSource,
@@ -43,11 +43,22 @@ export interface HuntReportView {
   duplicateOf: DuplicateOf | null;
 }
 
-export function createdAtOf(report: HuntReportDocument): Date {
-  return report.get("createdAt") as Date;
+/** The stored fields the view is built from: a hydrated document, or a lean object selected with VIEW_FIELDS. */
+export type HuntReportViewSource = Pick<
+  HuntReportRecord,
+  "_id" | "area" | "huntCode" | "huntTime" | "huntCodeSource" | "huntTimeSource" | "reportedBy" | "reportedByName" | "submittedAt" | "submittedByName" | "site" | "ocr"
+>;
+
+/** Projection for lean queries feeding toHuntReportView (and compareAge) */
+export const VIEW_FIELDS =
+  "area huntCode huntTime huntCodeSource huntTimeSource reportedBy reportedByName submittedAt submittedByName site createdAt ocr.status ocr.error ocr.codeConfidence ocr.timeConfidence ocr.stickerBox";
+
+/** Upload time (timestamps); a document getter or a lean field */
+export function createdAtOf(report: object): Date {
+  return (report as { createdAt: Date }).createdAt;
 }
 
-export function toHuntReportView(report: HuntReportDocument, now: Date, duplicateOf: DuplicateOf | null = null): HuntReportView {
+export function toHuntReportView(report: HuntReportViewSource, now: Date, duplicateOf: DuplicateOf | null = null): HuntReportView {
   const id = report._id.toString();
   const huntTime = effectiveHuntTime({ huntTime: report.huntTime, createdAt: createdAtOf(report) });
   const ocr = report.ocr ?? null;
@@ -79,14 +90,14 @@ export function toHuntReportView(report: HuntReportDocument, now: Date, duplicat
 }
 
 /** Oldest first; the first report with a code is the original, later ones are duplicates. */
-export function compareAge(a: HuntReportDocument, b: HuntReportDocument): number {
+export function compareAge(a: Pick<HuntReportRecord, "_id">, b: Pick<HuntReportRecord, "_id">): number {
   return createdAtOf(a).getTime() - createdAtOf(b).getTime() || a._id.toString().localeCompare(b._id.toString());
 }
 
 /** The oldest other report with exactly the same code, when this report is not the oldest itself. */
-export async function findDuplicateOf(report: HuntReportDocument): Promise<DuplicateOf | null> {
+export async function findDuplicateOf(report: Pick<HuntReportRecord, "_id" | "huntCode">): Promise<DuplicateOf | null> {
   if (!report.huntCode) return null;
-  const [first] = (await HuntReport.find({ huntCode: report.huntCode })).sort(compareAge);
+  const [first] = (await HuntReport.find({ huntCode: report.huntCode }).select("_id reportedByName createdAt").lean()).sort(compareAge);
   if (!first || first._id.equals(report._id)) return null;
   return { id: first._id.toString(), reportedByName: first.reportedByName };
 }
