@@ -37,6 +37,9 @@ export class DemoSwitchBusyError extends Error {
 /** Max time a switch waits for running requests and tracked jobs; after that the switch is refused. */
 const DRAIN_TIMEOUT_MS = 10_000;
 let drainTimeoutMs = DRAIN_TIMEOUT_MS;
+/** A request whose client is gone counts at most this long after the disconnect when its handler never responds. */
+const ABANDONED_REQUEST_MS = 30_000;
+let abandonedRequestMs = ABANDONED_REQUEST_MS;
 
 const DISABLED_STATE: DemoState = Object.freeze({ enabled: false, enabledAt: null, startedAt: null });
 
@@ -86,10 +89,14 @@ export function getDemoState(): DemoState {
  * Open the DemoState store in the real database and connect the default Mongoose connection: to the real database, or,
  * when demo mode was left on, to a freshly generated demo database.
  */
-export async function initDemoMode(uri: string, options: { logger?: DemoLogger; /** tests only */ drainTimeoutMs?: number } = {}): Promise<DemoState> {
+export async function initDemoMode(
+  uri: string,
+  options: { logger?: DemoLogger; /** tests only */ drainTimeoutMs?: number; /** tests only */ abandonedRequestMs?: number } = {},
+): Promise<DemoState> {
   if (store) throw new Error("Demo mode is already initialised");
   log = options.logger ?? noopLogger;
   drainTimeoutMs = options.drainTimeoutMs ?? DRAIN_TIMEOUT_MS;
+  abandonedRequestMs = options.abandonedRequestMs ?? ABANDONED_REQUEST_MS;
   realUri = uri;
   demoDbName(uri); // refuse to run with an unusable demo database name
   store = await openDemoStateStore(uri);
@@ -133,13 +140,40 @@ export function switchDemoMode(enabled: boolean, user?: { _id: unknown } | null)
 
 /**
  * Express middleware (mount before the routes): requests wait for a running switch and are counted, so a switch
- * waits for them before it disconnects the database.
+ * waits for them before it disconnects the database. A request counts until its handler responded (res.end), also
+ * when the client gave up earlier: the handler may still be writing. A request whose client is gone and whose handler
+ * never responds stops counting after a while, so it can't block switching forever.
  */
 export function demoGate(req: Request, res: Response, next: NextFunction) {
   const start = () => {
     const finish = beginWork();
-    res.on("finish", finish);
-    res.on("close", finish);
+    let released = false;
+    let abandonedTimer: ReturnType<typeof setTimeout> | undefined;
+    const release = () => {
+      released = true;
+      clearTimeout(abandonedTimer);
+      finish();
+    };
+    res.on("finish", release);
+    res.on("close", () => {
+      if (released || abandonedTimer) return;
+      if (res.writableFinished) return release();
+      abandonedTimer = setTimeout(() => {
+        log.warn(`${req.method} ${req.originalUrl} (client gone) still running after ${abandonedRequestMs / 1000} s; no longer delays a demo switch`);
+        released = true;
+        finish();
+      }, abandonedRequestMs);
+      abandonedTimer.unref?.();
+    });
+    // The handler is done once it responds, whether or not the client is still there to receive it
+    const end = res.end;
+    if (typeof end === "function") {
+      res.end = function (this: Response, ...args: Parameters<Response["end"]>) {
+        const result = end.apply(this, args);
+        release();
+        return result;
+      } as Response["end"];
+    }
     next();
   };
   if (!switching) return start();
