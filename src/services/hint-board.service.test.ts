@@ -203,19 +203,74 @@ describe("solveCell", () => {
     await expectBoardError(solveCell(1, "golf", user._id, "doedelzak"), 404);
   });
 
-  test("only one of two concurrent RD solves on the same cell wins", async () => {
+  test("concurrent RD solves leave one marker at the stored answer", async () => {
     const [a, b] = await Promise.all([makeUser("a"), makeUser("b"), makeCell()]);
     const results = await Promise.allSettled([
       solveCell(1, "alpha", a._id, "2126 4692"),
       solveCell(1, "alpha", b._id, "2000 4700"),
     ]);
-    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
-    const rejected = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
-    expect(rejected.reason).toBeInstanceOf(ServiceError);
-    expect((rejected.reason as ServiceError).status).toBe(409);
-    expect(await Marker.countDocuments({ type: MarkerType.Hint })).toBe(1);
+    expect(results.some((r) => r.status === "fulfilled")).toBe(true);
+    for (const result of results) {
+      if (result.status === "rejected") expect((result.reason as ServiceError).status).toBe(409);
+    }
+    await expectConsistent("alpha");
+  });
+
+  test("RD vs RD on a cell with a marker: the marker always ends at the stored answer", async () => {
+    const users = await Promise.all(Array.from({ length: 8 }, (_, i) => makeUser(`u${i}`)));
+    await makeCell();
+    for (let round = 0; round < 5; round++) {
+      await solveCell(1, "alpha", users[0]._id, "155000 463000");
+      await Promise.all(users.map((user, i) => solveCell(1, "alpha", user._id, `${150000 + i * 100 + round} ${460000 + i * 100}`)));
+      await expectConsistent("alpha");
+    }
+  });
+
+  test("RD vs word on a fresh cell leaves no orphan hint marker", async () => {
+    const [a, b] = await Promise.all([makeUser("a"), makeUser("b"), makeCell()]);
+    for (let round = 0; round < 12; round++) {
+      await HintCell.updateOne({ area: "alpha" }, { $set: { status: HintCellStatus.Open }, $unset: { answer: 1, answerKind: 1, answerLocation: 1, markerId: 1 } });
+      await Marker.deleteMany({});
+      await Promise.all([
+        solveCell(1, "alpha", a._id, "155000 463000"),
+        Bun.sleep(round % 4).then(() => solveCell(1, "alpha", b._id, "woord")),
+      ]);
+      await expectConsistent("alpha");
+    }
+  });
+
+  test("a deleted hint marker is recreated on the next solve", async () => {
+    const user = await makeUser("merida");
+    await makeCell();
+    const first = await solveCell(1, "alpha", user._id, "2126 4692");
+    await Marker.deleteOne({ _id: first.markerId });
+    const again = await solveCell(1, "alpha", user._id, "2000 4700");
+    expect(String(again.markerId)).not.toBe(String(first.markerId));
+    await expectConsistent("alpha");
+  });
+
+  test("anyone may answer a cell claimed by someone else (\"Toch een antwoord invullen\")", async () => {
+    const [a, b] = await Promise.all([makeUser("a"), makeUser("b"), makeCell()]);
+    await claimCell(1, "alpha", a._id);
+    const cell = await solveCell(1, "alpha", b._id, "doedelzak");
+    expect(cell.status).toBe(HintCellStatus.Solved);
+    expect((cell.claimedBy as unknown as { name: string }).name).toBe("b");
   });
 });
+
+/** The cell's marker matches its stored answer; no hint markers are left for a word answer. */
+async function expectConsistent(area: string) {
+  const cell = await HintCell.findOne({ articleId: 1, area }).lean();
+  const markers = await Marker.find({ type: MarkerType.Hint, area, time: slotTime }).lean();
+  if (cell!.answerKind === "rd") {
+    expect(markers).toHaveLength(1);
+    expect(String(markers[0]._id)).toBe(String(cell!.markerId));
+    expect(markers[0].location.coordinates).toEqual(cell!.answerLocation!);
+  } else {
+    expect(markers).toHaveLength(0);
+    expect(cell!.markerId).toBeFalsy();
+  }
+}
 
 describe("setCheck, addNote, setStatus", () => {
   test("setCheck records who checked", async () => {
@@ -249,8 +304,53 @@ describe("setCheck, addNote, setStatus", () => {
     const user = await makeUser("merida");
     await makeCell();
     await claimCell(1, "alpha", user._id);
-    const cell = await setStatus(1, "alpha", HintCellStatus.None);
+    const cell = await setStatus(1, "alpha", HintCellStatus.None, { _id: user._id, admin: false });
     expect(cell.status).toBe(HintCellStatus.None);
     expect(cell.claimedBy).toBeFalsy();
+    expect((await setStatus(1, "alpha", HintCellStatus.Open, { _id: user._id, admin: false })).status).toBe(HintCellStatus.Open);
+  });
+
+  test("setStatus on a cell claimed by someone else: 409 with the claimer, admins may", async () => {
+    const [a, b, admin] = await Promise.all([makeUser("a"), makeUser("b"), makeUser("admin", true), makeCell()]);
+    await claimCell(1, "alpha", a._id);
+    const error = await expectBoardError(setStatus(1, "alpha", HintCellStatus.None, { _id: b._id, admin: false }), 409);
+    expect(error.message).toBe("Dit vak is niet door jou geclaimd");
+    expect((error.details.claimedBy as { name: string }).name).toBe("a");
+    expect((await HintCell.findOne({ area: "alpha" }).lean())!.status).toBe(HintCellStatus.Solving);
+    expect((await setStatus(1, "alpha", HintCellStatus.None, { _id: admin._id, admin: true })).status).toBe(HintCellStatus.None);
+  });
+
+  test("setStatus on an unclaimed open cell works for anyone", async () => {
+    const user = await makeUser("merida");
+    await makeCell();
+    expect((await setStatus(1, "alpha", HintCellStatus.None, { _id: user._id, admin: false })).status).toBe(HintCellStatus.None);
+  });
+
+  test("setStatus leaves a solved cell alone; an admin clears answer and marker", async () => {
+    const [user, admin] = await Promise.all([makeUser("merida"), makeUser("admin", true), makeCell()]);
+    await solveCell(1, "alpha", user._id, "2126 4692");
+    await expectBoardError(setStatus(1, "alpha", HintCellStatus.None, { _id: user._id, admin: false }), 409);
+    const cell = await setStatus(1, "alpha", HintCellStatus.None, { _id: admin._id, admin: true });
+    expect(cell.status).toBe(HintCellStatus.None);
+    expect(cell.answer).toBeFalsy();
+    expect(cell.answerKind).toBeFalsy();
+    expect(cell.answerLocation).toBeFalsy();
+    expect(cell.markerId).toBeFalsy();
+    expect(await Marker.countDocuments()).toBe(0);
+  });
+
+  test("solve vs status none: never a non-solved cell with an answer", async () => {
+    const users = await Promise.all(Array.from({ length: 6 }, (_, i) => makeUser(`u${i}`)));
+    await makeCell();
+    for (let round = 0; round < 6; round++) {
+      await HintCell.updateOne({ area: "alpha" }, { $set: { status: HintCellStatus.Open }, $unset: { answer: 1, answerKind: 1, claimedBy: 1 } });
+      await Promise.allSettled(
+        users.map((user, i) =>
+          i % 2 ? solveCell(1, "alpha", user._id, `woord${i}`) : setStatus(1, "alpha", HintCellStatus.None, { _id: user._id, admin: false }),
+        ),
+      );
+      const cell = await HintCell.findOne({ area: "alpha" }).lean();
+      if (cell!.status !== HintCellStatus.Solved) expect(cell!.answer).toBeFalsy();
+    }
   });
 });
