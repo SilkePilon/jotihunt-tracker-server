@@ -8,6 +8,17 @@ import { installDemoWorld } from "./demo/demo-world";
 import { huntOcr } from "./services/hunt-ocr.instance";
 import { isTraccarConfigured, usesLegacyTraccarEnv } from "./services/traccar-http";
 
+// A forgotten promise rejection is logged and the server keeps running; after an uncaught exception the process state
+// is unknown, so log it and exit (docker restarts the server in a second or two)
+process.on("unhandledRejection", (reason) => {
+  logger.error("Unhandled promise rejection", reason instanceof Error ? reason : { reason: String(reason) });
+});
+process.on("uncaughtException", (error) => {
+  logger.error("Uncaught exception, exiting", error);
+  // Give the file transports a moment to write the line
+  setTimeout(() => process.exit(1), 500);
+});
+
 if (debug) logger.warn("Debug mode enabled");
 logger.info("Starting Jotihunt tracker...");
 
