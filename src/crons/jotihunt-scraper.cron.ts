@@ -3,7 +3,25 @@ import { currentGeneration, runTracked, skipInDemoMode } from "../demo/demo-mode
 import { Hunt } from "../models/hunt.model";
 import { closeScraper, scrapeHunts } from "../services/jotihunt-scraper.service";
 import { linkScrapedHunts } from "../services/hunt-report-sync.service";
+import { deadline } from "../services/http-limits";
 import { WebHunt } from "../types/api";
+
+/** A whole scrape (browser start, login, page load) may take this long; then the browser is closed and the run ends */
+export const SCRAPE_DEADLINE_MS = 120_000;
+
+/**
+ * Store the scraped hunts: upsert by hunt code, and drop hunts the website no longer lists only when the answer looks
+ * complete. An empty list, or one less than half as long as what is stored (a broken or half-loaded page), keeps
+ * every stored hunt.
+ */
+export async function storeHunts(hunts: ({ huntCode: string } & Record<string, unknown>)[]): Promise<{ deleted: boolean }> {
+  if (hunts.length === 0) return { deleted: false };
+  await Hunt.bulkWrite(hunts.map((hunt) => ({ updateOne: { filter: { huntCode: hunt.huntCode }, update: { $set: hunt as Record<string, unknown> }, upsert: true } })));
+  const stored = await Hunt.countDocuments();
+  if (hunts.length * 2 < stored) return { deleted: false };
+  await Hunt.deleteMany({ huntCode: { $nin: hunts.map((hunt) => hunt.huntCode) } });
+  return { deleted: true };
+}
 
 export default async function scrapeJotihuntWebsite() {
   if (skipInDemoMode("jotihunt-scraper", (message) => logger.debug(message))) {
@@ -17,11 +35,16 @@ export default async function scrapeJotihuntWebsite() {
 
   let webHunts: WebHunt[];
   try {
-    webHunts = await scrapeHunts();
+    webHunts = await deadline(scrapeHunts(), SCRAPE_DEADLINE_MS, `Scraping took longer than ${SCRAPE_DEADLINE_MS / 1000} s`);
   } catch (error) {
     // Start from a fresh browser next run; a broken page or login would otherwise keep failing
     await closeScraper();
-    throw error;
+    logger.error(`(CRON) Scraping hunts failed: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+  if (webHunts.length === 0) {
+    logger.debug("(CRON) The hunts table is empty; stored hunts are kept");
+    return;
   }
 
   const hunts = webHunts.map((webHunt) => {
@@ -39,15 +62,17 @@ export default async function scrapeJotihuntWebsite() {
   await runTracked(
     async () => {
       // Upsert by hunt code and drop hunts the website no longer lists: /hunts is never briefly empty
-      await Hunt.bulkWrite(hunts.map((hunt) => ({ updateOne: { filter: { huntCode: hunt.huntCode }, update: { $set: hunt as Record<string, unknown> }, upsert: true } })))
-        .then(() => Hunt.deleteMany({ huntCode: { $nin: hunts.map((hunt) => hunt.huntCode) } }))
+      await storeHunts(hunts)
+        .then(({ deleted }) => {
+          if (!deleted) logger.warn(`(CRON) Scraped only ${hunts.length} hunts, far fewer than stored; kept the stored hunts`);
+        })
         .catch((error) => {
-          logger.error("(CRON) Error storing hunts in database:", error);
+          logger.error(`(CRON) Error storing hunts in database: ${error instanceof Error ? error.message : String(error)}`);
         });
 
       // Copy status and points to the app's own reports; they keep them after the scraper forgets older hunts
       await linkScrapedHunts(webHunts).catch((error) => {
-        logger.error("(CRON) Error linking scraped hunts to hunt reports:", error);
+        logger.error(`(CRON) Error linking scraped hunts to hunt reports: ${error instanceof Error ? error.message : String(error)}`);
       });
     },
     { generation },
