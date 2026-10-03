@@ -3,6 +3,7 @@ import * as authController from "../controllers/auth.controller";
 import { body } from "express-validator";
 import verifyToken from "../middleware/auth.middleware";
 import { validate } from "../middleware/validate.middleware";
+import { limitFailures } from "../middleware/rate-limit";
 
 // Validators
 const loginValidator = [
@@ -23,9 +24,18 @@ const tutorialValidator = [
   body("version").isInt({ min: 0 }).withMessage("Versie moet een getal van 0 of hoger zijn.").toInt(),
 ];
 
+// Brute-force protection: 10 wrong passwords per address and e-mail per 15 minutes. Keyed on both, so a whole
+// team logging in behind one NAT/proxy address is not locked out by one person mistyping.
+const loginLimiter = limitFailures({
+  windowMs: 15 * 60 * 1000,
+  maxFailures: 10,
+  failureStatus: 401,
+  key: (req) => `${req.ip}|${String(req.body?.email ?? "").trim().toLowerCase()}`,
+});
+
 const router = express.Router();
 
-router.post("/login", validate(loginValidator), authController.login);
+router.post("/login", loginLimiter, validate(loginValidator), authController.login);
 router.post("/update-password", [verifyToken, validate(updatePasswordValidator)], authController.updatePassword);
 router.post("/tutorial", [verifyToken, validate(tutorialValidator)], authController.updateTutorial);
 
