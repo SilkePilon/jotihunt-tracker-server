@@ -1,4 +1,5 @@
 import axios from "axios";
+import { describeHttpError, MB, withTotalDeadline } from "./http-limits";
 
 // Shared axios client for the Traccar REST API. Kept free of the logger import so services can use it.
 // TRACCARR_* is the old, misspelled name; still read so existing .env files keep working
@@ -8,20 +9,21 @@ const apiToken = process.env.TRACCAR_API_TOKEN ?? process.env.TRACCARR_API_TOKEN
 
 export const isTraccarConfigured = Boolean(apiUrl && apiToken);
 
-export const traccarHttp = axios.create({
-  baseURL: apiUrl,
-  timeout: 10_000,
-  headers: {
-    Authorization: `Bearer ${apiToken}`,
-  },
-});
+/** Total time per Traccar request (axios' own timeout is idle-only under Bun) */
+export const TRACCAR_DEADLINE_MS = 10_000;
 
-/** Drop the query string: Traccar requests can carry ids, but never put secrets there either way. */
-function withoutQuery(url: string | undefined): string {
-  if (!url) return "?";
-  const index = url.indexOf("?");
-  return index === -1 ? url : url.slice(0, index);
-}
+export const traccarHttp = withTotalDeadline(
+  axios.create({
+    baseURL: apiUrl,
+    timeout: TRACCAR_DEADLINE_MS,
+    maxContentLength: 5 * MB,
+    maxBodyLength: 5 * MB,
+    headers: {
+      Authorization: `Bearer ${apiToken}`,
+    },
+  }),
+  TRACCAR_DEADLINE_MS,
+);
 
 /**
  * Summarise a Traccar request failure for logging, without the Authorization header or any
@@ -29,13 +31,7 @@ function withoutQuery(url: string | undefined): string {
  * (network/timeout failure, e.g. ECONNREFUSED).
  */
 export function describeTraccarError(error: unknown): string {
-  if (axios.isAxiosError(error)) {
-    const method = error.config?.method?.toUpperCase() ?? "?";
-    const url = withoutQuery(error.config?.url);
-    const outcome = error.response?.status ?? error.code ?? "unknown error";
-    return `${method} ${url} → ${outcome}`;
-  }
-  return error instanceof Error ? error.message : String(error);
+  return describeHttpError(error);
 }
 
 /**
