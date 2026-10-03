@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { knownAreaName } from "../../constants/areas";
 import { Area } from "../../models/area.model";
 import { GroupVisit, VisitSource } from "../../models/group-visit.model";
 import { Marker } from "../../models/marker.model";
@@ -46,11 +47,11 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Lowercase names of all known areas (from the Jotihunt areas and the groups' areas). */
+/** Lowercase names of the areas in use (from the Jotihunt areas and the groups' areas); only the known areas (AREAS). */
 export async function listAreaNames(): Promise<string[]> {
   const [areaNames, teamAreas] = await Promise.all([Area.distinct("name"), Team.distinct("area")]);
-  const names = [...areaNames, ...teamAreas].filter((name): name is string => typeof name === "string" && name.trim().length > 0);
-  return [...new Set(names.map((name) => name.toLowerCase()))].sort();
+  const names = [...areaNames, ...teamAreas].map(knownAreaName).filter((name) => name !== null);
+  return [...new Set(names)].sort();
 }
 
 /** Everything the prediction needs from the database for one (lowercase) area. */

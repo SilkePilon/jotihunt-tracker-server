@@ -241,3 +241,81 @@ describe("recomputeDue", () => {
     expect(maxRunning).toBe(1);
   });
 });
+
+describe("Gemini circuit breaker", () => {
+  async function twoAreas() {
+    await alpha();
+    await setAreaStatus("Bravo", "green");
+    await makeTeam(3, "bravo", O);
+    await addObservation("bravo", at(0), O);
+  }
+
+  test("a 429 pauses Gemini for every area (2 min, then doubling); a success closes it", async () => {
+    await twoAreas();
+    let minutes = 0;
+    const calls: string[] = [];
+    const results: (Error | unknown)[] = [new GeminiError("Gemini-verzoek mislukt (HTTP 429)", true, 429), new GeminiError("Gemini-verzoek mislukt (HTTP 429)", true, 429), answer(), answer()];
+    const predictor: FoxPredictor = {
+      async predict(prompt) {
+        calls.push(prompt.includes('"area":"bravo"') ? "bravo" : "alpha");
+        const next = results.shift();
+        if (next instanceof Error) throw next;
+        return next;
+      },
+    };
+    const service = createPredictionService({ predictor, walkMinutes: walk, now: () => at(minutes), sleep: async () => {} });
+
+    await service.recomputeDue();
+    expect(calls).toEqual(["alpha"]); // bravo skipped: breaker open
+    const bravo = await Prediction.findOne({ area: "bravo" }).lean();
+    expect(bravo?.stale).toBe(true);
+    expect(bravo?.error).toContain("gepauzeerd");
+
+    minutes = 2.5; // pause (2 min) and per-area backoff over: one more 429 → pause 4 min
+    await service.recomputeDue();
+    expect(calls).toEqual(["alpha", "alpha"]);
+
+    minutes = 5; // still paused
+    await service.recomputeDue();
+    expect(calls).toEqual(["alpha", "alpha"]);
+
+    minutes = 7;
+    await service.recomputeDue();
+    expect(calls).toEqual(["alpha", "alpha", "alpha", "bravo"]);
+    expect((await Prediction.findOne({ area: "bravo" }).lean())?.stale).toBe(false);
+  });
+
+  test("timeouts (no status) also open the breaker; 400-type errors do not", async () => {
+    await twoAreas();
+    const timeout = fakePredictor([new GeminiError("Gemini niet bereikbaar", true), new GeminiError("Gemini niet bereikbaar", true)]);
+    await serviceAt(0, timeout.predictor).recomputeDue();
+    expect(timeout.prompts).toHaveLength(2); // alpha: first try + one retry; bravo skipped
+
+    await Prediction.deleteMany({});
+    const invalid = fakePredictor([new GeminiError("Gemini-verzoek mislukt (HTTP 400)", false, 400), answer()]);
+    await serviceAt(0, invalid.predictor).recomputeDue();
+    expect(invalid.prompts).toHaveLength(2);
+  });
+});
+
+describe("unknown areas", () => {
+  test("listPredictions only returns known areas; recomputeDue drops the others", async () => {
+    await alpha();
+    await Prediction.create([
+      { area: "alpha", updatedAt: at(0) },
+      { area: "area123", updatedAt: at(0) },
+    ]);
+    expect((await listPredictions()).map((prediction) => prediction.area)).toEqual(["alpha"]);
+    await serviceAt(0, fakePredictor([answer()]).predictor).recomputeDue();
+    expect(await Prediction.countDocuments({ area: "area123" })).toBe(0);
+  });
+
+  test("names that are not an area get no prediction", async () => {
+    await alpha();
+    await setAreaStatus("Area42", "green");
+    await makeTeam(9, "Zulu", O);
+    const { recomputed } = await serviceAt(0, fakePredictor([answer()]).predictor).recomputeDue();
+    expect(recomputed).toEqual(["alpha"]);
+    expect(await Prediction.countDocuments()).toBe(1);
+  });
+});
