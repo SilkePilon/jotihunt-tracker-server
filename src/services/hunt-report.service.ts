@@ -86,6 +86,7 @@ export async function createHuntReport(input: NewHuntReport, user: UserType): Pr
 
   let photo: string | null = null;
   let report: HuntReportDocument | null = null;
+  let markerCreated = false;
   // The report is stored before its marker, so a crash in between never leaves a hunt marker without a report
   const markerId = input.location ? new mongoose.Types.ObjectId() : undefined;
 
@@ -114,11 +115,13 @@ export async function createHuntReport(input: NewHuntReport, user: UserType): Pr
         type: MarkerType.Hunt,
         location: { type: "Point", coordinates: input.location },
       });
+      markerCreated = true;
     }
     return await viewOf(report);
   } catch (error) {
     // Clean up side effects
     if (report) await HuntReport.deleteOne({ _id: report._id }).catch(() => undefined);
+    if (markerCreated) await Marker.deleteOne({ _id: markerId }).catch(() => undefined);
     if (photo) await deletePhoto(photo).catch(() => undefined);
     // Two attempts of the same upload raced: return the one that won
     if (isDuplicateKeyError(error)) {

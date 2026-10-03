@@ -133,6 +133,21 @@ describe("createHuntReport", () => {
     expect(readdirSync(uploadsDir)).toHaveLength(0);
   });
 
+  test("cleans up the report, marker and photo when a step after the marker fails", async () => {
+    const user = await makeUser("merida");
+    const spy = spyOn(HuntReport, "find").mockImplementationOnce((() => {
+      throw new Error("boom");
+    }) as never);
+    try {
+      await expect(createHuntReport(input({ location: [5.9, 52.2] }), user)).rejects.toThrow("boom");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await HuntReport.countDocuments()).toBe(0);
+    expect(await Marker.countDocuments()).toBe(0);
+    expect(readdirSync(process.env.UPLOADS_DIR!)).toHaveLength(0);
+  });
+
   test("a duplicate code is accepted and flagged with the first reporter", async () => {
     const merida = await makeUser("merida");
     const mulan = await makeUser("mulan");
