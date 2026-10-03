@@ -27,7 +27,7 @@ export async function reloadTeams(_req: Request, res: Response) {
     logger.info(`Reloaded ${count} teams from the Jotihunt API`);
     return res.status(200).json({ message: "Teams reloaded", count });
   } catch (error) {
-    logger.error("Error reloading teams", error);
+    logger.error(`Error reloading teams: ${error instanceof Error ? error.message : String(error)}`);
     return res.status(502).json({ message: "Error reloading teams" });
   }
 }
