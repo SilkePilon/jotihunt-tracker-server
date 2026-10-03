@@ -101,7 +101,7 @@ describe("createHuntOcr", () => {
     expect(doc.huntTimeSource).toBe("ocr");
   });
 
-  test("stores the sticker box, also when code and time were entered by hand", async () => {
+  test("stores the sticker box, also when the code was entered by hand", async () => {
     const { reader } = fakeReader(reading);
     const { ocr } = setup(reader);
     const report = await upload({ huntCode: "Gy3M8XI" });
