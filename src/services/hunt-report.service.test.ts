@@ -549,6 +549,17 @@ describe("races with a concurrent request", () => {
     expect((await Marker.findById(stored.markerId).lean())!.time.toISOString()).toBe("2026-10-17T14:20:00.000Z");
   });
 
+  test("a code change clears a scraped result for the old code stored after the report was loaded", async () => {
+    const merida = await makeUser("merida");
+    const admin = await makeUser("admin", true);
+    const report = await createHuntReport(input({ huntCode: "OLD1" }), merida);
+    const spy = afterLoad(() => linkScrapedHunts([{ huntCode: "OLD1", status: "Goedgekeurd", points: 5 }]));
+    await setHuntReportFields(report._id, { huntCode: "NEW1" }, admin);
+    spy.mockRestore();
+    const [view] = await listHuntReports();
+    expect(view).toMatchObject({ huntCode: "NEW1", site: null });
+  });
+
   test("a scraped result is not stored on a report whose code was changed meanwhile", async () => {
     const merida = await makeUser("merida");
     const admin = await makeUser("admin", true);

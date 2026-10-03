@@ -174,8 +174,11 @@ export async function setHuntReportFields(id: string, fields: { huntCode?: strin
   if (fields.huntTime !== undefined && Number.isNaN(fields.huntTime.getTime())) throw new ServiceError(400, "Ongeldige tijd.");
   const report = await findReport(id);
   if (huntCode !== undefined) {
-    // The jotihunt.nl result belonged to the old code
-    if (huntCode !== report.huntCode) report.site = undefined;
+    if (huntCode !== report.huntCode) {
+      // The jotihunt.nl result belonged to the old code; always $unset, also one the scraper stored after this load
+      report.site = undefined;
+      report.markModified("site");
+    }
     report.huntCode = huntCode;
     report.huntCodeSource = "manual";
   }
