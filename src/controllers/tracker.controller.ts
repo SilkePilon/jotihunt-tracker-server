@@ -21,19 +21,22 @@ function traccarUnavailable(res: Response) {
   return res.status(503).json({ message: "Traccar is not configured" });
 }
 
+/** Traccar failed or answered nonsense: the service already logged the cause; never send internal error text */
+function traccarFailed(res: Response) {
+  return res.status(502).json({ message: "Traccar is niet bereikbaar, probeer het zo opnieuw." });
+}
+
 async function getDevices(_req: Request, res: Response) {
   // Demo mode: the simulated hunters instead of Traccar (positions follow the clock)
   if (isDemoMode()) return res.json(simulatedDevices(new Date(), vehicleGroups));
   if (!traccarService.isTraccarConfigured) return traccarUnavailable(res);
   try {
     const [devices, groups] = await Promise.all([traccarService.getDevices(), traccarService.getGroups()]);
-    devices.forEach((device) => {
-      const group = groups.find((group) => group.id === device.groupId);
-      device.groupName = group ? group.name : undefined;
-    });
-    res.json(devices);
-  } catch (error) {
-    res.status(500).send(error instanceof Error ? error.message : "Unknown error");
+    const groupNames = new Map(groups.map((group) => [group.id, group.name]));
+    // New objects: the device list is shared between requests for a moment
+    res.json(devices.map((device) => ({ ...device, groupName: groupNames.get(device.groupId) })));
+  } catch {
+    traccarFailed(res);
   }
 }
 
@@ -43,8 +46,8 @@ async function getPositions(_req: Request, res: Response) {
   try {
     const positions = await traccarService.getPositions();
     res.json(positions);
-  } catch (error) {
-    res.status(500).send(error instanceof Error ? error.message : "Unknown error");
+  } catch {
+    traccarFailed(res);
   }
 }
 

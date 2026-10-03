@@ -58,22 +58,42 @@ export interface TraccarGroup {
   name: string;
 }
 
-/** Devices change rarely; positions and devices are polled together, so share one fetch for a moment */
-const DEVICES_CACHE_MS = 2000;
-let devicesCache: { at: number; devices: Promise<TraccarDevice[]> } | undefined;
+/**
+ * Every hunter polls devices and positions; share one Traccar fetch per list for a moment
+ * (a failed fetch is not kept, the next call tries again).
+ */
+const SHARED_FETCH_MS = 2000;
+const sharedFetches = new Map<string, { at: number; list: Promise<unknown[]> }>();
+
+/** Tests only */
+export function clearTraccarCache() {
+  sharedFetches.clear();
+}
+
+/** GET a Traccar list, shared for SHARED_FETCH_MS; null and non-object entries are skipped. */
+function getList<T>(path: string): Promise<T[]> {
+  const cached = sharedFetches.get(path);
+  if (cached && Date.now() - cached.at < SHARED_FETCH_MS) return cached.list as Promise<T[]>;
+  const list = apiClient.get<unknown>(path).then((response) => {
+    if (!Array.isArray(response.data)) throw new Error(`GET ${path} → unexpected response`);
+    return response.data.filter((item): item is T => typeof item === "object" && item !== null);
+  });
+  const entry = { at: Date.now(), list };
+  sharedFetches.set(path, entry);
+  list.catch(() => {
+    if (sharedFetches.get(path) === entry) sharedFetches.delete(path);
+  });
+  return list;
+}
 
 /**
  * Function to get all devices from Traccar.
  * @returns {Promise<Array>} - A promise that resolves to an array of devices.
  */
 export async function getDevices(): Promise<Array<TraccarDevice>> {
-  if (devicesCache && Date.now() - devicesCache.at < DEVICES_CACHE_MS) return devicesCache.devices;
-  const devices = apiClient.get<TraccarDevice[]>("/api/devices").then((response) => response.data);
-  devicesCache = { at: Date.now(), devices };
   try {
-    return await devices;
+    return await getList<TraccarDevice>("/api/devices");
   } catch (error) {
-    devicesCache = undefined;
     logger.error(`Error fetching devices: ${describeTraccarError(error)}`);
     throw new Error("Could not fetch devices", { cause: error });
   }
@@ -85,9 +105,9 @@ export async function getDevices(): Promise<Array<TraccarDevice>> {
  */
 export async function getPositions(): Promise<Array<TraccarPosition>> {
   try {
-    const [devices, response] = await Promise.all([getDevices(), apiClient.get<TraccarPosition[]>("/api/positions")]);
+    const [devices, positions] = await Promise.all([getDevices(), getList<TraccarPosition>("/api/positions")]);
     const names = new Map(devices.map((device) => [device.id, device.name]));
-    return response.data.map((position: TraccarPosition) => ({
+    return positions.map((position: TraccarPosition) => ({
       ...position,
       deviceName: names.get(position.deviceId) ?? "Unknown Device",
     }));
@@ -103,8 +123,7 @@ export async function getPositions(): Promise<Array<TraccarPosition>> {
  */
 export async function getGroups(): Promise<Array<TraccarGroup>> {
   try {
-    const response = await apiClient.get<TraccarGroup[]>("/api/groups");
-    return response.data;
+    return await getList<TraccarGroup>("/api/groups");
   } catch (error) {
     logger.error(`Error fetching groups: ${describeTraccarError(error)}`);
     throw new Error("Could not fetch groups", { cause: error });
