@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import mongoose from "mongoose";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -17,6 +18,7 @@ import {
   ORPHAN_PHOTO_AGE_MS,
   removeOrphanPhotos,
   requestHuntReportRead,
+  restoreMissingHuntMarkers,
   setHuntReportFields,
   setHuntReportSubmitted,
   type NewHuntReport,
@@ -590,6 +592,27 @@ describe("crash safety of uploads", () => {
     expect(reportsWhenMarkerCreated).toBe(1);
     const stored = (await HuntReport.findById(view._id).lean())!;
     expect(String((await Marker.findOne().lean())!._id)).toBe(String(stored.markerId));
+  });
+
+  test("restoreMissingHuntMarkers recreates a marker lost between report and marker, not for fresh or unlinked reports", async () => {
+    const merida = await makeUser("merida");
+    const lost = await createHuntReport(input({ location: [5.9, 52.2] }), merida);
+    const fresh = await createHuntReport(input({ huntCode: "FRESH", location: [5.8, 52.1] }), merida);
+    const unlinked = await createHuntReport(input({ huntCode: "GONE", location: [5.7, 52.0] }), merida);
+    const kept = await createHuntReport(input({ huntCode: "KEPT", location: [5.6, 51.9] }), merida);
+    const lostMarkerId = (await HuntReport.findById(lost._id).lean())!.markerId;
+    await Marker.deleteMany({ _id: { $ne: (await HuntReport.findById(kept._id).lean())!.markerId } });
+    await HuntReport.updateOne({ _id: unlinked._id }, { $unset: { markerId: 1 } });
+    // Only the fresh report was stored just now
+    await HuntReport.collection.updateMany({ _id: { $ne: new mongoose.Types.ObjectId(fresh._id) } }, { $set: { createdAt: new Date(Date.now() - 10 * 60_000) } });
+    expect(await restoreMissingHuntMarkers()).toBe(1);
+    const markers = await Marker.find().lean();
+    expect(markers).toHaveLength(2);
+    const restored = markers.find((marker) => String(marker._id) === String(lostMarkerId))!;
+    expect(restored).toMatchObject({ area: "alpha", type: MarkerType.Hunt });
+    expect(restored.time.toISOString()).toBe("2026-10-17T12:03:00.000Z");
+    expect(restored.location!.coordinates).toEqual([5.9, 52.2]);
+    expect(await restoreMissingHuntMarkers()).toBe(0);
   });
 
   /** A photo file in the uploads directory, `ageMs` old */

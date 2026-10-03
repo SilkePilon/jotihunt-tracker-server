@@ -5,7 +5,7 @@ import { onDemoSwitch } from "../demo/database-switch";
 import { runTracked } from "../demo/demo-mode";
 import { createGeminiClient, DEFAULT_GEMINI_MODEL, GeminiError } from "./gemini.client";
 import { createHuntOcr, type HuntOcr } from "./hunt-ocr.service";
-import { removeOrphanPhotos } from "./hunt-report.service";
+import { removeOrphanPhotos, restoreMissingHuntMarkers } from "./hunt-report.service";
 import { photoFilePath } from "./photo-store";
 
 /** Only the error class and our own message: never the raw error (an axios error holds the API key header). */
@@ -24,7 +24,7 @@ const queue = createHuntOcr({
   onError: (error, reportId) => logger.warn(`OCR of hunt report ${reportId} failed: ${describeOcrError(error)}`),
 });
 
-/** Clean up photo files left by a crash mid-upload (tracked: never while a demo switch changes the directory) */
+/** Repair what a crash mid-upload left behind (tracked: never while a demo switch changes the database or directory) */
 async function removeCrashLeftovers() {
   try {
     const removed = await runTracked(() => removeOrphanPhotos());
@@ -32,11 +32,17 @@ async function removeCrashLeftovers() {
   } catch (error) {
     logger.warn(`Could not clean up hunt photos without a report: ${describeOcrError(error)}`);
   }
+  try {
+    const restored = await runTracked(() => restoreMissingHuntMarkers());
+    if (restored) logger.info(`Restored ${restored} hunt marker(s) lost by a crash mid-upload`);
+  } catch (error) {
+    logger.warn(`Could not restore missing hunt markers: ${describeOcrError(error)}`);
+  }
 }
 
 /**
  * resumePending runs at startup and after every demo switch, i.e. exactly when work left by a restart is picked up:
- * it also removes the photos a crash mid-upload left behind.
+ * it also repairs what a crash mid-upload left behind.
  */
 export const huntOcr: HuntOcr = {
   ...queue,

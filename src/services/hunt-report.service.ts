@@ -257,3 +257,34 @@ export async function removeOrphanPhotos(now = Date.now()): Promise<number> {
   }
   return removed;
 }
+
+/** Reports this old whose marker is missing lost it to a crash between storing the report and its marker. */
+const MISSING_MARKER_AGE_MS = 60 * 1000;
+
+/**
+ * Create the hunt marker of reports that point to a marker that does not exist (a crash between storing the report
+ * and its marker). Only reports older than a minute, so an upload in progress is never raced. A marker deleted on the
+ * map also unlinks it from its report, so it is never brought back. Returns how many markers were created.
+ */
+export async function restoreMissingHuntMarkers(now = Date.now()): Promise<number> {
+  const reports = await HuntReport.find({ markerId: { $exists: true }, location: { $exists: true }, createdAt: { $lt: new Date(now - MISSING_MARKER_AGE_MS) } })
+    .select("area markerId location huntTime createdAt")
+    .lean();
+  if (reports.length === 0) return 0;
+  const existing = new Set((await Marker.find({ _id: { $in: reports.map((report) => report.markerId) } }).select("_id").lean()).map((marker) => String(marker._id)));
+  let restored = 0;
+  for (const report of reports) {
+    if (!report.markerId || !report.location || existing.has(String(report.markerId))) continue;
+    await Marker.create({
+      _id: report.markerId,
+      area: report.area,
+      time: toMinute(report.huntTime ?? report.createdAt),
+      type: MarkerType.Hunt,
+      location: { type: "Point", coordinates: report.location.coordinates },
+    }).catch((error) => {
+      if (!isDuplicateKeyError(error)) throw error;
+    });
+    restored++;
+  }
+  return restored;
+}
