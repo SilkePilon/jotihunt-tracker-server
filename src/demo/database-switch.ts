@@ -142,11 +142,13 @@ export function switchDemoMode(enabled: boolean, user?: { _id: unknown } | null)
  * Express middleware (mount before the routes): requests wait for a running switch and are counted, so a switch
  * waits for them before it disconnects the database. A request counts until its handler responded (res.end), also
  * when the client gave up earlier: the handler may still be writing. A request whose client is gone and whose handler
- * never responds stops counting after a while, so it can't block switching forever.
+ * never responds stops counting after a while, so it can't block switching forever; a GET/HEAD stops counting as soon
+ * as its client is gone.
  */
 export function demoGate(req: Request, res: Response, next: NextFunction) {
   const start = () => {
     const finish = beginWork();
+    const isRead = req.method === "GET" || req.method === "HEAD";
     let released = false;
     let abandonedTimer: ReturnType<typeof setTimeout> | undefined;
     const release = () => {
@@ -157,7 +159,9 @@ export function demoGate(req: Request, res: Response, next: NextFunction) {
     res.on("finish", release);
     res.on("close", () => {
       if (released || abandonedTimer) return;
-      if (res.writableFinished) return release();
+      // A read whose client is gone can't write into the wrong database, so it never holds a switch (an aborted
+      // photo download in sendFile may not respond for a long time)
+      if (res.writableFinished || isRead) return release();
       abandonedTimer = setTimeout(() => {
         log.warn(`${req.method} ${req.originalUrl} (client gone) still running after ${abandonedRequestMs / 1000} s; no longer delays a demo switch`);
         released = true;

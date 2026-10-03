@@ -215,15 +215,33 @@ describe("switching between the real and the demo database", () => {
     setDemoWorldGenerator(async () => {});
     warnings.length = 0;
     const res = fakeResWithEnd();
-    demoGate({ method: "GET", originalUrl: "/hangs" } as Request, res as unknown as Response, () => {});
+    demoGate({ method: "PUT", originalUrl: "/hangs" } as Request, res as unknown as Response, () => {});
     res.emit("close");
     const started = Date.now();
     await switchDemoMode(true);
     expect(Date.now() - started).toBeGreaterThanOrEqual(250);
-    expect(warnings).toEqual(["GET /hangs (client gone) still running after 0.3 s; no longer delays a demo switch"]);
+    expect(warnings).toEqual(["PUT /hangs (client gone) still running after 0.3 s; no longer delays a demo switch"]);
     res.end(); // a late response does not count twice
     await switchDemoMode(false);
     expect(isDemoMode()).toBe(false);
+  });
+
+  test("an aborted GET or HEAD stops counting right away: reads can't write into the wrong database", async () => {
+    setDemoWorldGenerator(async () => {});
+    warnings.length = 0;
+    for (const method of ["GET", "HEAD"]) {
+      const before = activeWorkCount();
+      const res = fakeResWithEnd();
+      demoGate({ method, originalUrl: "/hunt-reports/x/photo" } as Request, res as unknown as Response, () => {});
+      expect(activeWorkCount()).toBe(before + 1);
+      res.emit("close"); // client gone, handler (e.g. sendFile) still busy
+      expect(activeWorkCount()).toBe(before);
+      res.end(); // a late response does not count twice
+      expect(activeWorkCount()).toBe(before);
+    }
+    await switchDemoMode(true);
+    expect(warnings).toEqual([]);
+    await switchDemoMode(false);
   });
 
   test("over real HTTP: an aborted request is counted until the handler finishes", async () => {
@@ -233,7 +251,7 @@ describe("switching between the real and the demo database", () => {
     const started = new Promise<void>((resolve) => (handlerStarted = resolve));
     const app = express();
     app.use(demoGate);
-    app.get("/slow", async (_req, res) => {
+    app.post("/slow", async (_req, res) => {
       handlerStarted();
       await handlerDone;
       res.json({ ok: true });
@@ -243,7 +261,7 @@ describe("switching between the real and the demo database", () => {
       const port = (server.address() as { port: number }).port;
       const before = activeWorkCount();
       const controller = new AbortController();
-      const request = fetch(`http://127.0.0.1:${port}/slow`, { signal: controller.signal }).catch(() => null);
+      const request = fetch(`http://127.0.0.1:${port}/slow`, { method: "POST", signal: controller.signal }).catch(() => null);
       await started;
       controller.abort();
       await request;
