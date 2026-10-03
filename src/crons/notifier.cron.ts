@@ -1,4 +1,4 @@
-import { logger } from "..";
+import { logger } from "../logger";
 import { currentGeneration, runTracked } from "../demo/demo-mode";
 import { runNotifier } from "../services/notifier.service";
 

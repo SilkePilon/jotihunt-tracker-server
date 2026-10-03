@@ -4,7 +4,8 @@ import { HintCell, HintCellStatus, HintCheck } from "../models/hint-cell.model";
 import { Marker, MarkerType } from "../models/marker.model";
 import { User } from "../models/user.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
-import { addNote, claimCell, getBoard, HintBoardError, releaseCell, setCheck, setStatus, solveCell } from "./hint-board.service";
+import { ServiceError } from "../http/service-error";
+import { addNote, claimCell, getBoard, releaseCell, setCheck, setStatus, solveCell } from "./hint-board.service";
 
 const slotTime = new Date("2026-10-17T12:00:00.000Z");
 
@@ -20,11 +21,11 @@ async function expectBoardError(promise: Promise<unknown>, status: number) {
   try {
     await promise;
   } catch (error) {
-    expect(error).toBeInstanceOf(HintBoardError);
-    expect((error as HintBoardError).status).toBe(status);
-    return error as HintBoardError;
+    expect(error).toBeInstanceOf(ServiceError);
+    expect((error as ServiceError).status).toBe(status);
+    return error as ServiceError;
   }
-  throw new Error(`Expected HintBoardError ${status}`);
+  throw new Error(`Expected ServiceError ${status}`);
 }
 
 beforeAll(connectTestDb);
@@ -61,7 +62,7 @@ describe("claimCell", () => {
     const results = await Promise.allSettled([claimCell(1, "alpha", a._id), claimCell(1, "alpha", b._id)]);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     const rejected = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
-    expect((rejected.reason as HintBoardError).status).toBe(409);
+    expect((rejected.reason as ServiceError).status).toBe(409);
   });
 
   test("the claimer can claim again", async () => {
@@ -210,8 +211,8 @@ describe("solveCell", () => {
     ]);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     const rejected = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
-    expect(rejected.reason).toBeInstanceOf(HintBoardError);
-    expect((rejected.reason as HintBoardError).status).toBe(409);
+    expect(rejected.reason).toBeInstanceOf(ServiceError);
+    expect((rejected.reason as ServiceError).status).toBe(409);
     expect(await Marker.countDocuments({ type: MarkerType.Hint })).toBe(1);
   });
 });

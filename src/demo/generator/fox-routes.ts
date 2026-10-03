@@ -1,6 +1,6 @@
 import { distanceM, moveM } from "../../services/prediction/geo";
 import type { LngLat } from "../../services/prediction/types";
-import { MINUTE_MS } from "./constants";
+import { kmhToMs, MINUTE_MS } from "./constants";
 import type { Rng } from "./prng";
 
 export interface RouteStop {
@@ -55,7 +55,7 @@ export function ringWaypoints(centre: LngLat, radiusM: number, count: number, rn
 export function buildFoxRoute(points: LngLat[], start: number, until: number, rng: Rng, options: RouteOptions): FoxRoute {
   if (points.length === 0) throw new Error("A fox route needs at least one point");
   const order = nearestNeighbourOrder(points, rng.int(0, points.length - 1));
-  const speedMs = (options.speedKmh * 1000) / 3_600_000;
+  const speedMs = kmhToMs(options.speedKmh);
   const stops: RouteStop[] = [];
   let time = start;
   let i = 0;

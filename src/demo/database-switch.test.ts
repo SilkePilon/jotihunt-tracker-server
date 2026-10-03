@@ -7,20 +7,17 @@ import { User } from "../models/user.model";
 import { photoFilePath } from "../services/photo-store";
 import {
   closeDemoMode,
-  currentGeneration,
   demoConnectOptions,
   demoDbName,
   demoGate,
   DemoSwitchBusyError,
   getDemoState,
   initDemoMode,
-  isDemoMode,
   mongoUriDbName,
-  runTracked,
   setDemoWorldGenerator,
-  skipInDemoMode,
   switchDemoMode,
 } from "./database-switch";
+import { currentGeneration, isDemoMode, runTracked, skipInDemoMode } from "./demo-mode";
 
 describe("demo database name", () => {
   test("appends -demo to the database name", () => {

@@ -76,31 +76,32 @@ function jitter(position: LngLat, radiusM: number, rng: ReturnType<typeof create
 }
 
 async function createDemoUsers() {
-  const users = [];
-  for (const [index, hunter] of DEMO_HUNTERS.entries()) {
-    // Random, never shown or logged: demo users can't log in
-    const password = await Bun.password.hash(randomBytes(24).toString("base64url"));
-    const email = `${hunter.name.toLowerCase()}@demo.jotihunt.local`;
-    await User.deleteOne({ email });
-    users.push(
-      await User.create({
-        email,
-        password,
-        name: hunter.name,
-        admin: false,
-        requiresPasswordChange: false,
-        tracker: { deviceId: DEMO_DEVICE_ID_BASE + index, uniqueId: `demo-${hunter.name.toLowerCase()}`, vehicle: hunter.vehicle },
-      }),
-    );
-  }
-  return users;
+  // Random, never shown or logged: demo users can't log in. One hash shared by all of them (argon2 is slow).
+  const password = await Bun.password.hash(randomBytes(24).toString("base64url"));
+  const docs = DEMO_HUNTERS.map((hunter, index) => ({
+    email: `${hunter.name.toLowerCase()}@demo.jotihunt.local`,
+    password,
+    name: hunter.name,
+    admin: false,
+    requiresPasswordChange: false,
+    tracker: { deviceId: DEMO_DEVICE_ID_BASE + index, uniqueId: `demo-${hunter.name.toLowerCase()}`, vehicle: hunter.vehicle },
+  }));
+  await User.deleteMany({ email: { $in: docs.map((doc) => doc.email) } });
+  return User.insertMany(docs);
 }
 
 /** Apply the planned states to the hint cells; solved cells get the fox position as RD answer and a hint marker there. */
 async function applyCellPlans(plans: CellPlan[], routes: Map<DemoArea, FoxRoute>, userIds: mongoose.Types.ObjectId[]) {
   const areaByLower = new Map(DEMO_AREAS.map((area) => [area.toLowerCase(), area]));
+  const cellKey = (articleId: number, area: string) => `${articleId}|${area}`;
+  const cells = await HintCell.find({}, { articleId: 1, area: 1, slotTime: 1 }).lean();
+  const cellByKey = new Map(cells.map((cell) => [cellKey(cell.articleId, cell.area), cell]));
+
+  const updates: { cellId: mongoose.Types.ObjectId; set: Record<string, unknown>; unset: Record<string, 1> }[] = [];
+  /** Solved cells: the marker to create and the update that gets its id */
+  const solved: { marker: Record<string, unknown>; set: Record<string, unknown> }[] = [];
   for (const plan of plans) {
-    const cell = await HintCell.findOne({ articleId: plan.articleId, area: plan.area });
+    const cell = cellByKey.get(cellKey(plan.articleId, plan.area));
     if (!cell) continue;
     const set: Record<string, unknown> = { status: plan.status };
     const unset: Record<string, 1> = {};
@@ -116,12 +117,26 @@ async function applyCellPlans(plans: CellPlan[], routes: Map<DemoArea, FoxRoute>
       const answer = formatRdAnswer(...positionAt(routes.get(area)!, cell.slotTime.getTime()));
       const rd = parseRdAnswer(answer)!;
       const location = { type: "Point" as const, coordinates: [rd.lng, rd.lat] };
-      const marker = await Marker.create({ area: plan.area, time: cell.slotTime, type: MarkerType.Hint, location });
-      Object.assign(set, { answer, answerKind: "rd", answerLocation: [rd.lng, rd.lat], markerId: marker._id, check: plan.check ?? HintCheck.Unchecked });
+      solved.push({ marker: { area: plan.area, time: cell.slotTime, type: MarkerType.Hint, location }, set });
+      Object.assign(set, { answer, answerKind: "rd", answerLocation: [rd.lng, rd.lat], markerId: null, check: plan.check ?? HintCheck.Unchecked });
       if (plan.checkedBy !== undefined && plan.check !== HintCheck.Unchecked) set.checkedBy = userIds[plan.checkedBy];
     }
     if (plan.notes.length) set.notes = plan.notes.map((note) => ({ user: userIds[note.user], text: note.text, createdAt: note.at }));
-    await HintCell.updateOne({ _id: cell._id }, Object.keys(unset).length ? { $set: set, $unset: unset } : { $set: set });
+    updates.push({ cellId: cell._id, set, unset });
+  }
+
+  if (solved.length) {
+    const markers = await Marker.insertMany(solved.map((item) => item.marker));
+    markers.forEach((marker, index) => {
+      solved[index].set.markerId = marker._id;
+    });
+  }
+  if (updates.length) {
+    await HintCell.bulkWrite(
+      updates.map(({ cellId, set, unset }) => ({
+        updateOne: { filter: { _id: cellId }, update: Object.keys(unset).length ? { $set: set, $unset: unset } : { $set: set } },
+      })),
+    );
   }
 }
 
@@ -135,7 +150,8 @@ export async function generateDemoWorld(now: Date, options: WorldOptions): Promi
   const huntStart = demoHuntStart(now);
 
   // Teams (with logos) assigned to areas geographically
-  const realTeams = await options.sources.teams();
+  // Sorted: fox routes and everything placed on them follow the group order, so Mongo's return order must not matter
+  const realTeams = (await options.sources.teams()).sort((a, b) => a.apiId - b.apiId);
   const groups: GroupPoint[] = realTeams.map((team) => ({ apiId: team.apiId, lng: team.location.coordinates[0], lat: team.location.coordinates[1] }));
   const areaOf = assignAreas(groups, createRng(DEMO_SEED + 1));
   if (realTeams.length) await Team.collection.insertMany(realTeams.map((team) => ({ ...team, area: areaOf.get(team.apiId) ?? null })));

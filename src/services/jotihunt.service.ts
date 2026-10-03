@@ -1,7 +1,7 @@
 import axios from "axios";
-import {logger} from "..";
+import { logger } from "../logger";
 import puppeteer, {Page} from "puppeteer";
-import {ApiArea, ApiArticle, WebHunt} from "../types/api";
+import {ApiArea, ApiArticle, ApiTeam, WebHunt} from "../types/api";
 
 const apiUrl = process.env.JOTIHUNT_API_URL as string;
 const websiteUrl = process.env.JOTIHUNT_WEB_URL as string;
@@ -11,6 +11,8 @@ const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 
 
 const apiClient = axios.create({
     baseURL: apiUrl,
+    // Crons run with noOverlap, so a hanging request would stop them for good
+    timeout: 10_000,
 });
 
 /**
@@ -39,6 +41,20 @@ export async function getArticles(): Promise<ApiArticle[]> {
     } catch (error) {
         logger.error("Error fetching articles:", error);
         throw new Error("Could not fetch articles", { cause: error });
+    }
+}
+
+/**
+ * Function to get all subscribed teams (groups) from Jotihunt.
+ * @returns {Promise<Array>} - A promise that resolves to an array of teams.
+ */
+export async function getTeams(): Promise<ApiTeam[]> {
+    try {
+        const response = await apiClient.get("/subscriptions");
+        return response.data.data as ApiTeam[];
+    } catch (error) {
+        logger.error("Error fetching teams:", error);
+        throw new Error("Could not fetch teams", { cause: error });
     }
 }
 
@@ -92,15 +108,17 @@ export async function scrapeHunts(page: Page): Promise<WebHunt[]> {
 
     const hunts = await page.evaluate(() => {
         const rows = Array.from(document.querySelectorAll("table tbody tr"));
-        return rows.map((row) => {
+        return rows.flatMap((row) => {
             const columns = Array.from(row.querySelectorAll("td"));
-            return {
+            // Skip placeholder rows such as a single colspan "no hunts yet" cell
+            if (columns.length < 5) return [];
+            return [{
                 area: columns[0].textContent,
                 huntCode: columns[1].textContent,
                 status: columns[2].textContent,
                 points: parseInt(columns[3].textContent || "0"),
                 huntTime: columns[4].textContent,
-            } as WebHunt;
+            } as WebHunt];
         });
     });
 

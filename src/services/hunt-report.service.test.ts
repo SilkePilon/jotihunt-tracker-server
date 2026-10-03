@@ -6,12 +6,12 @@ import { HuntReport } from "../models/hunt-report.model";
 import { Marker, MarkerType } from "../models/marker.model";
 import { User } from "../models/user.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
+import { ServiceError } from "../http/service-error";
+import { linkScrapedHunts } from "./hunt-report-sync.service";
 import {
   createHuntReport,
   deleteHuntReport,
   huntReportPhotoPath,
-  HuntReportError,
-  linkScrapedHunts,
   listHuntReports,
   requestHuntReportRead,
   setHuntReportFields,
@@ -41,11 +41,11 @@ async function expectReportError(promise: Promise<unknown>, status: number) {
   try {
     await promise;
   } catch (error) {
-    expect(error).toBeInstanceOf(HuntReportError);
-    expect((error as HuntReportError).status).toBe(status);
-    return error as HuntReportError;
+    expect(error).toBeInstanceOf(ServiceError);
+    expect((error as ServiceError).status).toBe(status);
+    return error as ServiceError;
   }
-  throw new Error(`Expected HuntReportError ${status}`);
+  throw new Error(`Expected ServiceError ${status}`);
 }
 
 beforeAll(connectTestDb);
@@ -71,6 +71,18 @@ describe("createHuntReport", () => {
     expect(await HuntReport.countDocuments()).toBe(1);
     expect(await Marker.countDocuments()).toBe(1);
     expect(readdirSync(process.env.UPLOADS_DIR!).length).toBe(1);
+  });
+
+  test("the same uploadId from another user is a separate report; reports without uploadId never collide", async () => {
+    const merida = await makeUser("merida");
+    const elsa = await makeUser("elsa");
+    const uploadId = "6f1c1e7a-2b3c-4d5e-8f90-123456789abc";
+    const fromMerida = await createHuntReport(input({ uploadId }), merida);
+    const fromElsa = await createHuntReport(input({ uploadId }), elsa);
+    expect(fromElsa._id).not.toBe(fromMerida._id);
+    await createHuntReport(input(), merida);
+    await createHuntReport(input(), merida);
+    expect(await HuntReport.countDocuments()).toBe(4);
   });
 
   test("stores a normalised code, the photo and the reporter", async () => {
@@ -398,6 +410,27 @@ describe("linkScrapedHunts", () => {
     expect(views.find((view) => view._id === first._id)!.site).not.toBeNull();
     expect(views.find((view) => view._id === second._id)!.site).toBeNull();
     expect(views.find((view) => view._id === unread._id)!.site).toBeNull();
+  });
+
+  test("one query for all codes; a code scraped twice ends with the last values; unknown codes are skipped", async () => {
+    const merida = await makeUser("merida");
+    const a = await createHuntReport(input({ huntCode: "AAA" }), merida);
+    const b = await createHuntReport(input({ huntCode: "BBB" }), merida);
+    const now = new Date("2026-10-17T13:00:00Z");
+    const updated = await linkScrapedHunts(
+      [
+        { huntCode: "AAA", status: "In behandeling", points: 0 },
+        { huntCode: "ZZZ", status: "Goedgekeurd", points: 5 },
+        { huntCode: "BBB", status: " Afgekeurd ", points: Number.NaN },
+        { huntCode: "AAA", status: "Goedgekeurd", points: 5 },
+      ],
+      now,
+    );
+    expect(updated).toBe(3);
+    const views = await listHuntReports(now);
+    expect(views.find((view) => view._id === a._id)!.site).toEqual({ status: "Goedgekeurd", points: 5, seenAt: now.toISOString() });
+    expect(views.find((view) => view._id === b._id)!.site).toEqual({ status: "Afgekeurd", points: 0, seenAt: now.toISOString() });
+    expect(await linkScrapedHunts([], now)).toBe(0);
   });
 });
 

@@ -1,5 +1,5 @@
 import axios from "axios";
-import { logger } from "..";
+import { logger } from "../logger";
 import { currentGeneration, runTracked, skipInDemoMode } from "../demo/demo-mode";
 import { Team } from "../models/team.model";
 import { USER_AGENT } from "../services/prediction/constants";

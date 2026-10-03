@@ -9,7 +9,7 @@ export interface ApiTeam {
   city: string;
   lat: string;
   long: string;
-  area: string;
+  area: string | null;
 }
 
 export interface ApiArea {

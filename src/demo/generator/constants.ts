@@ -9,6 +9,11 @@ export type DemoArea = (typeof DEMO_AREAS)[number];
 export const HOUR_MS = 3_600_000;
 export const MINUTE_MS = 60_000;
 
+/** Speed in km/h as metres per millisecond. */
+export function kmhToMs(kmh: number): number {
+  return (kmh * 1000) / HOUR_MS;
+}
+
 /** Demo article ids: the real 2025 ids + this offset (seed-hint uses 900000+). */
 export const ARTICLE_ID_OFFSET = 800_000;
 

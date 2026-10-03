@@ -1,4 +1,6 @@
-export const DEFAULT_AREAS = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "oscar"];
+import { AREAS } from "../constants/areas";
+
+export const DEFAULT_AREAS: string[] = [...AREAS];
 
 export interface ParsedAreaHint {
   snippet: string | null;

@@ -6,10 +6,10 @@ import { PREDICTION_SCHEMA } from "./prompt";
 const KEY = "secret-key-9";
 
 function http(respond: () => Promise<{ data: unknown }>) {
-  const calls: { url: string; body: any; config: any }[] = [];
+  const calls: { url: string; body: { contents: { parts: unknown }[]; generationConfig: unknown }; config: { headers: Record<string, string>; timeout: number } }[] = [];
   const client: GeminiHttp = {
     post: async <T>(url: string, body: unknown, config: { headers: Record<string, string>; timeout: number }) => {
-      calls.push({ url, body, config });
+      calls.push({ url, body: body as (typeof calls)[number]["body"], config });
       return (await respond()) as { data: T };
     },
   };

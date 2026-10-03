@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { STICKER_DESIGNS, STICKER_HEIGHT, STICKER_WIDTH, stickerSceneHtml } from "./sticker-scene";
+import type { Browser } from "puppeteer";
+import { STICKER_DESIGNS, STICKER_HEIGHT, STICKER_WIDTH } from "./sticker-designs";
+import { stickerSceneHtml } from "./sticker-scene";
 
 export interface StickerInfo {
   file: string;
@@ -35,9 +37,13 @@ export async function renderStickerPhotos(items: { sticker: number; time: string
   const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
   if (!executablePath) return null;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const { default: puppeteer } = await import("puppeteer");
-  const browser = await puppeteer.launch({ executablePath, args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"] }).catch(() => null);
-  if (!browser) return null;
+  let browser: Browser;
+  try {
+    const { default: puppeteer } = await import("puppeteer");
+    browser = await puppeteer.launch({ executablePath, args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"] });
+  } catch {
+    return null;
+  }
   try {
     const render = async () => {
       const page = await browser.newPage();

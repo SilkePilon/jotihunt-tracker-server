@@ -1,102 +1,54 @@
-import { logger } from "..";
-import { Marker, MarkerType } from "../models/marker.model";
 import { Request, Response } from "express";
+import { matchedData } from "express-validator";
+import { logger } from "../logger";
+import { Marker, MarkerType } from "../models/marker.model";
+import { HuntReport } from "../models/hunt-report.model";
+import { HintCell } from "../models/hint-cell.model";
+import { isDuplicateKeyError } from "../utils/mongo";
 
 export async function getMarkers(_req: Request, res: Response) {
-  const markers = await Marker.find();
+  const markers = await Marker.find().lean();
   return res.status(200).json(markers);
 }
 
+/** Body is validated by markers.route.ts */
 export async function createMarker(req: Request, res: Response) {
+  const { area, location, time, type } = matchedData(req) as { area: string; location: { coordinates: [number, number] }; time: Date; type: MarkerType };
+  const parsedTime = new Date(time);
+
+  if (type == MarkerType.Hint) {
+    // Hint markers are keyed by hour slot (see HintCell.slotTime / the unique index), so
+    // round down to the exact hour, matching floorToHour in article-sync.service.
+    parsedTime.setUTCMinutes(0, 0, 0);
+  } else {
+    parsedTime.setSeconds(0, 0);
+  }
+
   try {
-    const { area, location, time, type } = req.body;
-
-    // Validate request body
-    if (!area || !time || !location || !location.coordinates || !type || !Array.isArray(location.coordinates) || location.coordinates.length !== 2) {
-      return res.status(400).json({
-        message: "Area, type, time and coordinates (array of [longitude, latitude]) are required",
-      });
-    }
-
-    // Area must be any of the following: alpha, bravo, charlie, delta, echo, foxtrot, golf, hotel, oscar
-    if (!["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "oscar"].includes(area)) {
-      return res.status(400).json({
-        message: "Area must be any of the following: alpha, bravo, charlie, delta, echo, foxtrot, golf, hotel, oscar",
-      });
-    }
-
-    // Type must be any of values in markertype enum
-    if (!Object.values(MarkerType).includes(type)) {
-      return res.status(400).json({
-        message: "Type must be any of the following: " + Object.values(MarkerType).join(", "),
-      });
-    }
-
-    // Time must be a valid date
-    const parsedTime = new Date(time);
-
-    if (isNaN(parsedTime.getTime())) {
-      return res.status(400).json({ message: "Time must be a valid date" });
-    }
-
-    if (type == MarkerType.Hint) {
-      // Hint markers are keyed by hour slot (see HintCell.slotTime / the unique index), so
-      // round down to the exact hour, matching floorToHour in article-sync.service.
-      parsedTime.setUTCMinutes(0, 0, 0);
-    } else {
-      parsedTime.setSeconds(0, 0);
-    }
-
-    // Create a new marker
-    const marker = new Marker({
+    const marker = await Marker.create({
       area,
       time: parsedTime,
-      location: {
-        type: "Point",
-        coordinates: location.coordinates,
-      },
+      location: { type: "Point", coordinates: location.coordinates },
       type,
     });
-
-    // Save the marker to the database
-    await marker.save();
-
     return res.status(201).json(marker);
   } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && (error as { code: unknown }).code === 11000) {
+    if (isDuplicateKeyError(error)) {
       return res.status(409).json({ message: "Er bestaat al een hint-marker voor dit deelgebied op dit uur" });
     }
     logger.error("Error creating marker", error);
-    return res.status(500).json({ message: "Error creating marker", error });
+    return res.status(500).json({ message: "Error creating marker" });
   }
 }
 
 export async function deleteMarker(req: Request, res: Response) {
-  try {
-    const { id } = req.params;
+  const marker = await Marker.findByIdAndDelete(req.params.id);
+  if (!marker) return res.status(404).json({ message: "Marker not found" });
 
-    // Validate request parameters
-    if (!id) {
-      return res.status(400).json({
-        message: "Marker ID is required",
-      });
-    }
-
-    // Find the marker by ID
-    const marker = await Marker.findById(id);
-
-    if (!marker) {
-      return res.status(404).json({
-        message: "Marker not found",
-      });
-    }
-
-    // Delete the marker
-    await Marker.findByIdAndDelete(id);
-
-    return res.status(200).json(marker);
-  } catch (error) {
-    logger.error("Error deleting marker", error);
-    return res.status(500).json({ message: "Error deleting marker", error });
-  }
+  // Hunt reports and solved hint cells link to their marker; drop the dangling links
+  await Promise.all([
+    HuntReport.updateMany({ markerId: marker._id }, { $unset: { markerId: 1 } }),
+    HintCell.updateMany({ markerId: marker._id }, { $unset: { markerId: 1 } }),
+  ]);
+  return res.status(200).json(marker);
 }

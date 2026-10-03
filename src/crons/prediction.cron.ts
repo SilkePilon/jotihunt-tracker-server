@@ -1,5 +1,5 @@
-import { logger } from "..";
-import { runTracked } from "../demo/database-switch";
+import { logger } from "../logger";
+import { runTracked } from "../demo/demo-mode";
 import { isPredictionEnabled } from "../settings/prediction-setting";
 import { predictionService } from "../services/prediction/instance";
 

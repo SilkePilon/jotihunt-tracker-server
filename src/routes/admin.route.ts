@@ -10,48 +10,47 @@ import { User } from "../models/user.model";
 import { validate } from "../middleware/validate.middleware";
 
 // Validations
+const userExists = (value: string) =>
+  User.exists({ _id: value }).then((user) => {
+    if (!user) throw new Error("Er is geen gebruiker met dit ID.");
+  });
+
 const createValidator = [
-  body("name").notEmpty().withMessage("Naam mag niet leeg zijn.").trim().escape(),
-  body("email").notEmpty().withMessage("E-mailadres mag niet leeg zijn.").isEmail().withMessage("E-mailadres is ongeldig.").trim(),
-  body("password").notEmpty().withMessage("Wachtwoord mag niet leeg zijn."),
-  body("email").custom((value) => {
-    return User.findOne({ email: value }).then((user) => {
-      if (user) {
-        throw new Error("E-mailadres is al in gebruik.");
-      }
-    });
-  }),
+  body("name").trim().notEmpty().withMessage("Naam mag niet leeg zijn."),
+  body("email")
+    .trim()
+    .toLowerCase()
+    .notEmpty()
+    .withMessage("E-mailadres mag niet leeg zijn.")
+    .bail()
+    .isEmail()
+    .withMessage("E-mailadres is ongeldig.")
+    .bail()
+    .custom(async (value) => {
+      if (await User.exists({ email: value })) throw new Error("E-mailadres is al in gebruik.");
+    }),
+  body("password").isString().notEmpty().withMessage("Wachtwoord mag niet leeg zijn."),
+  body("admin").optional().isBoolean().withMessage("Admin mag alleen true/false zijn.").toBoolean(),
 ];
 
-const deleteValidator = [
-  param("id").custom((value) => {
-    return User.findById(value).then((user) => {
-      if (!user) {
-        throw new Error("Er is geen gebruiker met dit ID.");
-      }
-    });
-  }),
-];
+const deleteValidator = [param("id").isMongoId().withMessage("Ongeldig gebruikers-ID.").bail().custom(userExists)];
 
 const updateValidator = [
-  param("id").custom((value) => {
-    return User.findById(value).then((user) => {
-      if (!user) {
-        throw new Error("Er is geen gebruiker met dit ID.");
-      }
-    });
-  }),
-  body("email").custom((value, { req }) => {
-    return User.findOne({ email: value }).then((user) => {
-      if (user && user._id.toString() !== req.params?.id) {
-        throw new Error("E-mailadres is al in gebruik.");
-      }
-    });
-  }),
-  body("name").optional().trim().escape(),
-  body("email").optional().isEmail().withMessage("E-mailadres is ongeldig.").trim(),
-  body("password").optional(),
-  body("admin").optional().isBoolean().withMessage("Admin mag alleen true/false zijn."),
+  param("id").isMongoId().withMessage("Ongeldig gebruikers-ID.").bail().custom(userExists),
+  body("name").optional().trim().notEmpty().withMessage("Naam mag niet leeg zijn."),
+  body("email")
+    .optional()
+    .trim()
+    .toLowerCase()
+    .isEmail()
+    .withMessage("E-mailadres is ongeldig.")
+    .bail()
+    .custom(async (value, { req }) => {
+      const user = await User.findOne({ email: value }, { _id: 1 }).lean();
+      if (user && user._id.toString() !== req.params?.id) throw new Error("E-mailadres is al in gebruik.");
+    }),
+  body("password").optional().isString(),
+  body("admin").optional().isBoolean().withMessage("Admin mag alleen true/false zijn.").toBoolean(),
 ];
 
 // Routes

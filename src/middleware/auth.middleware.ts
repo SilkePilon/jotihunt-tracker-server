@@ -1,7 +1,7 @@
 import { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import { User } from "../models/user.model";
-import { logger } from "..";
+import { logger } from "../logger";
 
 export default async function verifyToken(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
@@ -42,7 +42,7 @@ export async function isAdmin(req: Request, res: Response, next: NextFunction) {
   }
 
   if (!req.user.admin) {
-    return res.status(401).json({
+    return res.status(403).json({
       message: "Access denied",
     });
   }

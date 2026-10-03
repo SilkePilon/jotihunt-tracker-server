@@ -5,10 +5,15 @@ import verifyToken from "../middleware/auth.middleware";
 import { validate } from "../middleware/validate.middleware";
 
 // Validators
+const loginValidator = [
+  body("email").isString().trim().notEmpty().withMessage("E-mailadres mag niet leeg zijn."),
+  body("password").isString().notEmpty().withMessage("Wachtwoord mag niet leeg zijn."),
+];
+
 const updatePasswordValidator = [
   body("oldPassword").notEmpty().withMessage("Oude wachtwoord mag niet leeg zijn."),
   body("newPassword").notEmpty().withMessage("Nieuw wachtwoord mag niet leeg zijn."),
-  body("confirmPassword").notEmpty().withMessage("Nieuw wachtwoord bevestigeing mag niet leeg zijn."),
+  body("confirmPassword").notEmpty().withMessage("Nieuw wachtwoord bevestiging mag niet leeg zijn."),
   body("newPassword")
     .custom((value, { req }) => value === req.body.confirmPassword)
     .withMessage("Wachtwoorden komen niet overeen"),
@@ -20,7 +25,7 @@ const tutorialValidator = [
 
 const router = express.Router();
 
-router.post("/login", authController.login);
+router.post("/login", validate(loginValidator), authController.login);
 router.post("/update-password", [verifyToken, validate(updatePasswordValidator)], authController.updatePassword);
 router.post("/tutorial", [verifyToken, validate(tutorialValidator)], authController.updateTutorial);
 

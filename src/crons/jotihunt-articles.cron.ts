@@ -1,4 +1,4 @@
-import { logger } from "..";
+import { logger } from "../logger";
 import { currentGeneration, runTracked, skipInDemoMode } from "../demo/demo-mode";
 import { getArticles } from "../services/jotihunt.service";
 import { syncArticles } from "../services/article-sync.service";
@@ -6,7 +6,7 @@ import { syncArticles } from "../services/article-sync.service";
 export default async function retrieveJotihuntArticles() {
   if (skipInDemoMode("jotihunt-articles", (message) => logger.debug(message))) return;
 
-  logger.info("(CRON) Retrieving Jotihunt articles from API...");
+  logger.debug("(CRON) Retrieving Jotihunt articles from API...");
 
   const generation = currentGeneration();
   const apiArticles = await getArticles();
@@ -14,7 +14,7 @@ export default async function retrieveJotihuntArticles() {
   const result = await runTracked(() => syncArticles(apiArticles), { generation });
   if (!result) return;
 
-  logger.info(`(CRON) Synced ${result.upserted} articles, created ${result.cellsCreated} hint cells`);
+  logger.debug(`(CRON) Synced ${result.upserted} articles, created ${result.cellsCreated} hint cells`);
   if (result.changedHints.length) {
     logger.warn(`(CRON) Hint articles changed after publication: ${result.changedHints.join(", ")}`);
   }

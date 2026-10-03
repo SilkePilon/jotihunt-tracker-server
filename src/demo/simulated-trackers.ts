@@ -1,7 +1,7 @@
 import { moveM, bearingDeg } from "../services/prediction/geo";
 import type { LngLat } from "../services/prediction/types";
 import { groupIdForVehicle, type Vehicle, type VehicleGroups } from "../services/tracker-onboarding.helpers";
-import { MINUTE_MS } from "./generator/constants";
+import { HOUR_MS, kmhToMs, MINUTE_MS } from "./generator/constants";
 
 /**
  * Simulated Traccar devices of the demo hunters (in memory, demo mode only). Positions are computed from the current
@@ -54,7 +54,7 @@ export function lastUpdateOf(hunter: SimulatedHunter, now: Date): Date {
 
 /** Position on the hunter's loop at `time`. */
 export function hunterPosition(hunter: SimulatedHunter, huntStart: Date, time: Date): LngLat {
-  const speedMs = (VEHICLE_SPEED_KMH[hunter.vehicle] * 1000) / 3_600_000;
+  const speedMs = kmhToMs(VEHICLE_SPEED_KMH[hunter.vehicle]);
   const travelled = Math.max(0, time.getTime() - huntStart.getTime()) * speedMs;
   const angle = hunter.phase + (hunter.direction * travelled) / hunter.radiusM;
   const wobble = 1 + 0.22 * Math.sin(3 * angle + hunter.phase) + 0.08 * Math.sin(7 * angle);
@@ -65,7 +65,7 @@ export function hunterPosition(hunter: SimulatedHunter, huntStart: Date, time: D
 /** Distance travelled since hunt start (speed × moving time, capped). */
 export function hunterDistanceM(hunter: SimulatedHunter, huntStart: Date, now: Date): number {
   const until = lastUpdateOf(hunter, now).getTime();
-  const hours = Math.max(0, until - huntStart.getTime()) / 3_600_000;
+  const hours = Math.max(0, until - huntStart.getTime()) / HOUR_MS;
   return Math.min(MAX_DISTANCE_M, Math.round(VEHICLE_SPEED_KMH[hunter.vehicle] * DUTY[hunter.vehicle] * hours * 1000));
 }
 
@@ -102,7 +102,7 @@ export function simulatedPositions(now: Date) {
     const time = lastUpdateOf(hunter, now);
     const [longitude, latitude] = hunterPosition(hunter, huntStart, time);
     const ahead = hunterPosition(hunter, huntStart, new Date(time.getTime() + 20_000));
-    const elapsedH = Math.max(0, time.getTime() - huntStart.getTime()) / 3_600_000;
+    const elapsedH = Math.max(0, time.getTime() - huntStart.getTime()) / HOUR_MS;
     const moving = !hunter.inactive;
     return {
       id: positionId(hunter),

@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import { setTutorialVersion, User } from "../models/user.model";
 import jwt from "jsonwebtoken";
-import { logger } from "..";
+import { logger } from "../logger";
 
 export async function login(req: Request, res: Response) {
   try {

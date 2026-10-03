@@ -1,21 +1,13 @@
-import { logger } from "..";
+import { logger } from "../logger";
 import { currentGeneration, runTracked, skipInDemoMode } from "../demo/demo-mode";
 import { Hunt } from "../models/hunt.model";
 import { login, scrapeHunts } from "../services/jotihunt.service";
-import { linkScrapedHunts } from "../services/hunt-report.service";
+import { linkScrapedHunts } from "../services/hunt-report-sync.service";
 import { Page } from "puppeteer";
-
-let isScrapingJotihuntWebsite = false;
 
 export default async function scrapeJotihuntWebsite() {
   if (skipInDemoMode("jotihunt-scraper", (message) => logger.debug(message))) return;
 
-  if (isScrapingJotihuntWebsite) {
-    logger.warn("(CRON) Skipping Jotihunt website scrape because a previous run is still in progress.");
-    return;
-  }
-
-  isScrapingJotihuntWebsite = true;
   logger.info("(CRON) Scraping required data from Jotihunt website...");
 
   let page: Page | undefined;
@@ -40,12 +32,12 @@ export default async function scrapeJotihuntWebsite() {
     // Scraping is slow and not tracked; storing is, and only into the database the run started on
     await runTracked(
       async () => {
-        await Hunt.deleteMany({}).catch((error) => {
-          logger.error("(CRON) Error deleting hunts from database:", error);
-        });
-        await Hunt.insertMany(hunts).catch((error) => {
-          logger.error("(CRON) Error inserting hunts into database:", error);
-        });
+        // Upsert by hunt code and drop hunts the website no longer lists: /hunts is never briefly empty
+        await Hunt.bulkWrite(hunts.map((hunt) => ({ updateOne: { filter: { huntCode: hunt.huntCode }, update: { $set: hunt as Record<string, unknown> }, upsert: true } })))
+          .then(() => Hunt.deleteMany({ huntCode: { $nin: hunts.map((hunt) => hunt.huntCode) } }))
+          .catch((error) => {
+            logger.error("(CRON) Error storing hunts in database:", error);
+          });
 
         // Copy status and points to the app's own reports; they keep them after the scraper forgets older hunts
         await linkScrapedHunts(webHunts).catch((error) => {
@@ -59,7 +51,5 @@ export default async function scrapeJotihuntWebsite() {
       await page.close().catch(() => undefined);
       await page.browser().close().catch(() => undefined);
     }
-
-    isScrapingJotihuntWebsite = false;
   }
 }

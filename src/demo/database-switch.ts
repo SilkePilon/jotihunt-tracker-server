@@ -1,18 +1,11 @@
 import type { NextFunction, Request, Response } from "express";
-import mongoose, { type ConnectOptions } from "mongoose";
+import mongoose from "mongoose";
 import { clearDemoUploads } from "../services/photo-store";
 import { activeWorkCount, beginWork, isDemoMode, nextGeneration, setDemoModeFlag, setDemoSwitchInProgress, waitForIdleWork } from "./demo-mode";
 import { openDemoStateStore, type DemoStateStore } from "./demo-state";
+import { demoConnectOptions, demoDbName, mongoUriDbName } from "./mongo-uri";
 
-export {
-  assertGeneration,
-  currentGeneration,
-  DemoSwitchedError,
-  isDemoMode,
-  isDemoSwitchInProgress,
-  runTracked,
-  skipInDemoMode,
-} from "./demo-mode";
+export { demoConnectOptions, demoDbName, mongoUriDbName } from "./mongo-uri";
 
 /** Fills the (freshly dropped, users already copied) demo database; times relative to `now`. */
 export type DemoWorldGenerator = (now: Date) => Promise<void>;
@@ -45,51 +38,18 @@ export class DemoSwitchBusyError extends Error {
 const DRAIN_TIMEOUT_MS = 10_000;
 let drainTimeoutMs = DRAIN_TIMEOUT_MS;
 
+const DISABLED_STATE: DemoState = Object.freeze({ enabled: false, enabledAt: null, startedAt: null });
+
 const noopLogger: DemoLogger = { info() {}, warn() {}, error() {} };
 
 let realUri: string | null = null;
 let store: DemoStateStore | null = null;
 let log: DemoLogger = noopLogger;
-let state: DemoState = { enabled: false, enabledAt: null, startedAt: null };
+let state: DemoState = DISABLED_STATE;
 let generator: DemoWorldGenerator = async () => {};
 const listeners = new Set<DemoSwitchListener>();
 /** Serialises switches; also what the gate waits for */
 let switching: Promise<unknown> | null = null;
-
-// --- Database names ---------------------------------------------------------------------------------------------
-
-const URI_PATTERN = /^(mongodb(?:\+srv)?:\/\/[^/?#]*)(?:\/([^?#]*))?(\?[^#]*)?$/;
-
-/** Database name in a MongoDB connection string (the driver's default "test" when it has none). */
-export function mongoUriDbName(uri: string): string {
-  const match = URI_PATTERN.exec(uri.trim());
-  if (!match) throw new Error("Invalid MongoDB connection string");
-  return decodeURIComponent(match[2] ?? "") || "test";
-}
-
-/** Name of the demo database belonging to a real connection string: `<realDbName>-demo`. */
-export function demoDbName(uri: string): string {
-  const real = mongoUriDbName(uri);
-  const demo = `${real}-demo`;
-  if (demo === real) throw new Error("Demo database name equals the real database name");
-  return demo;
-}
-
-/**
- * Connect options for another database on the same server. The URI stays untouched (it may hold credentials and
- * several hosts); `dbName` selects the database. Without an explicit authSource the driver would authenticate against
- * the selected database, so keep authenticating where the real connection does. `mongodb+srv` URIs are left alone:
- * the driver takes their authSource from the DNS TXT record.
- */
-export function demoConnectOptions(uri: string, dbName: string): ConnectOptions {
-  const match = URI_PATTERN.exec(uri.trim());
-  if (!match) throw new Error("Invalid MongoDB connection string");
-  const isSrv = match[1].startsWith("mongodb+srv:");
-  const hasCredentials = match[1].includes("@");
-  const hasAuthSource = /[?&]authSource=/i.test(match[3] ?? "");
-  const authSource = !isSrv && hasCredentials && !hasAuthSource ? decodeURIComponent(match[2] ?? "") || "admin" : undefined;
-  return authSource ? { dbName, authSource } : { dbName };
-}
 
 // --- Public API -------------------------------------------------------------------------------------------------
 
@@ -144,12 +104,12 @@ export async function initDemoMode(uri: string, options: { logger?: DemoLogger; 
     } catch (error) {
       log.error("Could not start in demo mode, falling back to the real database", error);
       await fallbackToReal();
-      await store.write({ enabled: false, enabledAt: null, enabledBy: null, startedAt: null });
+      await store.write({ ...DISABLED_STATE, enabledBy: null });
       return getDemoState();
     }
   }
   await connectReal();
-  state = { enabled: false, enabledAt: null, startedAt: null };
+  state = DISABLED_STATE;
   // A demo database left behind by a failed switch or a crash
   await dropDemoDatabase().catch((error) => log.warn(`Could not drop a leftover demo database: ${describe(error)}`));
   return getDemoState();
@@ -199,7 +159,7 @@ export async function closeDemoMode() {
   await store?.close();
   store = null;
   realUri = null;
-  state = { enabled: false, enabledAt: null, startedAt: null };
+  state = DISABLED_STATE;
   setDemoModeFlag(false);
   setDemoSwitchInProgress(false);
   generator = async () => {};
@@ -306,7 +266,7 @@ async function enterDemo(): Promise<Date> {
  * database is unreachable, the default connection stays closed (never serving the demo database as if it were real).
  */
 async function fallbackToReal() {
-  state = { enabled: false, enabledAt: null, startedAt: null };
+  state = DISABLED_STATE;
   try {
     await connectReal();
   } catch (error) {
@@ -343,10 +303,10 @@ async function switchOff(stateStore: DemoStateStore) {
     });
     throw error;
   }
-  state = { enabled: false, enabledAt: null, startedAt: null };
+  state = DISABLED_STATE;
   await dropDemoDatabase().catch((error) => log.error("Could not drop the demo database (dropped at the next start)", error));
   await clearDemoUploads().catch((error) => log.error("Could not clear the demo uploads", error));
-  await stateStore.write({ enabled: false, enabledAt: null, enabledBy: null, startedAt: null });
+  await stateStore.write({ ...DISABLED_STATE, enabledBy: null });
 }
 
 async function notifyListeners(enabled: boolean) {

@@ -58,7 +58,9 @@ const HuntReportSchema = new mongoose.Schema(
   { timestamps: { createdAt: true, updatedAt: false } },
 );
 
-HuntReportSchema.index({ uploadId: 1 }, { unique: true, sparse: true });
+// Per user: the lookup of a retried upload filters on reportedBy too. Partial (not sparse): a sparse compound index
+// still indexes documents without uploadId (reportedBy is always set), which would make those collide.
+HuntReportSchema.index({ uploadId: 1, reportedBy: 1 }, { unique: true, partialFilterExpression: { uploadId: { $type: "string" } } });
 
 export const HuntReport = mongoose.model("HuntReport", HuntReportSchema);
 export type HuntReportDocument = HydratedDocument<InferSchemaType<typeof HuntReportSchema>>;

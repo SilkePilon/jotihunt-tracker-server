@@ -4,19 +4,10 @@ import { HintCell, HintCellStatus, HintCheck } from "../models/hint-cell.model";
 import { Marker, MarkerType } from "../models/marker.model";
 import "../models/user.model"; // registers the User model for populate
 import { parseRdAnswer } from "./rd-answer";
+import { isDuplicateKeyError } from "../utils/mongo";
+import { ServiceError } from "../http/service-error";
 
 type Id = mongoose.Types.ObjectId | string;
-
-export class HintBoardError extends Error {
-  status: number;
-  details: Record<string, unknown>;
-
-  constructor(status: number, message: string, details: Record<string, unknown> = {}) {
-    super(message);
-    this.status = status;
-    this.details = details;
-  }
-}
 
 const populateUsers = [
   { path: "claimedBy", select: "name" },
@@ -26,18 +17,14 @@ const populateUsers = [
 
 async function findCellOr404(articleId: number, area: string) {
   const cell = await HintCell.findOne({ articleId, area }).populate(populateUsers);
-  if (!cell) throw new HintBoardError(404, "Hintvak niet gevonden");
+  if (!cell) throw new ServiceError(404, "Hintvak niet gevonden");
   return cell;
 }
 
 async function updateCell(articleId: number, area: string, update: mongoose.UpdateQuery<unknown>) {
   const cell = await HintCell.findOneAndUpdate({ articleId, area }, update, { returnDocument: "after" }).populate(populateUsers);
-  if (!cell) throw new HintBoardError(404, "Hintvak niet gevonden");
+  if (!cell) throw new ServiceError(404, "Hintvak niet gevonden");
   return cell;
-}
-
-function isDuplicateKeyError(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && (error as { code: unknown }).code === 11000;
 }
 
 export async function getBoard() {
@@ -65,7 +52,7 @@ export async function claimCell(articleId: number, area: string, userId: Id) {
     existing.status === HintCellStatus.Solving
       ? "Dit vak is al geclaimd"
       : `Dit vak is ${existing.status === HintCellStatus.Solved ? "al opgelost" : "gemarkeerd als geen hint"}`;
-  throw new HintBoardError(409, message, { claimedBy: existing.claimedBy ?? null });
+  throw new ServiceError(409, message, { claimedBy: existing.claimedBy ?? null });
 }
 
 export async function releaseCell(articleId: number, area: string, user: { _id: Id; admin: boolean }) {
@@ -80,7 +67,7 @@ export async function releaseCell(articleId: number, area: string, user: { _id: 
   if (cell) return cell;
 
   await findCellOr404(articleId, area);
-  throw new HintBoardError(409, "Dit vak is niet door jou geclaimd");
+  throw new ServiceError(409, "Dit vak is niet door jou geclaimd");
 }
 
 export async function solveCell(articleId: number, area: string, userId: Id, answer: string, replaceMarker = false) {
@@ -99,7 +86,7 @@ export async function solveCell(articleId: number, area: string, userId: Id, ans
       markerId = existing._id;
     } else {
       if (existing && !replaceMarker) {
-        throw new HintBoardError(409, "Er bestaat al een hint-marker voor dit deelgebied op dit uur", {
+        throw new ServiceError(409, "Er bestaat al een hint-marker voor dit deelgebied op dit uur", {
           existingMarkerId: String(existing._id),
         });
       }
@@ -118,7 +105,7 @@ export async function solveCell(articleId: number, area: string, userId: Id, ans
       } catch (error) {
         if (!isDuplicateKeyError(error)) throw error;
         const existingMarker = await Marker.findOne({ type: MarkerType.Hint, area, time: cell.slotTime });
-        throw new HintBoardError(409, "Er bestaat al een hint-marker voor dit deelgebied op dit uur", {
+        throw new ServiceError(409, "Er bestaat al een hint-marker voor dit deelgebied op dit uur", {
           existingMarkerId: existingMarker ? String(existingMarker._id) : undefined,
         });
       }

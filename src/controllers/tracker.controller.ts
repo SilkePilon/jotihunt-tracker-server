@@ -1,6 +1,6 @@
 import * as traccarrService from "../services/traccarr.service";
 import { Request, Response } from "express";
-import { logger } from "..";
+import { logger } from "../logger";
 import { createTraccarApi } from "../services/traccar-api";
 import { describeTraccarError, traccarHttp } from "../services/traccar-http";
 import { vehicleGroupsFromEnv, type Vehicle } from "../services/tracker-onboarding.helpers";

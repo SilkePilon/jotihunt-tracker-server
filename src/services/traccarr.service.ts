@@ -1,4 +1,4 @@
-import { logger } from "..";
+import { logger } from "../logger";
 import { describeTraccarError, traccarHttp as apiClient } from "./traccar-http";
 
 export { isTraccarConfigured } from "./traccar-http";

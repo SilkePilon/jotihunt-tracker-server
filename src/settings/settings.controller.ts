@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { logger } from "..";
+import { logger } from "../logger";
 import { isPredictionEnabled, setPredictionEnabled } from "./prediction-setting";
 
 export function getPredictionSetting(_req: Request, res: Response) {

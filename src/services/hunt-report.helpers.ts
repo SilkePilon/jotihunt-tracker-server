@@ -1,5 +1,5 @@
 /** Fox teams a hunt can be registered for (lowercase, like Marker.area). */
-export const HUNT_AREAS = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "oscar"] as const;
+export { AREAS as HUNT_AREAS } from "../constants/areas";
 
 /** A hunt code must be entered on jotihunt.nl within 30 minutes of the hunt (spelregels §5). */
 export const SUBMIT_WINDOW_MS = 30 * 60 * 1000;

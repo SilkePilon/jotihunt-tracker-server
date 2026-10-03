@@ -1,12 +1,12 @@
 import express from "express";
 import { body, param } from "express-validator";
-import * as predictionsController from "../controllers/predictions.controller";
+import * as visitsController from "../controllers/visits.controller";
 import verifyToken from "../middleware/auth.middleware";
 import { validate } from "../middleware/validate.middleware";
 
 const router = express.Router();
 
-router.get("/", verifyToken, predictionsController.getVisits);
+router.get("/", verifyToken, visitsController.getVisits);
 router.put(
   "/:teamApiId",
   [
@@ -16,7 +16,7 @@ router.put(
       body("state").isIn(["visited", "not_visited", "auto"]).withMessage("Status moet visited, not_visited of auto zijn."),
     ]),
   ],
-  predictionsController.putVisit,
+  visitsController.putVisit,
 );
 
 export default router;

@@ -4,6 +4,7 @@ import { Area } from "../models/area.model";
 import { HintCell, HintCellStatus } from "../models/hint-cell.model";
 import { ApiArticle } from "../types/api";
 import { DEFAULT_AREAS, parseHintArticle } from "./hint-parser";
+import { isDuplicateKeyError } from "../utils/mongo";
 
 export interface SyncResult {
   upserted: number;
@@ -63,7 +64,7 @@ export async function ensureHintCells(article: { id: number; publishAt: Date; co
     // Duplicate key: another run created some of these cells concurrently. insertMany with
     // ordered: false still inserts the non-conflicting documents, so report how many of the
     // areas we attempted actually ended up with a cell.
-    if ((error as { code?: number }).code !== 11000) throw error;
+    if (!isDuplicateKeyError(error)) throw error;
     return await HintCell.countDocuments({ articleId: article.id, area: { $in: missingAreas } });
   }
   return cells.length;

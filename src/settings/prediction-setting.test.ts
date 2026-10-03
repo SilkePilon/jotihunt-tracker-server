@@ -5,10 +5,11 @@ import { initPredictionSetting, isPredictionEnabled, resetPredictionSetting, set
 
 // The controllers and the cron import the logger from the app entry point, which would start the server
 const infoLogs: string[] = [];
-mock.module("..", () => ({ logger: { info: (message: string) => infoLogs.push(message), error() {}, warn() {}, debug() {} } }));
+mock.module("../logger", () => ({ logger: { info: (message: string) => infoLogs.push(message), error() {}, warn() {}, debug() {} } }));
 const recomputeDue = mock(async () => ({ recomputed: ["alpha"], failed: [] as { area: string; error: unknown }[] }));
 mock.module("../services/prediction/instance", () => ({ predictionService: { recomputeDue, recomputeArea: mock(async () => {}) } }));
-const { getPredictions, getVisits, putVisit } = await import("../controllers/predictions.controller");
+const { getPredictions } = await import("../controllers/predictions.controller");
+const { getVisits, putVisit } = await import("../controllers/visits.controller");
 const { putPredictionSetting, getPredictionSetting } = await import("./settings.controller");
 const { default: recomputePredictions } = await import("../crons/prediction.cron");
 

@@ -1,10 +1,11 @@
 import { Request, Response } from "express";
 import { User } from "../models/user.model";
-import { logger } from "..";
+import { PushSubscription } from "../models/push-subscription.model";
+import { logger } from "../logger";
 import { matchedData } from "express-validator";
 
 export async function getUsers(req: Request, res: Response) {
-  const users = await User.find().select("-password");
+  const users = await User.find().select("-password").lean();
   return res.status(200).json(users);
 }
 
@@ -15,8 +16,8 @@ export async function createUser(req: Request, res: Response) {
     const hashedPassword = await Bun.password.hash(data.password);
     const user = new User({
       name: data.name,
-      email: data.email.toLowerCase(),
-      admin: data.admin,
+      email: data.email,
+      admin: data.admin ?? false,
       password: hashedPassword,
     });
 
@@ -33,8 +34,9 @@ export async function deleteUser(req: Request, res: Response) {
   const { id } = req.params;
 
   try {
-    const user = await User.findById(id);
-    await user!.deleteOne();
+    const user = await User.findByIdAndDelete(id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+    await PushSubscription.deleteMany({ user: user._id });
 
     return res.status(200).json({ message: "User deleted" });
   } catch (error) {
@@ -52,8 +54,8 @@ export async function updateUser(req: Request, res: Response) {
     if (!user) return res.status(404).json({ message: "User not found" });
 
     if (data.name) user.name = data.name;
-    if (data.email) user.email = data.email.toLowerCase();
-    if (data.admin) user.admin = data.admin;
+    if (data.email) user.email = data.email;
+    if (data.admin !== undefined) user.admin = data.admin;
     if (data.password) {
       user.password = await Bun.password.hash(data.password);
       user.requiresPasswordChange = true;
