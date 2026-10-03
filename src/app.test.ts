@@ -95,10 +95,13 @@ describe("auth middleware", () => {
 });
 
 describe("passwords", () => {
-  test("update-password signs out other sessions but keeps the current one", async () => {
+  test("update-password signs out all sessions (older and newer) and returns a fresh token that works", async () => {
     const user = await createUser({ password: "oud" });
-    const other = tokenFor(user, nowSeconds() - 120);
+    const older = tokenFor(user, nowSeconds() - 120);
     const current = tokenFor(user, nowSeconds() - 60);
+    const newer = tokenFor(user, nowSeconds() - 30);
+    // Issued in the same second as the change, before it
+    const sameSecond = tokenFor(user);
     const res = await request("/auth/update-password", {
       method: "POST",
       token: current,
@@ -107,13 +110,18 @@ describe("passwords", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { accessToken: string };
     expect(typeof body.accessToken).toBe("string");
-    expect((await request("/markers", { token: current })).status).toBe(200);
     expect((await request("/markers", { token: body.accessToken })).status).toBe(200);
-    expect((await request("/markers", { token: other })).status).toBe(401);
+    for (const token of [older, current, newer, sameSecond]) {
+      expect((await request("/markers", { token })).status).toBe(401);
+    }
 
     const stored = await User.findById(user._id);
     expect(stored!.password).toStartWith("$argon2id$v=19$m=19456,t=2,");
     expect(await Bun.password.verify("nieuw", stored!.password)).toBe(true);
+    // A login right after the change (same second) gets a working token too
+    const login = await request("/auth/login", { method: "POST", json: { email: user.email, password: "nieuw" } });
+    const { accessToken } = (await login.json()) as { accessToken: string };
+    expect((await request("/markers", { token: accessToken })).status).toBe(200);
   });
 
   test("login works with an old (default settings) hash and replaces it with the cheaper one", async () => {
