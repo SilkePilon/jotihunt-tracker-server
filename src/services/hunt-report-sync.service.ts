@@ -1,4 +1,4 @@
-import { HuntReport, type HuntReportDocument } from "../models/hunt-report.model";
+import { HuntReport } from "../models/hunt-report.model";
 import { normalizeHuntCode } from "./hunt-report.helpers";
 import { compareAge } from "./hunt-report.view";
 
@@ -21,8 +21,10 @@ export async function linkScrapedHunts(hunts: ScrapedHunt[], now = new Date()): 
   });
   if (linked.length === 0) return 0;
 
-  const reports = await HuntReport.find({ huntCode: { $in: [...new Set(linked.map(({ huntCode }) => huntCode))] } });
-  const firstByCode = new Map<string, HuntReportDocument>();
+  const reports = await HuntReport.find({ huntCode: { $in: [...new Set(linked.map(({ huntCode }) => huntCode))] } })
+    .select("_id huntCode createdAt")
+    .lean();
+  const firstByCode = new Map<string, (typeof reports)[number]>();
   for (const report of reports.sort(compareAge)) {
     if (report.huntCode && !firstByCode.has(report.huntCode)) firstByCode.set(report.huntCode, report);
   }
@@ -31,7 +33,8 @@ export async function linkScrapedHunts(hunts: ScrapedHunt[], now = new Date()): 
     const first = firstByCode.get(huntCode);
     if (!first) return [];
     const site = { status: (hunt.status ?? "").trim(), points: Number.isFinite(hunt.points) ? hunt.points : 0, seenAt: now };
-    return [{ updateOne: { filter: { _id: first._id }, update: { $set: { site } } } }];
+    // The code in the filter too: a code changed by HQ meanwhile must not get the old code's result
+    return [{ updateOne: { filter: { _id: first._id, huntCode }, update: { $set: { site } } } }];
   });
   if (operations.length === 0) return 0;
   const result = await HuntReport.bulkWrite(operations, { ordered: true });
