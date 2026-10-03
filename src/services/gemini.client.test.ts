@@ -56,7 +56,7 @@ describe("createGeminiClient.readSticker", () => {
   test("parses the answer, also when split over parts", async () => {
     const { http } = fakeHttp(async () => ({ data: { candidates: [{ content: { parts: [{ text: '{"code":"Gy3M8XI","codeConfidence":0.9,' }, { text: '"time":"5.53","timeConfidence":0.7}' }] } }] } }));
     const client = createGeminiClient({ apiKey: API_KEY, model: "m", http });
-    expect(await client.readSticker("x", "image/jpeg")).toEqual({ code: "Gy3M8XI", codeConfidence: 0.9, time: "05:53", timeConfidence: 0.7 });
+    expect(await client.readSticker("x", "image/jpeg")).toEqual({ code: "Gy3M8XI", codeConfidence: 0.9, time: "05:53", timeConfidence: 0.7, box: null });
   });
 
   test("5xx and 429 are retryable", async () => {

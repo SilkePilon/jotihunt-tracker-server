@@ -5,7 +5,7 @@ const answer = (fields: Record<string, unknown>) => JSON.stringify({ code: "GNcr
 
 describe("parseStickerReading", () => {
   test("reads plain JSON and keeps the case of the code", () => {
-    expect(parseStickerReading(answer({}))).toEqual({ code: "GNcrZRZ", codeConfidence: 0.9, time: "11:17", timeConfidence: 0.8 });
+    expect(parseStickerReading(answer({}))).toEqual({ code: "GNcrZRZ", codeConfidence: 0.9, time: "11:17", timeConfidence: 0.8, box: null });
   });
 
   test("accepts JSON inside ```json fences", () => {
@@ -43,8 +43,21 @@ describe("parseStickerReading", () => {
 
   test("confidences are clamped to 0..1 and missing ones are 0", () => {
     expect(parseStickerReading(answer({ codeConfidence: 1.5, timeConfidence: -2 }))).toMatchObject({ codeConfidence: 1, timeConfidence: 0 });
-    expect(parseStickerReading(JSON.stringify({ code: "ABCD", time: "10:00" }))).toEqual({ code: "ABCD", codeConfidence: 0, time: "10:00", timeConfidence: 0 });
+    expect(parseStickerReading(JSON.stringify({ code: "ABCD", time: "10:00" }))).toEqual({ code: "ABCD", codeConfidence: 0, time: "10:00", timeConfidence: 0, box: null });
     expect(parseStickerReading(answer({ codeConfidence: "0.9" })).codeConfidence).toBe(0);
+  });
+
+  test("reads the sticker box as rounded integers", () => {
+    expect(parseStickerReading(answer({ box: [120.4, 300, 480, 690.6] })).box).toEqual([120, 300, 480, 691]);
+    expect(parseStickerReading(answer({ box: [0, 0, 1000, 1000] })).box).toEqual([0, 0, 1000, 1000]);
+  });
+
+  test("an invalid box becomes null without failing the reading", () => {
+    for (const box of [undefined, null, [1, 2, 3], [1, 2, 3, 4, 5], [0, 0, 1001, 10], [-1, 0, 10, 10], [500, 0, 400, 10], [0, 500, 10, 500], ["1", 2, 3, 4], "0,0,10,10"]) {
+      const reading = parseStickerReading(answer({ box }));
+      expect(reading.box).toBeNull();
+      expect(reading.code).toBe("GNcrZRZ");
+    }
   });
 
   test("throws on non-JSON", () => {
