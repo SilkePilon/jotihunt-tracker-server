@@ -67,6 +67,8 @@ export async function getPhoto(req: Request, res: Response) {
     const file = await huntReportPhotoPath(String(req.params.id));
     if (!existsSync(file)) return res.status(404).json({ message: "Foto niet gevonden." });
     res.setHeader("Cache-Control", "private, max-age=86400");
+    // The stored type is trusted from the upload: never let a browser sniff it into something else
+    res.setHeader("X-Content-Type-Options", "nosniff");
     return res.sendFile(file);
   } catch (error) {
     if (error instanceof ServiceError) return res.status(error.status).json({ message: error.message });

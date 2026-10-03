@@ -11,7 +11,7 @@ import { createHuntReport, listHuntReports } from "../services/hunt-report.servi
 import { invalidateResponseCache } from "../services/response-cache";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { getArticles, publicArticlesFilter } from "./articles.controller";
-import { getHuntReports } from "./hunt-reports.controller";
+import { getHuntReports, getPhoto } from "./hunt-reports.controller";
 import { getHunts } from "./hunts.controller";
 import { getMarkers } from "./markers.controller";
 
@@ -92,5 +92,17 @@ describe("polled list endpoints", () => {
     expect(JSON.parse((await call(getMarkers)).body as string)).toHaveLength(0);
     await Marker.create({ area: "bravo", time: new Date(), type: MarkerType.Spot, location: { type: "Point", coordinates: [5.8, 52.1] } });
     expect(JSON.parse((await call(getMarkers)).body as string)).toHaveLength(1);
+  });
+});
+
+describe("getPhoto", () => {
+  test("sends the file with nosniff and the cache header; 404 for an unknown report", async () => {
+    const user = await User.create({ email: "merida@test.nl", password: "x", name: "merida" });
+    const report = await createHuntReport({ area: "alpha", photo: { buffer: Buffer.from([1]), mimetype: "image/jpeg" } }, user);
+    const res = await call(getPhoto, { params: { id: report._id } });
+    expect(res.sentFile).toBeString();
+    expect(res.headers["x-content-type-options"]).toBe("nosniff");
+    expect(res.headers["cache-control"]).toBe("private, max-age=86400");
+    expect((await call(getPhoto, { params: { id: "0123456789abcdef01234567" } })).statusCode).toBe(404);
   });
 });
