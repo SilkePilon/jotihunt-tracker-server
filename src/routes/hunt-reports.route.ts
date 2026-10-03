@@ -4,6 +4,7 @@ import * as huntReportsController from "../controllers/hunt-reports.controller";
 import verifyToken from "../middleware/auth.middleware";
 import { photoUpload } from "../middleware/photo-upload.middleware";
 import { validate } from "../middleware/validate.middleware";
+import { limitUserWrites } from "../middleware/rate-limit";
 import { HUNT_AREAS } from "../services/hunt-report.helpers";
 
 const router = express.Router();
@@ -15,6 +16,8 @@ router.post(
   "/",
   [
     verifyToken,
+    // Before parsing the upload, so a flood is refused without reading 5 MB bodies
+    limitUserWrites(),
     photoUpload,
     validate([
       // Code and time are read from the photo by OCR; entering them is optional
