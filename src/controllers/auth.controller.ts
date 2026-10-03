@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { setTutorialVersion, User } from "../models/user.model";
+import { hashPassword, needsRehash, passwordChangeTime, setTutorialVersion, User } from "../models/user.model";
 import jwt from "jsonwebtoken";
 import { logger } from "../logger";
 
@@ -32,10 +32,12 @@ export async function login(req: Request, res: Response) {
       });
     }
 
-    // Generate a new access token (with enough lifetime for the whole hunt)
-    const accessToken = jwt.sign({ _id: user._id }, process.env.JWT_SECRET!, {
-      expiresIn: "36h",
-    });
+    // Replace an old, memory-hungry hash; only the password field, so this is not a password change
+    if (needsRehash(user.password)) {
+      await User.updateOne({ _id: user._id, password: user.password }, { $set: { password: await hashPassword(password) } });
+    }
+
+    const accessToken = signAccessToken(user._id);
 
     return res.status(200).json({
       accessToken,
@@ -54,6 +56,13 @@ export async function login(req: Request, res: Response) {
   }
 }
 
+/** A new access token (with enough lifetime for the whole hunt) */
+function signAccessToken(userId: unknown) {
+  return jwt.sign({ _id: userId }, process.env.JWT_SECRET!, {
+    expiresIn: "36h",
+  });
+}
+
 export async function updatePassword(req: Request, res: Response) {
   const { oldPassword, newPassword } = req.body;
   const user = req.user!;
@@ -65,12 +74,15 @@ export async function updatePassword(req: Request, res: Response) {
     });
   }
 
-  const hashed = await Bun.password.hash(newPassword);
-  user.password = hashed;
+  user.password = await hashPassword(newPassword);
   user.requiresPasswordChange = false;
+  // Sign out every other session: tokens issued before this session's token are no longer valid. This session keeps
+  // working, because the client keeps using its token after changing the password.
+  const issuedAt = res.locals.tokenIssuedAt;
+  user.passwordChangedAt = typeof issuedAt === "number" ? new Date(issuedAt * 1000) : passwordChangeTime();
 
   await user.save();
-  return res.status(200).json({ message: "Password updated" });
+  return res.status(200).json({ message: "Password updated", accessToken: signAccessToken(user._id) });
 }
 
 export async function updateTutorial(req: Request, res: Response) {

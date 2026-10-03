@@ -35,6 +35,14 @@ const UserSchema = new mongoose.Schema({
     default: true,
     required: true,
   },
+  /**
+   * Last password change (whole seconds, like a JWT's iat). Tokens issued before it are rejected; users stored
+   * before this field existed have none, so their tokens stay valid.
+   */
+  passwordChangedAt: {
+    type: Date,
+    required: false,
+  },
   /** Highest onboarding tour version this user has seen (client TOUR_VERSION); 0 = never. */
   tutorialVersion: {
     type: Number,
@@ -70,4 +78,24 @@ export async function setTutorialVersion(user: UserType, version: number): Promi
   const updated = await User.findOneAndUpdate({ _id: user._id }, { $max: { tutorialVersion: version } }, { returnDocument: "after" });
   user.tutorialVersion = updated?.tutorialVersion ?? Math.max(user.tutorialVersion ?? 0, version);
   return user.tutorialVersion;
+}
+
+/**
+ * Argon2id with 19 MiB memory and 2 iterations (OWASP minimum). Bun's default (64 MiB) used 2.4 GB of RAM with 50
+ * logins at once. Hashes made with other settings still verify (the settings are stored in the hash).
+ */
+const PASSWORD_HASH_OPTIONS = { algorithm: "argon2id", memoryCost: 19456, timeCost: 2 } as const;
+
+export function hashPassword(password: string): Promise<string> {
+  return Bun.password.hash(password, PASSWORD_HASH_OPTIONS);
+}
+
+/** True for a hash made with other settings (e.g. Bun's default), which login replaces by a cheaper one. */
+export function needsRehash(hash: string): boolean {
+  return !hash.startsWith(`$argon2id$v=19$m=${PASSWORD_HASH_OPTIONS.memoryCost},t=${PASSWORD_HASH_OPTIONS.timeCost},`);
+}
+
+/** Now, rounded down to whole seconds: tokens issued in this second or later stay valid. */
+export function passwordChangeTime(at = new Date()): Date {
+  return new Date(Math.floor(at.getTime() / 1000) * 1000);
 }
