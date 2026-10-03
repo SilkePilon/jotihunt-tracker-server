@@ -6,6 +6,7 @@ import { initPredictionSetting } from "./settings/prediction-setting";
 import { getDemoStateStore, initDemoMode } from "./demo/database-switch";
 import { installDemoWorld } from "./demo/demo-world";
 import { huntOcr } from "./services/hunt-ocr.instance";
+import { isTraccarConfigured, usesLegacyTraccarEnv } from "./services/traccar-http";
 
 if (debug) logger.warn("Debug mode enabled");
 logger.info("Starting Jotihunt tracker...");
@@ -46,8 +47,10 @@ await huntOcr
 if (!process.env.GEMINI_API_KEY?.trim()) {
   logger.warn("GEMINI_API_KEY not set, hunt photos are not read and fox predictions are off");
 }
-if (!process.env.TRACCARR_API_URL || !process.env.TRACCARR_API_TOKEN) {
-  logger.warn("TRACCARR_API_URL/TRACCARR_API_TOKEN not set, tracker endpoints will return 503");
+if (!isTraccarConfigured) {
+  logger.warn("TRACCAR_API_URL/TRACCAR_API_TOKEN not set, tracker endpoints will return 503");
+} else if (usesLegacyTraccarEnv) {
+  logger.warn("TRACCARR_API_URL/TRACCARR_API_TOKEN are deprecated, rename them to TRACCAR_API_URL/TRACCAR_API_TOKEN");
 }
 if (!process.env.TRACCAR_CLIENT_URL) {
   logger.warn("TRACCAR_CLIENT_URL not set, the tracker onboarding card shows a configuration warning");

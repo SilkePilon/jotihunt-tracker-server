@@ -1,8 +1,10 @@
 import axios from "axios";
 
 // Shared axios client for the Traccar REST API. Kept free of the logger import so services can use it.
-const apiUrl = process.env.TRACCARR_API_URL;
-const apiToken = process.env.TRACCARR_API_TOKEN;
+// TRACCARR_* is the old, misspelled name; still read so existing .env files keep working
+export const usesLegacyTraccarEnv = !process.env.TRACCAR_API_URL && !process.env.TRACCAR_API_TOKEN && Boolean(process.env.TRACCARR_API_URL || process.env.TRACCARR_API_TOKEN);
+const apiUrl = process.env.TRACCAR_API_URL ?? process.env.TRACCARR_API_URL;
+const apiToken = process.env.TRACCAR_API_TOKEN ?? process.env.TRACCARR_API_TOKEN;
 
 export const isTraccarConfigured = Boolean(apiUrl && apiToken);
 

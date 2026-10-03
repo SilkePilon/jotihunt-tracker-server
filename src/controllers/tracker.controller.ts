@@ -1,4 +1,4 @@
-import * as traccarrService from "../services/traccarr.service";
+import * as traccarService from "../services/traccar.service";
 import { Request, Response } from "express";
 import { logger } from "../logger";
 import { createTraccarApi } from "../services/traccar-api";
@@ -11,7 +11,7 @@ import { setSimulatedVehicle, simulatedDevices, simulatedPositions } from "../de
 const vehicleGroups = vehicleGroupsFromEnv();
 
 const onboarding = createTrackerOnboarding({
-  api: traccarrService.isTraccarConfigured ? createTraccarApi(traccarHttp) : null,
+  api: traccarService.isTraccarConfigured ? createTraccarApi(traccarHttp) : null,
   clientUrl: process.env.TRACCAR_CLIENT_URL,
   groups: vehicleGroups,
   onError: (error) => logger.warn(`Traccar onboarding: ${describeTraccarError(error)}`),
@@ -24,10 +24,9 @@ function traccarUnavailable(res: Response) {
 async function getDevices(_req: Request, res: Response) {
   // Demo mode: the simulated hunters instead of Traccar (positions follow the clock)
   if (isDemoMode()) return res.json(simulatedDevices(new Date(), vehicleGroups));
-  if (!traccarrService.isTraccarConfigured) return traccarUnavailable(res);
+  if (!traccarService.isTraccarConfigured) return traccarUnavailable(res);
   try {
-    const devices = await traccarrService.getDevices();
-    const groups = await traccarrService.getGroups();
+    const [devices, groups] = await Promise.all([traccarService.getDevices(), traccarService.getGroups()]);
     devices.forEach((device) => {
       const group = groups.find((group) => group.id === device.groupId);
       device.groupName = group ? group.name : undefined;
@@ -40,9 +39,9 @@ async function getDevices(_req: Request, res: Response) {
 
 async function getPositions(_req: Request, res: Response) {
   if (isDemoMode()) return res.json(simulatedPositions(new Date()));
-  if (!traccarrService.isTraccarConfigured) return traccarUnavailable(res);
+  if (!traccarService.isTraccarConfigured) return traccarUnavailable(res);
   try {
-    const positions = await traccarrService.getPositions();
+    const positions = await traccarService.getPositions();
     res.json(positions);
   } catch (error) {
     res.status(500).send(error instanceof Error ? error.message : "Unknown error");
@@ -63,7 +62,7 @@ async function putDeviceVehicle(req: Request, res: Response) {
     const simulated = setSimulatedVehicle(Number(req.params.id), req.body.vehicle as Vehicle, vehicleGroups);
     if (simulated) return res.status(200).json(simulated);
   }
-  if (!traccarrService.isTraccarConfigured) return traccarUnavailable(res);
+  if (!traccarService.isTraccarConfigured) return traccarUnavailable(res);
   try {
     const result = await onboarding.setDeviceVehicle(Number(req.params.id), req.body.vehicle as Vehicle);
     if (!result) return res.status(404).json({ message: "Toestel niet gevonden." });

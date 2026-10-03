@@ -58,15 +58,22 @@ export interface TraccarGroup {
   name: string;
 }
 
+/** Devices change rarely; positions and devices are polled together, so share one fetch for a moment */
+const DEVICES_CACHE_MS = 2000;
+let devicesCache: { at: number; devices: Promise<TraccarDevice[]> } | undefined;
+
 /**
  * Function to get all devices from Traccar.
  * @returns {Promise<Array>} - A promise that resolves to an array of devices.
  */
 export async function getDevices(): Promise<Array<TraccarDevice>> {
+  if (devicesCache && Date.now() - devicesCache.at < DEVICES_CACHE_MS) return devicesCache.devices;
+  const devices = apiClient.get<TraccarDevice[]>("/api/devices").then((response) => response.data);
+  devicesCache = { at: Date.now(), devices };
   try {
-    const response = await apiClient.get<TraccarDevice[]>("/api/devices");
-    return response.data;
+    return await devices;
   } catch (error) {
+    devicesCache = undefined;
     logger.error(`Error fetching devices: ${describeTraccarError(error)}`);
     throw new Error("Could not fetch devices", { cause: error });
   }
@@ -78,15 +85,12 @@ export async function getDevices(): Promise<Array<TraccarDevice>> {
  */
 export async function getPositions(): Promise<Array<TraccarPosition>> {
   try {
-    const devices = await getDevices();
-    const response = await apiClient.get<TraccarPosition[]>("/api/positions");
-    return response.data.map((position: TraccarPosition) => {
-      const device = devices.find((device: TraccarDevice) => device.id === position.deviceId);
-      return {
-        ...position,
-        deviceName: device ? device.name : "Unknown Device",
-      };
-    });
+    const [devices, response] = await Promise.all([getDevices(), apiClient.get<TraccarPosition[]>("/api/positions")]);
+    const names = new Map(devices.map((device) => [device.id, device.name]));
+    return response.data.map((position: TraccarPosition) => ({
+      ...position,
+      deviceName: names.get(position.deviceId) ?? "Unknown Device",
+    }));
   } catch (error) {
     logger.error(`Error fetching positions: ${describeTraccarError(error)}`);
     throw new Error("Could not fetch positions", { cause: error });

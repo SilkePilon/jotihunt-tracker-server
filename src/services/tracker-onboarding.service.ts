@@ -31,7 +31,7 @@ export type TrackerMe =
     };
 
 export interface TrackerOnboardingDeps {
-  /** null when TRACCARR_API_URL / TRACCARR_API_TOKEN are missing */
+  /** null when TRACCAR_API_URL / TRACCAR_API_TOKEN are missing */
   api: TraccarApi | null;
   /** Raw TRACCAR_CLIENT_URL */
   clientUrl: string | undefined;

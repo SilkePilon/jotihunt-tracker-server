@@ -92,8 +92,8 @@ MONGO_URI=mongodb://mongodb:27017/jotihunt
 MONGO_INITDB_DATABASE=jotihunt
 
 # Traccar
-TRACCARR_API_URL=http://traccar:8082
-TRACCARR_API_TOKEN=token-van-traccar
+TRACCAR_API_URL=http://traccar:8082
+TRACCAR_API_TOKEN=token-van-traccar
 TRACCAR_CLIENT_URL=http://tracker.jotihunt.jouwscoutinggroep.nl:5055 # Adres voor de Traccar Client-app (QR-code in "Mijn tracker")
 JOTIHUNT_API_URL=https://jotihunt.nl/api/2.0
 
@@ -138,15 +138,15 @@ Volg de configuratiestappen om de volledige applicatie werkend te krijgen.
 
 ### Omgevingsvariabelen
 De applicatie kan worden geconfigureerd via omgevingsvariabelen. Hieronder volgt een overzicht van waar je de verschillende variabelen vandaan kunt halen.
-#### `TRACCARR_API_TOKEN`
+#### `TRACCAR_API_TOKEN`
 1. Ga naar jouw Traccar server (standaard te bereiken via `http://localhost:8082`) en log in als administrator. De token moet van een beheerder zijn: de server maakt hiermee de apparaten van de gebruikers aan.
 2. Navigeer onderin naar `Instellingen` > `Voorkeuren` > `Token`.
 3. Stel een verloopdatum in en druk op de ververs knop.
-4. Kopieer de gegenereerde token en plak deze in de `.env` file bij `TRACCARR_API_TOKEN`.
+4. Kopieer de gegenereerde token en plak deze in de `.env` file bij `TRACCAR_API_TOKEN`.
 
 #### `TRACCAR_CLIENT_URL`
 Het adres waar de Traccar Client-app op de telefoons de locaties naartoe stuurt: jouw Traccar server op poort `5055`, bijvoorbeeld `http://tracker.jotihunt.jouwscoutinggroep.nl:5055`.
-Dit adres komt in de QR-code van de kaart "Mijn tracker" in de zijbalk. Is het niet ingevuld (of ontbreken `TRACCARR_API_URL`/`TRACCARR_API_TOKEN`), dan toont de kaart "Live tracking is nog niet ingesteld".
+Dit adres komt in de QR-code van de kaart "Mijn tracker" in de zijbalk. Is het niet ingevuld (of ontbreken `TRACCAR_API_URL`/`TRACCAR_API_TOKEN`), dan toont de kaart "Live tracking is nog niet ingesteld".
 Lokaal testen met een telefoon in hetzelfde wifi-netwerk: gebruik het LAN-adres van je computer, bijvoorbeeld `http://192.168.1.10:5055`.
 
 #### `JOTIHUNT_WEB_USERNAME` en `JOTIHUNT_WEB_PASSWORD`
