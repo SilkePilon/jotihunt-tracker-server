@@ -14,7 +14,7 @@ import type { StickerReading } from "./sticker-ocr.helpers";
 process.env.UPLOADS_DIR = mkdtempSync(path.join(tmpdir(), "hunt-ocr-"));
 
 const PHOTO = Buffer.from([0xff, 0xd8, 0xff, 0x01]);
-const reading: StickerReading = { code: "GNcrZRZ", codeConfidence: 0.95, time: "11:17", timeConfidence: 0.9 };
+const reading: StickerReading = { code: "GNcrZRZ", codeConfidence: 0.95, time: "11:17", timeConfidence: 0.9, box: null };
 
 /** Reader that answers with the given results in turn (an Error is thrown). */
 function fakeReader(...results: (StickerReading | Error)[]) {
@@ -102,7 +102,7 @@ describe("createHuntOcr", () => {
   });
 
   test("an unreadable value stays empty and needs review", async () => {
-    const { reader } = fakeReader({ code: null, codeConfidence: 0, time: "11:17", timeConfidence: 0.4 });
+    const { reader } = fakeReader({ code: null, codeConfidence: 0, time: "11:17", timeConfidence: 0.4, box: null });
     const { ocr } = setup(reader);
     const report = await upload();
     ocr.enqueue(report._id);
