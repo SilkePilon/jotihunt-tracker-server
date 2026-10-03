@@ -24,6 +24,8 @@ const OcrSchema = new mongoose.Schema(
     /** Dutch, shown to HQ; never contains secrets */
     error: { type: String, required: false },
     readAt: { type: Date, required: false },
+    /** Bounding box of the sticker in the photo: [ymin, xmin, ymax, xmax], 0..1000 (Gemini's format) */
+    stickerBox: { type: [Number], required: false, default: undefined },
   },
   { _id: false },
 );

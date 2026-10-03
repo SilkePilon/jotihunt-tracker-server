@@ -81,6 +81,8 @@ export function createHuntOcr(deps: HuntOcrDeps): HuntOcr {
       timeConfidence: reading.timeConfidence,
       rawTime: reading.time,
       readAt: new Date(),
+      // Describes the photo, not the fields: stored even when code and time were entered by hand
+      stickerBox: reading.box ?? undefined,
     });
     if (currentGeneration() !== generation) return;
     await report.save();

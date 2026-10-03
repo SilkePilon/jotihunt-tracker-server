@@ -14,7 +14,7 @@ import type { StickerReading } from "./sticker-ocr.helpers";
 process.env.UPLOADS_DIR = mkdtempSync(path.join(tmpdir(), "hunt-ocr-"));
 
 const PHOTO = Buffer.from([0xff, 0xd8, 0xff, 0x01]);
-const reading: StickerReading = { code: "GNcrZRZ", codeConfidence: 0.95, time: "11:17", timeConfidence: 0.9, box: null };
+const reading: StickerReading = { code: "GNcrZRZ", codeConfidence: 0.95, time: "11:17", timeConfidence: 0.9, box: [100, 200, 300, 400] };
 
 /** Reader that answers with the given results in turn (an Error is thrown). */
 function fakeReader(...results: (StickerReading | Error)[]) {
@@ -99,6 +99,28 @@ describe("createHuntOcr", () => {
     expect(doc.huntCode).toBe("Gy3M8XI");
     expect(doc.huntCodeSource).toBe("manual");
     expect(doc.huntTimeSource).toBe("ocr");
+  });
+
+  test("stores the sticker box, also when code and time were entered by hand", async () => {
+    const { reader } = fakeReader(reading);
+    const { ocr } = setup(reader);
+    const report = await upload({ huntCode: "Gy3M8XI" });
+    ocr.enqueue(report._id);
+    await ocr.idle();
+    const doc = await stored(report._id);
+    expect([...(doc.ocr?.stickerBox ?? [])]).toEqual([100, 200, 300, 400]);
+    const [view] = await listHuntReports();
+    expect(view.stickerBox).toEqual([100, 200, 300, 400]);
+  });
+
+  test("without a box the view has stickerBox null", async () => {
+    const { reader } = fakeReader({ ...reading, box: null });
+    const { ocr } = setup(reader);
+    const report = await upload();
+    ocr.enqueue(report._id);
+    await ocr.idle();
+    const [view] = await listHuntReports();
+    expect(view.stickerBox).toBeNull();
   });
 
   test("an unreadable value stays empty and needs review", async () => {

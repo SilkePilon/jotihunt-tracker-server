@@ -37,6 +37,8 @@ export interface HuntReportView {
   ocrError: string | null;
   codeConfidence: number | null;
   timeConfidence: number | null;
+  /** Sticker bounding box in the photo: [ymin, xmin, ymax, xmax], 0..1000; null when unknown */
+  stickerBox: [number, number, number, number] | null;
   needsReview: boolean;
   duplicateOf: DuplicateOf | null;
 }
@@ -70,6 +72,7 @@ export function toHuntReportView(report: HuntReportDocument, now: Date, duplicat
     ocrError: ocr?.error ?? null,
     codeConfidence: ocr?.codeConfidence ?? null,
     timeConfidence: ocr?.timeConfidence ?? null,
+    stickerBox: ocr?.stickerBox?.length === 4 ? ([...ocr.stickerBox] as HuntReportView["stickerBox"]) : null,
     needsReview: needsReview(report),
     duplicateOf,
   };
