@@ -7,6 +7,8 @@ const NotifierStateSchema = new mongoose.Schema({
   lastArticleId: { type: Number, required: true, default: 0 },
   /** False until the first run stored the current state (that run sends nothing) */
   initialized: { type: Boolean, required: true, default: false },
+  /** Bumped on every state change; runs compare-and-set on it so overlapping runs never announce a change twice */
+  version: { type: Number, required: true, default: 0 },
 });
 
 export const NotifierState = mongoose.model("NotifierState", NotifierStateSchema);

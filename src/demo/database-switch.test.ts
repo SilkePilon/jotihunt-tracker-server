@@ -17,7 +17,8 @@ import {
   setDemoWorldGenerator,
   switchDemoMode,
 } from "./database-switch";
-import { currentGeneration, isDemoMode, runTracked, skipInDemoMode } from "./demo-mode";
+import express from "express";
+import { activeWorkCount, currentGeneration, isDemoMode, runTracked, skipInDemoMode } from "./demo-mode";
 
 describe("demo database name", () => {
   test("appends -demo to the database name", () => {
@@ -83,12 +84,27 @@ function fakeRes() {
   return new EventEmitter() as unknown as Response;
 }
 
+/** A fake response with end() that emits "finish" like a real one */
+function fakeResWithEnd() {
+  const res = new EventEmitter() as EventEmitter & { end: () => void; writableFinished: boolean };
+  res.writableFinished = false;
+  res.end = () => {
+    res.writableFinished = true;
+    res.emit("finish");
+    res.emit("close");
+  };
+  return res;
+}
+
+const warnings: string[] = [];
+const testLogger = { info() {}, warn: (message: string) => void warnings.push(message), error() {} };
+
 describe("switching between the real and the demo database", () => {
   beforeAll(async () => {
     expect(realName).not.toBe("jotihunt");
     if (mongoose.connection.readyState !== mongoose.ConnectionStates.disconnected) await mongoose.disconnect();
     await dropTestDatabases();
-    await initDemoMode(realUri, { drainTimeoutMs: 1_000 });
+    await initDemoMode(realUri, { drainTimeoutMs: 1_000, abandonedRequestMs: 300, logger: testLogger });
     expect(mongoose.connection.name).toBe(realName);
   });
 
@@ -176,6 +192,69 @@ describe("switching between the real and the demo database", () => {
     (res as unknown as EventEmitter).emit("finish");
     await switchingOff;
     expect(isDemoMode()).toBe(false);
+  });
+
+  test("a request the client aborted still delays a switch until its handler responds", async () => {
+    setDemoWorldGenerator(async () => {});
+    const res = fakeResWithEnd();
+    demoGate({ method: "POST", originalUrl: "/admin/users" } as Request, res as unknown as Response, () => {});
+    const counted = activeWorkCount();
+    res.emit("close"); // client gone, handler still working
+    expect(activeWorkCount()).toBe(counted);
+    let on = false;
+    const switchingOn = switchDemoMode(true).then(() => (on = true));
+    await Bun.sleep(100);
+    expect(on).toBe(false);
+    res.end(); // the handler responds (into the void)
+    await switchingOn;
+    expect(isDemoMode()).toBe(true);
+    await switchDemoMode(false);
+  });
+
+  test("an aborted request whose handler never responds stops counting after a while (logged)", async () => {
+    setDemoWorldGenerator(async () => {});
+    warnings.length = 0;
+    const res = fakeResWithEnd();
+    demoGate({ method: "GET", originalUrl: "/hangs" } as Request, res as unknown as Response, () => {});
+    res.emit("close");
+    const started = Date.now();
+    await switchDemoMode(true);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(250);
+    expect(warnings).toEqual(["GET /hangs (client gone) still running after 0.3 s; no longer delays a demo switch"]);
+    res.end(); // a late response does not count twice
+    await switchDemoMode(false);
+    expect(isDemoMode()).toBe(false);
+  });
+
+  test("over real HTTP: an aborted request is counted until the handler finishes", async () => {
+    let respond!: () => void;
+    const handlerDone = new Promise<void>((resolve) => (respond = resolve));
+    let handlerStarted!: () => void;
+    const started = new Promise<void>((resolve) => (handlerStarted = resolve));
+    const app = express();
+    app.use(demoGate);
+    app.get("/slow", async (_req, res) => {
+      handlerStarted();
+      await handlerDone;
+      res.json({ ok: true });
+    });
+    const server = app.listen(0);
+    try {
+      const port = (server.address() as { port: number }).port;
+      const before = activeWorkCount();
+      const controller = new AbortController();
+      const request = fetch(`http://127.0.0.1:${port}/slow`, { signal: controller.signal }).catch(() => null);
+      await started;
+      controller.abort();
+      await request;
+      await Bun.sleep(50);
+      expect(activeWorkCount()).toBe(before + 1);
+      respond();
+      await Bun.sleep(50);
+      expect(activeWorkCount()).toBe(before);
+    } finally {
+      server.close();
+    }
   });
 
   test("a slow tracked job started in demo mode delays switch-off; its writes stay in the demo database", async () => {
