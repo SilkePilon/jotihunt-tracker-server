@@ -8,6 +8,7 @@ import { User } from "../models/user.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { ServiceError } from "../http/service-error";
 import { linkScrapedHunts } from "./hunt-report-sync.service";
+import { findDuplicateOf, toHuntReportView } from "./hunt-report.view";
 import {
   createHuntReport,
   deleteHuntReport,
@@ -451,5 +452,25 @@ describe("listHuntReports", () => {
     await createHuntReport(input({ huntCode: undefined, huntTime: undefined }), merida);
     const views = await listHuntReports();
     expect(views.map((view) => view.huntCode)).toEqual([null, "OLD1"]);
+  });
+});
+
+describe("listHuntReports from lean documents", () => {
+  test("gives exactly the views built from full documents", async () => {
+    const merida = await makeUser("merida");
+    const admin = await makeUser("admin", true);
+    const first = await createHuntReport(input({ huntCode: "DUP1", location: [5.9, 52.2], uploadId: "u1" }), merida);
+    await createHuntReport(input({ huntCode: "DUP1" }), merida);
+    const unread = await createHuntReport(input({ huntCode: undefined, huntTime: undefined }), merida);
+    await HuntReport.updateOne({ _id: unread._id }, { $set: { ocr: { status: "failed", attempts: 3, error: "Lezen mislukt.", codeConfidence: 0.4, timeConfidence: 0.2, stickerBox: [1, 2, 3, 4], rawTime: "11:00", readAt: new Date() } } });
+    await setHuntReportSubmitted(first._id, true, admin);
+    await linkScrapedHunts([{ huntCode: "DUP1", status: "Goedgekeurd", points: 5 }]);
+    await HuntReport.collection.insertOne({ area: "bravo", huntCode: "OLD1", huntTime, photo: "old.jpg", reportedBy: merida._id, reportedByName: "merida", createdAt: huntTime });
+
+    const now = new Date("2026-10-17T12:10:00Z");
+    const documents = await HuntReport.find();
+    const expected = await Promise.all(documents.map(async (report) => toHuntReportView(report, now, await findDuplicateOf(report))));
+    expected.sort((a, b) => b.huntTime.localeCompare(a.huntTime));
+    expect(await listHuntReports(now)).toEqual(expected);
   });
 });

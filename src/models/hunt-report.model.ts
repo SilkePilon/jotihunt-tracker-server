@@ -1,6 +1,7 @@
 import mongoose, { HydratedDocument, InferSchemaType } from "mongoose";
 import { pointSchema } from "./point";
 import { FIELD_SOURCES, HUNT_AREAS, OCR_STATUSES } from "../services/hunt-report.helpers";
+import { invalidateOnWrite } from "../services/response-cache";
 
 /** Last result of this code on jotihunt.nl, copied from the scraper (which only keeps the latest 15 hunts). */
 const SiteResultSchema = new mongoose.Schema(
@@ -64,5 +65,10 @@ const HuntReportSchema = new mongoose.Schema(
 // still indexes documents without uploadId (reportedBy is always set), which would make those collide.
 HuntReportSchema.index({ uploadId: 1, reportedBy: 1 }, { unique: true, partialFilterExpression: { uploadId: { $type: "string" } } });
 
+// GET /hunt-reports is cached for a moment; every write clears it
+invalidateOnWrite(HuntReportSchema, "huntReports");
+
 export const HuntReport = mongoose.model("HuntReport", HuntReportSchema);
 export type HuntReportDocument = HydratedDocument<InferSchemaType<typeof HuntReportSchema>>;
+/** A report as a plain object (`.lean()`); a hydrated document fits too. */
+export type HuntReportRecord = InferSchemaType<typeof HuntReportSchema> & { _id: mongoose.Types.ObjectId; createdAt: Date };

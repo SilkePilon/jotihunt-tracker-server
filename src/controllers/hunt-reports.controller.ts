@@ -12,14 +12,16 @@ import {
   setHuntReportFields,
   setHuntReportSubmitted,
 } from "../services/hunt-report.service";
+import { sendCachedJson } from "../services/response-cache";
 
 function queueReading(view: HuntReportView): HuntReportView {
   if (view.ocrStatus === "pending") huntOcr.enqueue(view._id);
   return view;
 }
 
+/** Polled by every hunter; the list is the same for everyone: one shared body for a moment (cleared by every write) */
 export function getHuntReports(_req: Request, res: Response) {
-  return respond(res, 200, () => listHuntReports());
+  return sendCachedJson(res, "huntReports", () => listHuntReports());
 }
 
 export function postHuntReport(req: Request, res: Response) {

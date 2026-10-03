@@ -4,7 +4,7 @@ import { Marker, MarkerType, type MarkerDocument } from "../models/marker.model"
 import type { UserType } from "../models/user.model";
 import { ServiceError } from "../http/service-error";
 import { fieldSource, HUNT_AREAS, normalizeHuntCode, resolvePhotoExtension } from "./hunt-report.helpers";
-import { compareAge, createdAtOf, findDuplicateOf, toHuntReportView, type HuntReportView } from "./hunt-report.view";
+import { compareAge, createdAtOf, findDuplicateOf, toHuntReportView, VIEW_FIELDS, type HuntReportView, type HuntReportViewSource } from "./hunt-report.view";
 import { deletePhoto, photoFilePath, savePhoto } from "./photo-store";
 import { isDuplicateKeyError } from "../utils/mongo";
 
@@ -97,8 +97,8 @@ export async function createHuntReport(input: NewHuntReport, user: UserType): Pr
 }
 
 export async function listHuntReports(now = new Date()): Promise<HuntReportView[]> {
-  const reports = await HuntReport.find();
-  const firstByCode = new Map<string, HuntReportDocument>();
+  const reports: HuntReportViewSource[] = await HuntReport.find().select(VIEW_FIELDS).lean();
+  const firstByCode = new Map<string, HuntReportViewSource>();
   for (const report of [...reports].sort(compareAge)) {
     if (report.huntCode && !firstByCode.has(report.huntCode)) firstByCode.set(report.huntCode, report);
   }
