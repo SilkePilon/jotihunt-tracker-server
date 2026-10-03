@@ -2,7 +2,7 @@ import { Request, Response } from "express";
 import { AppNotification, toNotificationView } from "../models/notification.model";
 import { PushSubscription } from "../models/push-subscription.model";
 import { User } from "../models/user.model";
-import { buildBroadcastNotification } from "../services/notifier.helpers";
+import { buildBroadcastNotification, buildCounterHuntNotification, type CounterHuntDirection } from "../services/notifier.helpers";
 import { currentGeneration, runTracked } from "../demo/demo-mode";
 import { sendToAll, vapidPublicKey } from "../services/push.service";
 
@@ -60,6 +60,13 @@ export async function unsubscribe(req: Request, res: Response) {
 
 export async function broadcast(req: Request, res: Response) {
   const notification = await AppNotification.create(buildBroadcastNotification(String(req.body.message).trim(), req.user!.name));
+  const generation = currentGeneration();
+  void runTracked(() => sendToAll(notification), { generation });
+  return res.status(201).json(toNotificationView(notification));
+}
+
+export async function counterHunt(req: Request, res: Response) {
+  const notification = await AppNotification.create(buildCounterHuntNotification(Number(req.body.direction) as CounterHuntDirection, req.user!.name));
   const generation = currentGeneration();
   void runTracked(() => sendToAll(notification), { generation });
   return res.status(201).json(toNotificationView(notification));

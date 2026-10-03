@@ -1,4 +1,4 @@
-export const NOTIFICATION_TYPES = ["fox-status", "hint", "article", "hunt-deadline", "broadcast"] as const;
+export const NOTIFICATION_TYPES = ["fox-status", "hint", "article", "hunt-deadline", "broadcast", "counter-hunt"] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 /** Types a user can switch off; broadcasts from HQ always come through. */
 export const OPTIONAL_NOTIFICATION_TYPES = NOTIFICATION_TYPES.filter((type) => type !== "broadcast");
@@ -97,4 +97,30 @@ export function buildDeadlineNotification(
 
 export function buildBroadcastNotification(message: string, from: string): NotificationInput {
   return { type: "broadcast", title: "Bericht van HQ", body: message, urgent: true, data: { from } };
+}
+
+/** Wind directions a tegenhunt can come from, in degrees (the Tegenhunt card's choices). */
+export const COUNTER_HUNT_DIRECTIONS = [0, 45, 90, 135, 180, 225, 270, 315] as const;
+export type CounterHuntDirection = (typeof COUNTER_HUNT_DIRECTIONS)[number];
+
+const DIRECTION_LABEL: Record<CounterHuntDirection, { short: string; name: string; arrow: string }> = {
+  0: { short: "N", name: "noord", arrow: "↑" },
+  45: { short: "NO", name: "noordoost", arrow: "↗" },
+  90: { short: "O", name: "oost", arrow: "→" },
+  135: { short: "ZO", name: "zuidoost", arrow: "↘" },
+  180: { short: "Z", name: "zuid", arrow: "↓" },
+  225: { short: "ZW", name: "zuidwest", arrow: "↙" },
+  270: { short: "W", name: "west", arrow: "←" },
+  315: { short: "NW", name: "noordwest", arrow: "↖" },
+};
+
+export function buildCounterHuntNotification(direction: CounterHuntDirection, from: string): NotificationInput {
+  const { short, name, arrow } = DIRECTION_LABEL[direction];
+  return {
+    type: "counter-hunt",
+    title: `Tegenhunt! Richting ${short} ${arrow}`,
+    body: `Zoek de sticker binnen 500 m van het clubhuis, richting ${name}.`,
+    urgent: true,
+    data: { direction, from },
+  };
 }

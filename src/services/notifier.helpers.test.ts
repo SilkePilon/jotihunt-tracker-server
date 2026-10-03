@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   buildArticleNotification,
   buildBroadcastNotification,
+  buildCounterHuntNotification,
+  COUNTER_HUNT_DIRECTIONS,
   buildDeadlineNotification,
   buildFoxStatusNotification,
   diffAreaStatus,
@@ -72,6 +74,26 @@ describe("builders", () => {
   });
   test("broadcast", () => {
     expect(buildBroadcastNotification("Terug naar HQ", "Kim")).toMatchObject({ type: "broadcast", urgent: true, title: "Bericht van HQ", body: "Terug naar HQ", data: { from: "Kim" } });
+  });
+});
+
+describe("buildCounterHuntNotification", () => {
+  test("writes the direction out with an arrow", () => {
+    expect(buildCounterHuntNotification(45, "Kim")).toEqual({
+      type: "counter-hunt",
+      title: "Tegenhunt! Richting NO ↗",
+      body: "Zoek de sticker binnen 500 m van het clubhuis, richting noordoost.",
+      urgent: true,
+      data: { direction: 45, from: "Kim" },
+    });
+    expect(buildCounterHuntNotification(270, "Kim").title).toBe("Tegenhunt! Richting W ←");
+  });
+  test("every direction has a label", () => {
+    expect(COUNTER_HUNT_DIRECTIONS).toEqual([0, 45, 90, 135, 180, 225, 270, 315]);
+    for (const direction of COUNTER_HUNT_DIRECTIONS) expect(buildCounterHuntNotification(direction, "x").title).not.toContain("undefined");
+  });
+  test("can be switched off", () => {
+    expect(isTypeEnabled("counter-hunt", ["counter-hunt"])).toBe(false);
   });
 });
 

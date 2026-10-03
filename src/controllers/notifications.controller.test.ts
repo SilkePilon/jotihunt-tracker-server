@@ -4,7 +4,7 @@ import { AppNotification } from "../models/notification.model";
 import { PushSubscription } from "../models/push-subscription.model";
 import { User } from "../models/user.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
-import { broadcast, getPreferences, listNotifications, putPreferences, subscribe, unsubscribe } from "./notifications.controller";
+import { broadcast, counterHunt, getPreferences, listNotifications, putPreferences, subscribe, unsubscribe } from "./notifications.controller";
 
 function fakeRes() {
   const res = { statusCode: 200, body: undefined as unknown, status(code: number) { res.statusCode = code; return res; }, json(body: unknown) { res.body = body; return res; }, end() { return res; } };
@@ -68,4 +68,11 @@ test("broadcast stores an urgent notification", async () => {
   const res = await call(broadcast, { user: admin, body: { message: "Terug naar HQ" } });
   expect(res.statusCode).toBe(201);
   expect(await AppNotification.findOne({ type: "broadcast" }).lean()).toMatchObject({ title: "Bericht van HQ", body: "Terug naar HQ", urgent: true });
+});
+
+test("counterHunt stores an urgent counter-hunt notification", async () => {
+  const admin = await User.create({ email: "h@t.nl", password: "x", name: "HQ", admin: true });
+  const res = await call(counterHunt, { user: admin, body: { direction: 90 } });
+  expect(res.statusCode).toBe(201);
+  expect(await AppNotification.findOne({ type: "counter-hunt" }).lean()).toMatchObject({ title: "Tegenhunt! Richting O →", urgent: true, data: { direction: 90, from: "HQ" } });
 });

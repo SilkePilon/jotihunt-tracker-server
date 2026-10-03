@@ -3,6 +3,7 @@ import * as adminController from "../controllers/admin.controller";
 import * as notificationsController from "../controllers/notifications.controller";
 import * as trackerController from "../controllers/tracker.controller";
 import { VEHICLES } from "../services/tracker-onboarding.helpers";
+import { COUNTER_HUNT_DIRECTIONS } from "../services/notifier.helpers";
 import verifyToken, { isAdmin } from "../middleware/auth.middleware";
 import { body, param } from "express-validator";
 import { User } from "../models/user.model";
@@ -62,6 +63,11 @@ router.post(
   "/broadcast",
   [verifyToken, isAdmin, validate([body("message").isString().trim().isLength({ min: 1, max: 200 }).withMessage("Bericht moet 1 tot 200 tekens zijn.")])],
   notificationsController.broadcast,
+);
+router.post(
+  "/counter-hunt",
+  [verifyToken, isAdmin, validate([body("direction").isIn(COUNTER_HUNT_DIRECTIONS.map(String)).withMessage("Richting moet 0, 45, 90, ..., 315 zijn.").toInt()])],
+  notificationsController.counterHunt,
 );
 router.delete("/users/:id", [verifyToken, isAdmin, validate(deleteValidator)], adminController.deleteUser);
 router.put("/users/:id", [verifyToken, isAdmin, validate(updateValidator)], adminController.updateUser);
