@@ -8,6 +8,8 @@ const HuntSchema = new mongoose.Schema({
   huntCode: {
     type: String,
     required: true,
+    // Upserted by this key; a duplicate would make the upsert update only one of them
+    unique: true,
   },
   status: {
     type: String,

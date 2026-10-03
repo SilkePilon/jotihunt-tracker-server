@@ -6,7 +6,7 @@ import { predictionService } from "../services/prediction/instance";
 async function recompute() {
   const { recomputed, failed } = await predictionService.recomputeDue();
   if (recomputed.length > 0) logger.info(`(CRON) Recomputed fox predictions for ${recomputed.join(", ")}`);
-  for (const failure of failed) logger.error(`(CRON) Fox prediction for ${failure.area} failed`, failure.error);
+  for (const failure of failed) logger.error(`(CRON) Fox prediction for ${failure.area} failed: ${failure.error instanceof Error ? failure.error.message : String(failure.error)}`);
 }
 
 /** Tracked, so a demo switch waits for it (and it is skipped while a switch runs). */

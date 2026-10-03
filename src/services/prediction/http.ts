@@ -1,6 +1,16 @@
 export type Schedule = <T>(task: () => Promise<T>) => Promise<T>;
 
-export type HttpPost = (url: string, body: unknown, config: { headers: Record<string, string>; timeout: number }) => Promise<{ data: unknown }>;
+export interface HttpPostConfig {
+  headers: Record<string, string>;
+  /** Idle timeout (axios) */
+  timeout: number;
+  /** Total deadline: under Bun axios' timeout is idle-only */
+  signal?: AbortSignal;
+  maxContentLength?: number;
+  maxBodyLength?: number;
+}
+
+export type HttpPost = (url: string, body: unknown, config: HttpPostConfig) => Promise<{ data: unknown }>;
 
 export type HttpGet = (
   url: string,

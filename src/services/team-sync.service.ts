@@ -28,7 +28,7 @@ let running: Promise<number> | undefined;
  */
 export function syncTeams(fetchTeams: () => Promise<ApiTeam[]> = getTeams): Promise<number> {
   running ??= (async () => {
-    const apiTeams = await fetchTeams();
+    const apiTeams = (await fetchTeams()).filter((team) => typeof team.id === "number" && typeof team.name === "string");
     if (apiTeams.length === 0) throw new Error("Jotihunt API returned no teams");
 
     await Team.bulkWrite(
@@ -40,7 +40,8 @@ export function syncTeams(fetchTeams: () => Promise<ApiTeam[]> = getTeams): Prom
         },
       })),
     );
-    await Team.deleteMany({ apiId: { $nin: apiTeams.map((team) => team.id) } });
+    // A much shorter list than stored is a broken answer, not groups leaving: keep the rest
+    if (apiTeams.length * 2 >= (await Team.countDocuments())) await Team.deleteMany({ apiId: { $nin: apiTeams.map((team) => team.id) } });
     return apiTeams.length;
   })().finally(() => {
     running = undefined;

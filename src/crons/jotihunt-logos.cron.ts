@@ -2,6 +2,7 @@ import axios from "axios";
 import { logger } from "../logger";
 import { currentGeneration, runTracked, skipInDemoMode } from "../demo/demo-mode";
 import { Team } from "../models/team.model";
+import { MB } from "../services/http-limits";
 import { USER_AGENT } from "../services/prediction/constants";
 import { normalizeTeamName, parseTeamLogos } from "../services/team-logos.helpers";
 
@@ -15,7 +16,14 @@ export default async function retrieveJotihuntLogos() {
   const baseUrl = (process.env.JOTIHUNT_WEB_URL || "https://jotihunt.nl").replace(/\/+$/, "");
   const generation = currentGeneration();
   try {
-    const { data } = await axios.get<string>(`${baseUrl}/subscriptions`, { timeout: 15_000, responseType: "text", headers: { "User-Agent": USER_AGENT } });
+    const { data } = await axios.get<string>(`${baseUrl}/subscriptions`, {
+      timeout: 15_000,
+      // Total deadline: axios' timeout is idle-only under Bun
+      signal: AbortSignal.timeout(15_000),
+      maxContentLength: 5 * MB,
+      responseType: "text",
+      headers: { "User-Agent": USER_AGENT },
+    });
     const logos = parseTeamLogos(data);
     // Store only into the database the run started on (skipped when a demo switch happened meanwhile)
     const updated = await runTracked(

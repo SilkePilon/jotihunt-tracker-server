@@ -1,6 +1,7 @@
 import webpush from "web-push";
 import { PushSubscription } from "../models/push-subscription.model";
 import { User } from "../models/user.model";
+import { deadline } from "./http-limits";
 import { isTypeEnabled } from "./notifier.helpers";
 
 export interface PushNotificationInput {
@@ -25,6 +26,9 @@ export interface PushSender {
 const PARALLEL_SENDS = 10;
 /** Alerts older than this are useless (a fox status from an hour ago); the push service drops them. */
 const PUSH_TTL_SECONDS = 15 * 60;
+/** web-push's own timeout is a socket idle timeout; the deadline also ends a push service that trickles its answer */
+const PUSH_TIMEOUT_MS = 10_000;
+let pushDeadlineMs = 15_000;
 
 let configured: boolean | null = null;
 let sender: PushSender = webpush;
@@ -62,6 +66,11 @@ export function setPushSender(next: PushSender | null) {
 }
 
 /** Tests only */
+export function setPushDeadline(ms: number) {
+  pushDeadlineMs = ms;
+}
+
+/** Tests only */
 export function resetPushConfig() {
   configured = null;
 }
@@ -89,7 +98,7 @@ export async function sendToAll(notification: PushNotificationInput, log: PushLo
       urgent: notification.urgent,
       url: "/",
     });
-    const options: webpush.RequestOptions = { TTL: PUSH_TTL_SECONDS, urgency: notification.urgent ? "high" : "normal" };
+    const options: webpush.RequestOptions = { TTL: PUSH_TTL_SECONDS, urgency: notification.urgent ? "high" : "normal", timeout: PUSH_TIMEOUT_MS };
 
     for (let index = 0; index < targets.length; index += PARALLEL_SENDS) {
       await Promise.all(
@@ -97,7 +106,7 @@ export async function sendToAll(notification: PushNotificationInput, log: PushLo
           const keys = subscription.keys;
           if (!keys) return;
           try {
-            await sender.sendNotification({ endpoint: subscription.endpoint, keys }, payload, options);
+            await deadline(sender.sendNotification({ endpoint: subscription.endpoint, keys }, payload, options), pushDeadlineMs, "Push timed out");
             result.sent++;
           } catch (error) {
             const status = (error as { statusCode?: number }).statusCode;

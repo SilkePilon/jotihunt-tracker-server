@@ -55,6 +55,17 @@ describe("syncTeams", () => {
     expect((await Team.find().lean()).map((team) => team.apiId)).toEqual([2]);
   });
 
+  test("a much shorter answer (broken API) upserts but removes nothing", async () => {
+    await syncTeams(async () => [1, 2, 3, 4, 5, 6].map((id) => apiTeam(id)));
+    await syncTeams(async () => [apiTeam(1), apiTeam(2)]);
+    expect(await Team.countDocuments()).toBe(6);
+  });
+
+  test("entries without a numeric id are skipped", async () => {
+    expect(await syncTeams(async () => [apiTeam(1), { ...apiTeam(2), id: null } as unknown as ApiTeam])).toBe(1);
+    expect((await Team.find().lean()).map((team) => team.apiId)).toEqual([1]);
+  });
+
   test("an empty API answer changes nothing", async () => {
     await syncTeams(async () => [apiTeam(1)]);
     await expect(syncTeams(async () => [])).rejects.toThrow();

@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { createGeminiClient, generateJson, GeminiError, STICKER_PROMPT, type GeminiHttp } from "./gemini.client";
+import axios from "axios";
+import { createGeminiClient, generateJson, GeminiError, STICKER_PROMPT, type GeminiHttp, type GeminiRequestConfig } from "./gemini.client";
 
 const API_KEY = "test-key-123";
 
 function fakeHttp(respond: () => Promise<{ data: unknown }>) {
-  const calls: { url: string; body: unknown; config: { headers: Record<string, string>; timeout: number } }[] = [];
+  const calls: { url: string; body: unknown; config: GeminiRequestConfig }[] = [];
   const http: GeminiHttp = {
-    post: async <T>(url: string, body: unknown, config: { headers: Record<string, string>; timeout: number }) => {
+    post: async <T>(url: string, body: unknown, config: GeminiRequestConfig) => {
       calls.push({ url, body, config });
       return (await respond()) as { data: T };
     },
@@ -39,7 +40,9 @@ describe("createGeminiClient.readSticker", () => {
     const [call] = calls;
     expect(call.url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent");
     expect(call.url).not.toContain(API_KEY);
-    expect(call.config).toEqual({ headers: { "x-goog-api-key": API_KEY }, timeout: 30_000 });
+    expect(call.config).toMatchObject({ headers: { "x-goog-api-key": API_KEY }, timeout: 30_000 });
+    expect(call.config.signal).toBeInstanceOf(AbortSignal);
+    expect(call.config.maxContentLength).toBeGreaterThan(0);
     expect(call.body).toEqual({
       contents: [{ parts: [{ text: STICKER_PROMPT }, { inline_data: { mime_type: "image/jpeg", data: "BASE64" } }] }],
       generationConfig: { responseMimeType: "application/json", temperature: 0 },
@@ -103,7 +106,7 @@ describe("generateJson", () => {
     const text = await generateJson({ http, apiKey: API_KEY, model: "m-1", parts: [{ text: "hi" }], generationConfig: { temperature: 0.2 }, timeoutMs: 5000 });
     expect(text).toBe('{"ok":true}');
     expect(calls[0].url).toContain("/models/m-1:generateContent");
-    expect(calls[0].config).toEqual({ headers: { "x-goog-api-key": API_KEY }, timeout: 5000 });
+    expect(calls[0].config).toMatchObject({ headers: { "x-goog-api-key": API_KEY }, timeout: 5000 });
     expect(calls[0].body).toEqual({ contents: [{ parts: [{ text: "hi" }] }], generationConfig: { responseMimeType: "application/json", temperature: 0.2 } });
   });
 
@@ -112,5 +115,53 @@ describe("generateJson", () => {
     const error = await readError(generateJson({ http, apiKey: API_KEY, model: "m", parts: [], timeoutMs: 1 }));
     expect(error.retryable).toBe(true);
     expect(error.status).toBe(429);
+  });
+});
+
+describe("generateJson deadlines", () => {
+  test("an answer that broke off after a 2xx status (timeout while reading the body) is retryable", async () => {
+    const { http } = fakeHttp(async () => {
+      throw Object.assign(new Error("canceled"), { code: "ERR_CANCELED", response: { status: 200 } });
+    });
+    const error = await readError(generateJson({ http, apiKey: API_KEY, model: "m", parts: [], timeoutMs: 1 }));
+    expect(error.retryable).toBe(true);
+    expect(error.status).toBeUndefined();
+    expect(error.message).toBe("Gemini niet bereikbaar");
+  });
+
+  test("a trickling answer is aborted after the total deadline (real axios)", async () => {
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const server = Bun.serve({
+      port: 0,
+      idleTimeout: 0,
+      fetch() {
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"candidates":['));
+            timer = setInterval(() => {
+              try {
+                controller.enqueue(new TextEncoder().encode(" "));
+              } catch {
+                clearInterval(timer);
+              }
+            }, 50);
+          },
+          cancel() {
+            clearInterval(timer);
+          },
+        });
+        return new Response(stream, { headers: { "content-type": "application/json" } });
+      },
+    });
+    try {
+      const local: GeminiHttp = { post: (_url, body, config) => axios.post(`http://127.0.0.1:${server.port}/`, body, config) };
+      const started = Date.now();
+      const error = await readError(generateJson({ http: local, apiKey: API_KEY, model: "m", parts: [], timeoutMs: 400 }));
+      expect(Date.now() - started).toBeLessThan(3000);
+      expect(error.retryable).toBe(true);
+    } finally {
+      clearInterval(timer);
+      server.stop(true);
+    }
   });
 });

@@ -30,9 +30,9 @@ describe("createOrsRouter", () => {
   });
 
   test("sends the matrix request with the key and user agent", async () => {
-    const calls: { url: string; body: unknown; headers: Record<string, string> }[] = [];
+    const calls: { url: string; body: unknown; headers: Record<string, string>; config: Parameters<HttpPost>[2] }[] = [];
     const post: HttpPost = async (url, body, config) => {
-      calls.push({ url, body, headers: config.headers });
+      calls.push({ url, body, headers: config.headers, config });
       return { data: sampleMatrix };
     };
     const router = createOrsRouter("secret", { post, schedule: immediate });
@@ -48,6 +48,9 @@ describe("createOrsRouter", () => {
     expect(calls[0].headers.Authorization).toBe("secret");
     expect(calls[0].headers["User-Agent"]).toBe(USER_AGENT);
     expect(result.durationsS[0][1]).toBe(720.5);
+    // A total deadline (axios' timeout is idle-only under Bun) and a response size cap
+    expect(calls[0].config.signal).toBeInstanceOf(AbortSignal);
+    expect(calls[0].config.maxContentLength).toBeGreaterThan(0);
   });
 
   test("HTTP errors and exhausted quota become RoutingUnavailableError", async () => {

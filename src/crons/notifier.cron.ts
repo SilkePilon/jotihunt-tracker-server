@@ -9,6 +9,6 @@ export default async function notify() {
     const created = await runTracked(() => runNotifier({ log: logger }), { generation });
     if (created?.length) logger.info(`(CRON) Created ${created.length} notification(s): ${created.map((notification) => notification.title).join(" | ")}`);
   } catch (error) {
-    logger.error("(CRON) Notifier failed", error);
+    logger.error(`(CRON) Notifier failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }

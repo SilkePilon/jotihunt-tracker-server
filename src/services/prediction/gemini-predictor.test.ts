@@ -1,14 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { GeminiError, type GeminiHttp } from "../gemini.client";
+import { GeminiError, type GeminiHttp, type GeminiRequestConfig } from "../gemini.client";
 import { createGeminiPredictor, DEFAULT_PREDICTION_MODEL } from "./gemini-predictor";
 import { PREDICTION_SCHEMA } from "./prompt";
 
 const KEY = "secret-key-9";
 
 function http(respond: () => Promise<{ data: unknown }>) {
-  const calls: { url: string; body: { contents: { parts: unknown }[]; generationConfig: unknown }; config: { headers: Record<string, string>; timeout: number } }[] = [];
+  const calls: { url: string; body: { contents: { parts: unknown }[]; generationConfig: unknown }; config: GeminiRequestConfig }[] = [];
   const client: GeminiHttp = {
-    post: async <T>(url: string, body: unknown, config: { headers: Record<string, string>; timeout: number }) => {
+    post: async <T>(url: string, body: unknown, config: GeminiRequestConfig) => {
       calls.push({ url, body: body as (typeof calls)[number]["body"], config });
       return (await respond()) as { data: T };
     },

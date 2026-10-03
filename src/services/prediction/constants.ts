@@ -6,6 +6,9 @@ export const DETOUR_FACTOR = 1.3;
 export const RECOMPUTE_INTERVAL_MS = 10 * 60 * 1000;
 /** After a failed Gemini run, the area waits this long before trying again. */
 export const FAILURE_BACKOFF_MS = 2 * 60 * 1000;
+/** After a Gemini 429/503/timeout every area skips Gemini this long, doubling per failure up to the max (circuit breaker). */
+export const GEMINI_PAUSE_MS = 2 * 60 * 1000;
+export const GEMINI_PAUSE_MAX_MS = 10 * 60 * 1000;
 /** Wait before the single retry of a failed Gemini answer. */
 export const RETRY_DELAY_MS = 3000;
 /** A pin further than this from the last trail point is rejected. */

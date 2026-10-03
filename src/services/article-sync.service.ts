@@ -32,8 +32,7 @@ async function getAreaNames(): Promise<string[]> {
 /**
  * Create the per-area cells for a hint article that don't exist yet.
  *
- * The areas cron rewrites the Area collection (deleteMany + insertMany) every 10s, so a read
- * here can observe a partial list. Rather than bail out entirely once any cell exists (which
+ * The Area collection can be incomplete (e.g. before the first /areas answer was stored). Rather than bail out entirely once any cell exists (which
  * would leave the missing areas never backfilled), only the areas still missing a cell are
  * created.
  * @returns The number of cells created

@@ -1,9 +1,24 @@
+import { MB } from "./http-limits";
 import { parseStickerReading, type StickerReading } from "./sticker-ocr.helpers";
+
+export interface GeminiRequestConfig {
+  headers: Record<string, string>;
+  /** Idle timeout (axios) */
+  timeout: number;
+  /** Total deadline: under Bun axios' timeout is idle-only, a trickling answer would never end */
+  signal: AbortSignal;
+  maxContentLength: number;
+  maxBodyLength: number;
+}
 
 /** The part of axios the client needs; injected so tests never call the real API. */
 export interface GeminiHttp {
-  post<T>(url: string, body: unknown, config: { headers: Record<string, string>; timeout: number }): Promise<{ data: T }>;
+  post<T>(url: string, body: unknown, config: GeminiRequestConfig): Promise<{ data: T }>;
 }
+
+/** The answer is a small JSON text; the request carries one photo (at most 5 MB, about 7 MB as base64) */
+const MAX_RESPONSE_BYTES = 5 * MB;
+const MAX_REQUEST_BYTES = 20 * MB;
 
 /** Failure of a Gemini call. The (Dutch) message is shown to HQ; it never contains the API key or the raw HTTP error. */
 export class GeminiError extends Error {
@@ -22,6 +37,7 @@ export interface StickerReader {
 }
 
 export const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
+/** Total time for one sticker reading (a flash model answers in seconds) */
 const TIMEOUT_MS = 30_000;
 
 export const STICKER_PROMPT = `The photo shows a Jotihunt sticker (a scouting game). Read three things from it.
@@ -58,10 +74,18 @@ export async function generateJson({
   const body = { contents: [{ parts }], generationConfig: { responseMimeType: "application/json", ...generationConfig } };
   let response: { data: GenerateContentResponse };
   try {
-    response = await http.post<GenerateContentResponse>(url, body, { headers: { "x-goog-api-key": apiKey }, timeout: timeoutMs });
+    response = await http.post<GenerateContentResponse>(url, body, {
+      headers: { "x-goog-api-key": apiKey },
+      timeout: timeoutMs,
+      signal: AbortSignal.timeout(timeoutMs),
+      maxContentLength: MAX_RESPONSE_BYTES,
+      maxBodyLength: MAX_REQUEST_BYTES,
+    });
   } catch (error) {
-    // Only the status code is used: the error object holds the request headers (with the key)
-    const status = (error as { response?: { status?: number } } | null)?.response?.status;
+    // Only the status code is used: the error object holds the request headers (with the key).
+    // A 2xx status means the answer broke off while its body was read (timeout, connection lost): retryable like no answer.
+    const received = (error as { response?: { status?: number } } | null)?.response?.status;
+    const status = received !== undefined && received >= 300 ? received : undefined;
     throw new GeminiError(status ? `Gemini-verzoek mislukt (HTTP ${status})` : "Gemini niet bereikbaar", !status || status === 429 || status >= 500, status);
   }
   return response.data?.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("") ?? "";

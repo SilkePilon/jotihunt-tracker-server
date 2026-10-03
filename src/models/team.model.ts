@@ -5,6 +5,8 @@ const TeamSchema = new mongoose.Schema({
   apiId: {
     type: Number,
     required: true,
+    // Upserted by this key; a duplicate would make the upsert update only one of them
+    unique: true,
   },
   name: {
     type: String,
