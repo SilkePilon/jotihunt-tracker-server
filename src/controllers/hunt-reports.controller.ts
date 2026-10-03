@@ -12,14 +12,16 @@ import {
   setHuntReportFields,
   setHuntReportSubmitted,
 } from "../services/hunt-report.service";
+import { sendCachedJson } from "../services/response-cache";
 
 function queueReading(view: HuntReportView): HuntReportView {
   if (view.ocrStatus === "pending") huntOcr.enqueue(view._id);
   return view;
 }
 
+/** Polled by every hunter; the list is the same for everyone: one shared body for a moment (cleared by every write) */
 export function getHuntReports(_req: Request, res: Response) {
-  return respond(res, 200, () => listHuntReports());
+  return sendCachedJson(res, "huntReports", () => listHuntReports());
 }
 
 export function postHuntReport(req: Request, res: Response) {
@@ -65,6 +67,8 @@ export async function getPhoto(req: Request, res: Response) {
     const file = await huntReportPhotoPath(String(req.params.id));
     if (!existsSync(file)) return res.status(404).json({ message: "Foto niet gevonden." });
     res.setHeader("Cache-Control", "private, max-age=86400");
+    // The stored type is trusted from the upload: never let a browser sniff it into something else
+    res.setHeader("X-Content-Type-Options", "nosniff");
     return res.sendFile(file);
   } catch (error) {
     if (error instanceof ServiceError) return res.status(error.status).json({ message: error.message });

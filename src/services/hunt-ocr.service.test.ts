@@ -294,4 +294,46 @@ describe("createHuntOcr", () => {
     expect((await stored(manual._id)).ocr!.status).toBe("done");
     expect((await stored(failed._id)).ocr!.status).toBe("failed");
   });
+  test("an id queued again while it is being read is not read twice", async () => {
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let calls = 0;
+    let finish!: () => void;
+    const reader: StickerReader = {
+      async readSticker() {
+        calls++;
+        release();
+        await new Promise<void>((resolve) => (finish = resolve));
+        return reading;
+      },
+    };
+    const ocr = createHuntOcr({ reader, loadPhoto: async () => PHOTO, sleep: async () => undefined });
+    const report = await upload();
+    ocr.enqueue(report._id);
+    await started;
+    // A retried POST, a resumePending or a re-read request while the reading runs
+    ocr.enqueue(report._id);
+    expect(await ocr.resumePending()).toBe(1);
+    finish();
+    await ocr.idle();
+    expect(calls).toBe(1);
+    expect((await stored(report._id)).ocr!.status).toBe("done");
+  });
+
+  test("a report deleted during its reading is skipped without an error", async () => {
+    const reader: StickerReader = {
+      async readSticker() {
+        await HuntReport.deleteOne({ _id: report._id });
+        return reading;
+      },
+    };
+    const { ocr, errors } = setup(reader);
+    const report = await upload();
+    ocr.enqueue(report._id);
+    await ocr.idle();
+    expect(errors).toHaveLength(0);
+    expect(await HuntReport.countDocuments()).toBe(0);
+  });
 });
