@@ -1,4 +1,4 @@
-import { generateText, Output, type LanguageModel } from "ai";
+import { generateText, NoObjectGeneratedError, Output, type LanguageModel } from "ai";
 import { GeminiError, toGeminiError } from "./ai/gemini-error";
 import { parseStickerReading, type StickerReading } from "./sticker-ocr.helpers";
 
@@ -9,7 +9,7 @@ export interface StickerReader {
 }
 
 /** Total time for one sticker reading (a flash model answers in seconds) */
-const TIMEOUT_MS = 30_000;
+export const STICKER_TIMEOUT_MS = 30_000;
 
 export const STICKER_PROMPT = `The photo shows a Jotihunt sticker (a scouting game). Read three things from it.
 
@@ -24,7 +24,7 @@ Answer with only this JSON object and nothing else:
 Use null (with confidence 0) for a value you cannot read, and null for box when no sticker is visible. The confidence is how sure you are that the value is exactly right.`;
 
 /** Reads hunt stickers with one Gemini call per photo. Throws GeminiError (never with the key); retrying is the caller's job. */
-export function createGeminiClient({ model, timeoutMs = TIMEOUT_MS }: { model: LanguageModel; timeoutMs?: number }): StickerReader {
+export function createGeminiClient({ model, timeoutMs = STICKER_TIMEOUT_MS }: { model: LanguageModel; timeoutMs?: number }): StickerReader {
   return {
     async readSticker(base64: string, mimeType: string): Promise<StickerReading> {
       let text: string;
@@ -47,9 +47,11 @@ export function createGeminiClient({ model, timeoutMs = TIMEOUT_MS }: { model: L
         });
         text = result.text;
       } catch (error) {
-        throw toGeminiError(error);
+        if (!NoObjectGeneratedError.isInstance(error) || typeof error.text !== "string") throw toGeminiError(error);
+        text = error.text;
       }
-      // Our own lenient parser, not the SDK's object: invalid parts of an answer become null instead of failing the reading
+      // Our lenient parser decides, also for text the SDK's strict JSON parse rejected (such as a fenced answer):
+      // it strips fences and turns invalid parts into null instead of failing the reading
       try {
         return parseStickerReading(text);
       } catch {

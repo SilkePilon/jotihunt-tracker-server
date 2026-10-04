@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { APICallError } from "ai";
 import { geminiReply, localGoogle, mockModel, TEST_API_KEY } from "../test/ai";
-import { createGeminiClient, GeminiError, STICKER_PROMPT } from "./gemini.client";
+import { createGeminiClient, GeminiError, STICKER_PROMPT, STICKER_TIMEOUT_MS } from "./gemini.client";
 
 /** Valid base64: the SDK decodes the first bytes of a file part to detect its media type */
 const IMAGE = "eA==";
@@ -57,6 +57,21 @@ describe("createGeminiClient.readSticker", () => {
       timeConfidence: 0.7,
       box: [100, 200, 300, 400],
     });
+  });
+
+  test("an answer inside ```json fences is still read", async () => {
+    const model = mockModel(() => '```json\n{"code":"GNcrZRZ","codeConfidence":0.95,"time":"11:17","timeConfidence":0.8}\n```');
+    expect(await createGeminiClient({ model }).readSticker(IMAGE, "image/jpeg")).toEqual({
+      code: "GNcrZRZ",
+      codeConfidence: 0.95,
+      time: "11:17",
+      timeConfidence: 0.8,
+      box: null,
+    });
+  });
+
+  test("the default deadline is 30 seconds", () => {
+    expect(STICKER_TIMEOUT_MS).toBe(30_000);
   });
 
   test("5xx and 429 are retryable", async () => {
