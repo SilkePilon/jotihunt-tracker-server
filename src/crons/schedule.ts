@@ -36,7 +36,7 @@ export function scheduleCrons() {
     logger.warn("ORS_API_KEY not set, fox prediction uses straight-line walking times");
   }
 
-  // Summaries of news and assignments (Gemini): a few per run, also for demo articles
+  // Summaries of news and assignments (Gemini): one per run, also for demo articles
   cron.schedule("5,25,45 * * * * *", summarizeArticles, { name: "article-summaries", noOverlap: true });
 
   // Notifications: fox status changes, new articles and hunt deadlines (push + in-app feed)
