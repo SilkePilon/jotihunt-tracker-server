@@ -11,12 +11,25 @@ function denied(res: Response) {
   });
 }
 
+/** Answer for a user who must change their (admin-set) password first; clients show the password change screen. */
+export const PASSWORD_CHANGE_REQUIRED = { message: "Wijzig eerst je wachtwoord.", code: "PASSWORD_CHANGE_REQUIRED" };
+
 /**
  * Authenticate the request by its Bearer JWT. Only a missing/invalid/expired token, an unknown user or a token issued
  * before the last password change get a 401 (clients sign out on 401). Database errors go to the error handler
- * (503), so a database hiccup never logs every hunter out.
+ * (503), so a database hiccup never logs every hunter out. A user who must still change their password gets a 403
+ * PASSWORD_CHANGE_REQUIRED (not signed out).
  */
-export default async function verifyToken(req: Request, res: Response, next: NextFunction) {
+export default function verifyToken(req: Request, res: Response, next: NextFunction) {
+  return authenticate(req, res, next, false);
+}
+
+/** verifyToken for what the password change screen needs (changing the password, logging out): no forced change. */
+export function verifyTokenAllowingPasswordChange(req: Request, res: Response, next: NextFunction) {
+  return authenticate(req, res, next, true);
+}
+
+async function authenticate(req: Request, res: Response, next: NextFunction, allowPasswordChange: boolean) {
   const authHeader = req.headers.authorization;
   const token = authHeader && authHeader.split(" ")[1];
 
@@ -42,6 +55,7 @@ export default async function verifyToken(req: Request, res: Response, next: Nex
     return denied(res);
   }
   if (!isIssuedAfterPasswordChange(decoded.iat, user.passwordChangedAt)) return denied(res);
+  if (user.requiresPasswordChange && !allowPasswordChange) return res.status(403).json(PASSWORD_CHANGE_REQUIRED);
 
   req.user = user;
   // Issue time of this session's token, for keeping it valid when the user changes their own password
