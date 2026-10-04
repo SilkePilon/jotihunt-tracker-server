@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import mongoose from "mongoose";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { HuntReport } from "../models/hunt-report.model";
@@ -680,5 +680,82 @@ describe("listHuntReports from lean documents", () => {
     const expected = await Promise.all(documents.map(async (report) => toHuntReportView(report, now, await findDuplicateOf(report))));
     expected.sort((a, b) => b.huntTime.localeCompare(a.huntTime));
     expect(await listHuntReports(now)).toEqual(expected);
+  });
+});
+
+describe("photo thumbnails", () => {
+  const THUMB = Buffer.from([0xff, 0xd8, 0xff, 0x01]);
+  const withThumb = (overrides: Partial<NewHuntReport> = {}) => input({ thumb: { buffer: THUMB, mimetype: "image/jpeg" }, ...overrides });
+
+  test("an uploaded thumbnail is stored next to the photo and served as the thumb size", async () => {
+    const merida = await makeUser("merida");
+    const view = await createHuntReport(withThumb(), merida);
+    expect(view.thumbUrl).toBe(`/hunt-reports/${view._id}/photo?size=thumb`);
+    const photo = await huntReportPhotoPath(view._id);
+    const thumb = await huntReportPhotoPath(view._id, "thumb");
+    expect(thumb).not.toBe(photo);
+    expect(path.dirname(thumb)).toBe(path.dirname(photo));
+    expect(path.basename(thumb)).toMatch(/\.thumb\.jpg$/);
+    expect(readFileSync(thumb)).toEqual(THUMB);
+    expect(readdirSync(process.env.UPLOADS_DIR!)).toHaveLength(2);
+  });
+
+  test("without a thumbnail (old reports, demo photos) the thumb size is the full photo", async () => {
+    const merida = await makeUser("merida");
+    const view = await createHuntReport(input(), merida);
+    expect(view.thumbUrl).toBe(`/hunt-reports/${view._id}/photo?size=thumb`);
+    expect(await huntReportPhotoPath(view._id, "thumb")).toBe(await huntReportPhotoPath(view._id));
+  });
+
+  test("a thumbnail of a disallowed type is ignored; the report is still stored", async () => {
+    const merida = await makeUser("merida");
+    const view = await createHuntReport(input({ thumb: { buffer: Buffer.from("x"), mimetype: "image/gif" } }), merida);
+    expect(await huntReportPhotoPath(view._id, "thumb")).toBe(await huntReportPhotoPath(view._id));
+    expect(readdirSync(process.env.UPLOADS_DIR!)).toHaveLength(1);
+  });
+
+  test("a retried upload stores no second thumbnail", async () => {
+    const merida = await makeUser("merida");
+    const uploadId = "6f1c1e7a-2b3c-4d5e-8f90-123456789abc";
+    const first = await createHuntReport(withThumb({ uploadId }), merida);
+    const again = await createHuntReport(withThumb({ uploadId }), merida);
+    expect(again._id).toBe(first._id);
+    expect(readdirSync(process.env.UPLOADS_DIR!)).toHaveLength(2);
+  });
+
+  test("a failed create removes the thumbnail too", async () => {
+    const user = await makeUser("merida");
+    const spy = spyOn(Marker, "create");
+    spy.mockRejectedValueOnce(new Error("boom"));
+    await expect(createHuntReport(withThumb({ location: [5.9, 52.2] }), user)).rejects.toThrow("boom");
+    spy.mockRestore();
+    expect(await HuntReport.countDocuments()).toBe(0);
+    expect(readdirSync(process.env.UPLOADS_DIR!)).toHaveLength(0);
+  });
+
+  test("deleting a report deletes its thumbnail", async () => {
+    const merida = await makeUser("merida");
+    const admin = await makeUser("admin", true);
+    const report = await createHuntReport(withThumb(), merida);
+    const thumb = await huntReportPhotoPath(report._id, "thumb");
+    await deleteHuntReport(report._id, admin);
+    expect(existsSync(thumb)).toBe(false);
+    expect(readdirSync(process.env.UPLOADS_DIR!)).toHaveLength(0);
+  });
+
+  test("removeOrphanPhotos keeps a report's thumbnail and removes orphan thumbnails", async () => {
+    const merida = await makeUser("merida");
+    const report = await createHuntReport(withThumb(), merida);
+    const photo = await huntReportPhotoPath(report._id);
+    const thumb = await huntReportPhotoPath(report._id, "thumb");
+    utimesSync(photo, new Date(0), new Date(0));
+    utimesSync(thumb, new Date(0), new Date(0));
+    const orphan = path.join(process.env.UPLOADS_DIR!, "orphan.thumb.jpg");
+    writeFileSync(orphan, "x");
+    utimesSync(orphan, new Date(0), new Date(0));
+    expect(await removeOrphanPhotos()).toBe(1);
+    expect(existsSync(orphan)).toBe(false);
+    expect(existsSync(photo)).toBe(true);
+    expect(existsSync(thumb)).toBe(true);
   });
 });

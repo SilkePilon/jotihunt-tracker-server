@@ -4,6 +4,8 @@ export { AREAS as HUNT_AREAS } from "../constants/areas";
 /** A hunt code must be entered on jotihunt.nl within 30 minutes of the hunt (spelregels §5). */
 export const SUBMIT_WINDOW_MS = 30 * 60 * 1000;
 export const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
+/** The phone sends a small list thumbnail (~320 px) next to the photo; anything bigger is dropped */
+export const MAX_THUMB_BYTES = 300 * 1024;
 
 export type HuntReportStatus = "to_submit" | "overdue" | "submitted" | "judged";
 

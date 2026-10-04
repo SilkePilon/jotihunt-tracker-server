@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { existsSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { HuntReport, type HuntReportDocument } from "../models/hunt-report.model";
@@ -19,6 +20,8 @@ export interface NewHuntReport {
   /** Optional: normally read from the photo by OCR */
   huntTime?: Date;
   photo: { buffer: Buffer; mimetype: string };
+  /** Optional small list thumbnail made by the phone; ignored when not an allowed type */
+  thumb?: { buffer: Buffer; mimetype: string };
   /** [lng, lat] of the phone at registration */
   location?: [number, number];
   /** Id the phone generated for this photo; the same id again returns the existing report */
@@ -84,7 +87,10 @@ export async function createHuntReport(input: NewHuntReport, user: UserType): Pr
   const extension = resolvePhotoExtension(input.photo.mimetype);
   if (!extension) throw new ServiceError(400, "Foto moet een JPEG, PNG of WebP zijn.");
 
+  const thumbExtension = input.thumb ? resolvePhotoExtension(input.thumb.mimetype) : null;
+
   let photo: string | null = null;
+  let thumb: string | null = null;
   let report: HuntReportDocument | null = null;
   let markerCreated = false;
   // The report is stored before its marker, so a crash in between never leaves a hunt marker without a report
@@ -92,6 +98,7 @@ export async function createHuntReport(input: NewHuntReport, user: UserType): Pr
 
   try {
     photo = await savePhoto(input.photo.buffer, extension);
+    if (input.thumb && thumbExtension) thumb = await savePhoto(input.thumb.buffer, `.thumb${thumbExtension}`);
     report = await HuntReport.create({
       area: input.area as (typeof HUNT_AREAS)[number],
       huntCode,
@@ -99,6 +106,7 @@ export async function createHuntReport(input: NewHuntReport, user: UserType): Pr
       huntCodeSource: huntCode ? "manual" : undefined,
       huntTimeSource: huntTime ? "manual" : undefined,
       photo,
+      thumb: thumb ?? undefined,
       reportedBy: user._id,
       reportedByName: user.name,
       location: input.location ? { type: "Point", coordinates: input.location } : undefined,
@@ -123,6 +131,7 @@ export async function createHuntReport(input: NewHuntReport, user: UserType): Pr
     if (report) await HuntReport.deleteOne({ _id: report._id }).catch(() => undefined);
     if (markerCreated) await Marker.deleteOne({ _id: markerId }).catch(() => undefined);
     if (photo) await deletePhoto(photo).catch(() => undefined);
+    if (thumb) await deletePhoto(thumb).catch(() => undefined);
     // Two attempts of the same upload raced: return the one that won
     if (isDuplicateKeyError(error)) {
       const retried = await existingUpload(input.uploadId, user);
@@ -225,10 +234,18 @@ export async function deleteHuntReport(id: string, user: UserType): Promise<void
   }
   if (report.markerId) await Marker.deleteOne({ _id: report.markerId });
   await deletePhoto(report.photo).catch(() => undefined);
+  if (report.thumb) await deletePhoto(report.thumb).catch(() => undefined);
 }
 
-export async function huntReportPhotoPath(id: string): Promise<string> {
+export type PhotoSize = "full" | "thumb";
+
+/** Path of the report's photo; the thumb size falls back to the full photo when the report has no (stored) thumbnail. */
+export async function huntReportPhotoPath(id: string, size: PhotoSize = "full"): Promise<string> {
   const report = await findReport(id);
+  if (size === "thumb" && report.thumb) {
+    const thumb = photoFilePath(report.thumb);
+    if (existsSync(thumb)) return thumb;
+  }
   return photoFilePath(report.photo);
 }
 
@@ -248,8 +265,11 @@ export async function removeOrphanPhotos(now = Date.now()): Promise<number> {
   });
   const files = entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
   if (files.length === 0) return 0;
-  const referenced = new Set<string>(await HuntReport.distinct("photo"));
-  if (referenced.size === 0) return 0;
+  const photos: string[] = await HuntReport.distinct("photo");
+  if (photos.length === 0) return 0;
+  // A thumbnail is kept through its report: orphan thumbnails go like orphan photos
+  const thumbs: string[] = await HuntReport.distinct("thumb");
+  const referenced = new Set<string>([...photos, ...thumbs]);
   let removed = 0;
   for (const name of files) {
     if (referenced.has(name)) continue;
