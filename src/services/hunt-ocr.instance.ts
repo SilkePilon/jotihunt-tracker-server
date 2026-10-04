@@ -1,25 +1,25 @@
-import axios from "axios";
 import { readFile } from "node:fs/promises";
 import { logger } from "../logger";
 import { onDemoSwitch } from "../demo/database-switch";
 import { runTracked } from "../demo/demo-mode";
-import { createGeminiClient, DEFAULT_GEMINI_MODEL, GeminiError } from "./gemini.client";
+import { createModels } from "./ai/model";
+import { createGeminiClient, GeminiError } from "./gemini.client";
 import { createHuntOcr, type HuntOcr } from "./hunt-ocr.service";
 import { removeOrphanPhotos, restoreMissingHuntMarkers } from "./hunt-report.service";
 import { photoFilePath } from "./photo-store";
 
-/** Only the error class and our own message: never the raw error (an axios error holds the API key header). */
+/** Only the error class and our own message: never the raw error (an API error holds the request, with the key). */
 function describeOcrError(error: unknown): string {
   if (error instanceof GeminiError) return error.message;
   if (error instanceof Error) return `${error.name}${"code" in error && typeof error.code === "string" ? ` (${error.code})` : ""}`;
   return "unknown error";
 }
 
-const geminiApiKey = process.env.GEMINI_API_KEY?.trim();
+const models = createModels();
 
 /** Background reading of hunt codes and times; without GEMINI_API_KEY every reading fails with a clear message. */
 const queue = createHuntOcr({
-  reader: geminiApiKey ? createGeminiClient({ apiKey: geminiApiKey, model: process.env.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL, http: axios.create() }) : null,
+  reader: models ? createGeminiClient({ model: models("ocr") }) : null,
   loadPhoto: (name) => readFile(photoFilePath(name)),
   onError: (error, reportId) => logger.warn(`OCR of hunt report ${reportId} failed: ${describeOcrError(error)}`),
 });

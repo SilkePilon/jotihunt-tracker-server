@@ -15,8 +15,10 @@
     "seed-prediction": "bun run src/scripts/seed-prediction.ts"
   },
   "dependencies": {
+    "@ai-sdk/google": "^4.0.87",
     "@turf/bearing": "^7.4.0",
     "@turf/distance": "^7.4.0",
+    "ai": "^7.0.127",
     "axios": "^1.20.0",
     "compression": "^1.8.2",
     "cors": "^2.8.6",

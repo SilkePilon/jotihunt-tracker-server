@@ -107,6 +107,7 @@ ORS_API_KEY= # Optioneel, voor de vossenvoorspelling (zie configuratie)
 GEMINI_API_KEY= # Optioneel, leest huntcode en tijd van de huntfoto en voorspelt de vossen (zie configuratie)
 GEMINI_MODEL=gemini-3.8-flash
 GEMINI_PREDICTION_MODEL=gemini-pro-latest
+GEMINI_CHAT_MODEL=gemini-3.8-flash
 
 # Client
 JWT_SECRET=verander-dit-naar-een-veilige-random-string-van-minimaal-32-tekens
@@ -163,11 +164,12 @@ Wordt gebruikt door de vossenvoorspelling voor looptijden naar de groepen via [O
 
 Zonder key gebruikt de voorspelling rechte-lijn-schattingen (rechte lijn × 1,3 bij 5 km/u). Er worden alleen coördinaten verstuurd, geen persoonsgegevens.
 
-#### `GEMINI_API_KEY`, `GEMINI_MODEL` en `GEMINI_PREDICTION_MODEL` (optioneel)
+#### `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_PREDICTION_MODEL` en `GEMINI_CHAT_MODEL` (optioneel)
 De server leest de huntcode en de handgeschreven tijd van de huntfoto met [Google Gemini](https://ai.google.dev/). Hunters hoeven dan alleen een foto te maken en de vossengroep te kiezen.
 1. Maak een API-key aan in [Google AI Studio](https://aistudio.google.com/apikey).
 2. Plak de key in de `.env` file bij `GEMINI_API_KEY`. `GEMINI_MODEL` is optioneel (standaard `gemini-3.8-flash`).
 3. De vossenvoorspelling gebruikt hetzelfde key en het model `GEMINI_PREDICTION_MODEL` (standaard `gemini-pro-latest`).
+4. De Gemini-assistent op de hintpagina gebruikt `GEMINI_CHAT_MODEL` (standaard `gemini-3.8-flash`).
 
 Het lezen gebeurt op de achtergrond, één foto tegelijk (bij netwerkfouten of drukte tot 3 pogingen). Is de code of tijd niet (zeker) gelezen, dan krijgt de hunt het label "Controleren" en kan HQ de waarden aanpassen of opnieuw laten lezen. Zonder key worden foto's niet gelezen en vult HQ code en tijd zelf in.
 

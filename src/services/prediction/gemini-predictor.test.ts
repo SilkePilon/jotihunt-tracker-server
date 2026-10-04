@@ -1,43 +1,83 @@
 import { describe, expect, test } from "bun:test";
-import { GeminiError, type GeminiHttp, type GeminiRequestConfig } from "../gemini.client";
-import { createGeminiPredictor, DEFAULT_PREDICTION_MODEL } from "./gemini-predictor";
+import { APICallError } from "ai";
+import { geminiReply, localGoogle, mockModel, TEST_API_KEY } from "../../test/ai";
+import { GeminiError } from "../gemini.client";
+import { createGeminiPredictor, PREDICTION_TIMEOUT_MS } from "./gemini-predictor";
 import { PREDICTION_SCHEMA } from "./prompt";
 
-const KEY = "secret-key-9";
-
-function http(respond: () => Promise<{ data: unknown }>) {
-  const calls: { url: string; body: { contents: { parts: unknown }[]; generationConfig: unknown }; config: GeminiRequestConfig }[] = [];
-  const client: GeminiHttp = {
-    post: async <T>(url: string, body: unknown, config: GeminiRequestConfig) => {
-      calls.push({ url, body: body as (typeof calls)[number]["body"], config });
-      return (await respond()) as { data: T };
-    },
-  };
-  return { client, calls };
-}
-const reply = (text: string) => async () => ({ data: { candidates: [{ content: { parts: [{ text }] } }] } });
+const caught = async (promise: Promise<unknown>) => (await promise.catch((error: unknown) => error)) as GeminiError;
 
 describe("createGeminiPredictor", () => {
-  test("default model is gemini-pro-latest", () => {
-    expect(DEFAULT_PREDICTION_MODEL).toBe("gemini-pro-latest");
+  test("the default deadline is 90 seconds", () => {
+    expect(PREDICTION_TIMEOUT_MS).toBe(90_000);
   });
 
-  test("sends prompt, schema, temperature 0.2 and a 90 s timeout; parses JSON", async () => {
-    const { client, calls } = http(reply('{"round":1}'));
-    const predictor = createGeminiPredictor({ apiKey: KEY, model: "gemini-pro-latest", http: client });
-    expect(await predictor.predict("PROMPT")).toEqual({ round: 1 });
-    expect(calls[0].url).toContain("/models/gemini-pro-latest:generateContent");
-    expect(calls[0].body.contents[0].parts).toEqual([{ text: "PROMPT" }]);
-    expect(calls[0].body.generationConfig).toEqual({ responseMimeType: "application/json", responseSchema: PREDICTION_SCHEMA, temperature: 0.2 });
-    expect(calls[0].config.timeout).toBe(90_000);
+  test("sends the prompt with the schema at temperature 0.2 and returns the parsed JSON", async () => {
+    const model = mockModel(() => '{"round":1}');
+    expect(await createGeminiPredictor({ model }).predict("PROMPT")).toEqual({ round: 1 });
+    const [call] = model.doGenerateCalls;
+    expect(call.prompt).toEqual([{ role: "user", content: [{ type: "text", text: "PROMPT" }] }]);
+    expect(call.responseFormat).toEqual({ type: "json", schema: PREDICTION_SCHEMA });
+    expect(call.temperature).toBe(0.2);
+    expect(call.abortSignal).toBeInstanceOf(AbortSignal);
   });
 
   test("invalid JSON is a non-retryable GeminiError without the key", async () => {
-    const { client } = http(reply("not json"));
-    const predictor = createGeminiPredictor({ apiKey: KEY, model: "m", http: client });
-    const error = (await predictor.predict("P").catch((caught: unknown) => caught)) as GeminiError;
+    const error = await caught(createGeminiPredictor({ model: mockModel(() => "not json") }).predict("P"));
     expect(error).toBeInstanceOf(GeminiError);
     expect(error.retryable).toBe(false);
-    expect(error.message).not.toContain(KEY);
+    expect(error.message).toBe("Gemini gaf geen geldig antwoord");
+    expect(error.message).not.toContain(TEST_API_KEY);
+  });
+
+  test("429 keeps its status (the service pauses on it)", async () => {
+    const model = mockModel(() => {
+      throw new APICallError({ message: TEST_API_KEY, url: "u", requestBodyValues: {}, statusCode: 429, isRetryable: true });
+    });
+    const error = await caught(createGeminiPredictor({ model }).predict("P"));
+    expect(error).toBeInstanceOf(GeminiError);
+    expect(error.status).toBe(429);
+    expect(error.retryable).toBe(true);
+    expect(model.doGenerateCalls).toHaveLength(1);
+  });
+
+  test("the deadline makes a hanging call a retryable GeminiError", async () => {
+    const google = localGoogle(() => new Promise<Response>(() => {}));
+    try {
+      const started = Date.now();
+      const error = await caught(createGeminiPredictor({ model: google.model("m"), timeoutMs: 300 }).predict("P"));
+      expect(Date.now() - started).toBeLessThan(3000);
+      expect(error).toBeInstanceOf(GeminiError);
+      expect(error.retryable).toBe(true);
+      expect(error.status).toBeUndefined();
+    } finally {
+      google.stop();
+    }
+  });
+});
+
+describe("createGeminiPredictor over the wire (real Google provider, local server)", () => {
+  test("posts the schema as responseJsonSchema; an empty answer is not retryable", async () => {
+    let body: unknown;
+    let reply = () => geminiReply('{"round":2}');
+    const google = localGoogle(async (request) => {
+      body = await request.json();
+      return reply();
+    });
+    try {
+      const predictor = createGeminiPredictor({ model: google.model("gemini-pro-latest") });
+      expect(await predictor.predict("PROMPT")).toEqual({ round: 2 });
+      expect(body).toEqual({
+        generationConfig: { temperature: 0.2, responseMimeType: "application/json", responseJsonSchema: PREDICTION_SCHEMA },
+        contents: [{ role: "user", parts: [{ text: "PROMPT" }] }],
+      });
+
+      reply = () => Response.json({});
+      const error = await caught(predictor.predict("PROMPT"));
+      expect(error).toBeInstanceOf(GeminiError);
+      expect(error.retryable).toBe(false);
+    } finally {
+      google.stop();
+    }
   });
 });
