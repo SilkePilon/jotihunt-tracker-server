@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { APICallError, RetryError } from "ai";
+import { APICallError, NoObjectGeneratedError, RetryError } from "ai";
 import { GeminiError, toGeminiError } from "./gemini-error";
 
 const KEY = "secret-key-9";
-const apiError = (statusCode?: number) =>
-  new APICallError({ message: `failed with ${KEY}`, url: `https://example.test/?key=${KEY}`, requestBodyValues: {}, statusCode, isRetryable: true });
+const apiError = (statusCode?: number, isRetryable = true) =>
+  new APICallError({ message: `failed with ${KEY}`, url: `https://example.test/?key=${KEY}`, requestBodyValues: {}, statusCode, isRetryable });
 
 describe("toGeminiError", () => {
   test("5xx and 429 are retryable and carry the status", () => {
@@ -32,10 +32,43 @@ describe("toGeminiError", () => {
   });
 
   test("a 2xx status on an API error is an invalid answer, not retryable", () => {
-    const error = toGeminiError(apiError(200));
+    const error = toGeminiError(apiError(200, false));
     expect(error.message).toBe("Gemini gaf geen geldig antwoord");
     expect(error.retryable).toBe(false);
     expect(error.status).toBeUndefined();
+  });
+
+  test("a 2xx answer that broke off (retryable API error) is unreachable", () => {
+    const error = toGeminiError(apiError(200, true));
+    expect(error.message).toBe("Gemini niet bereikbaar");
+    expect(error.retryable).toBe(true);
+    expect(error.status).toBeUndefined();
+  });
+
+  test("a network error the SDK does not wrap is unreachable", () => {
+    const causes = [
+      Object.assign(new TypeError(`getaddrinfo ENOTFOUND host ${KEY}`), { code: "ENOTFOUND" }),
+      Object.assign(new Error("reset"), { code: "ECONNRESET" }),
+    ];
+    for (const cause of causes) {
+      const error = toGeminiError(cause);
+      expect(error.message).toBe("Gemini niet bereikbaar");
+      expect(error.message).not.toContain(KEY);
+      expect(error.retryable).toBe(true);
+      expect(error.status).toBeUndefined();
+    }
+  });
+
+  test("an SDK output error is an invalid answer", () => {
+    const cause = new NoObjectGeneratedError({
+      text: "not json",
+      response: { id: "r1", timestamp: new Date(0), modelId: "m" },
+      usage: {} as ConstructorParameters<typeof NoObjectGeneratedError>[0]["usage"],
+      finishReason: "stop",
+    });
+    const error = toGeminiError(cause);
+    expect(error.message).toBe("Gemini gaf geen geldig antwoord");
+    expect(error.retryable).toBe(false);
   });
 
   test("a RetryError is mapped by its last error", () => {

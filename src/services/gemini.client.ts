@@ -1,5 +1,5 @@
 import { generateText, NoObjectGeneratedError, Output, type LanguageModel } from "ai";
-import { GeminiError, toGeminiError } from "./ai/gemini-error";
+import { GeminiError, invalidAnswer, toGeminiError } from "./ai/gemini-error";
 import { parseStickerReading, type StickerReading } from "./sticker-ocr.helpers";
 
 export { GeminiError };
@@ -55,7 +55,7 @@ export function createGeminiClient({ model, timeoutMs = STICKER_TIMEOUT_MS }: { 
       try {
         return parseStickerReading(text);
       } catch {
-        throw new GeminiError("Gemini gaf geen geldig antwoord", false);
+        throw invalidAnswer();
       }
     },
   };

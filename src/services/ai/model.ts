@@ -4,7 +4,9 @@ import type { LanguageModel } from "ai";
 /** What a Gemini call is for; each purpose has its own model setting */
 export type AiPurpose = "ocr" | "prediction" | "chat" | "summary";
 
+/** Default model for reading stickers (OCR), summaries and chat */
 export const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
+/** Default model for the fox prediction */
 export const DEFAULT_PREDICTION_MODEL = "gemini-pro-latest";
 
 const MODEL_SETTING: Record<AiPurpose, { variable: string; fallback: string }> = {

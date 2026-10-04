@@ -1,3 +1,4 @@
+import type { JSONSchema7 } from "ai";
 import type { AreaFacts } from "./facts";
 
 const CLOCK = new Intl.DateTimeFormat("nl-NL", { timeZone: "Europe/Amsterdam", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
@@ -37,7 +38,7 @@ export const PREDICTION_SCHEMA = {
     reason: { type: "string" },
   },
   required: ["round", "visitedTeamApiIds", "pin", "confidence", "reason"],
-} as const;
+} satisfies JSONSchema7;
 
 export function buildPrompt(facts: AreaFacts): string {
   const data = {

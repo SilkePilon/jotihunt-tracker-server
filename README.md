@@ -164,7 +164,7 @@ Wordt gebruikt door de vossenvoorspelling voor looptijden naar de groepen via [O
 
 Zonder key gebruikt de voorspelling rechte-lijn-schattingen (rechte lijn × 1,3 bij 5 km/u). Er worden alleen coördinaten verstuurd, geen persoonsgegevens.
 
-#### `GEMINI_API_KEY`, `GEMINI_MODEL` en `GEMINI_PREDICTION_MODEL` (optioneel)
+#### `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_PREDICTION_MODEL` en `GEMINI_CHAT_MODEL` (optioneel)
 De server leest de huntcode en de handgeschreven tijd van de huntfoto met [Google Gemini](https://ai.google.dev/). Hunters hoeven dan alleen een foto te maken en de vossengroep te kiezen.
 1. Maak een API-key aan in [Google AI Studio](https://aistudio.google.com/apikey).
 2. Plak de key in de `.env` file bij `GEMINI_API_KEY`. `GEMINI_MODEL` is optioneel (standaard `gemini-3.8-flash`).

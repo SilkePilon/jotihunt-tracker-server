@@ -2,18 +2,22 @@ import { describe, expect, test } from "bun:test";
 import { APICallError } from "ai";
 import { geminiReply, localGoogle, mockModel, TEST_API_KEY } from "../../test/ai";
 import { GeminiError } from "../gemini.client";
-import { createGeminiPredictor } from "./gemini-predictor";
+import { createGeminiPredictor, PREDICTION_TIMEOUT_MS } from "./gemini-predictor";
 import { PREDICTION_SCHEMA } from "./prompt";
 
 const caught = async (promise: Promise<unknown>) => (await promise.catch((error: unknown) => error)) as GeminiError;
 
 describe("createGeminiPredictor", () => {
+  test("the default deadline is 90 seconds", () => {
+    expect(PREDICTION_TIMEOUT_MS).toBe(90_000);
+  });
+
   test("sends the prompt with the schema at temperature 0.2 and returns the parsed JSON", async () => {
     const model = mockModel(() => '{"round":1}');
     expect(await createGeminiPredictor({ model }).predict("PROMPT")).toEqual({ round: 1 });
     const [call] = model.doGenerateCalls;
     expect(call.prompt).toEqual([{ role: "user", content: [{ type: "text", text: "PROMPT" }] }]);
-    expect<unknown>(call.responseFormat).toEqual({ type: "json", schema: PREDICTION_SCHEMA });
+    expect(call.responseFormat).toEqual({ type: "json", schema: PREDICTION_SCHEMA });
     expect(call.temperature).toBe(0.2);
     expect(call.abortSignal).toBeInstanceOf(AbortSignal);
   });
