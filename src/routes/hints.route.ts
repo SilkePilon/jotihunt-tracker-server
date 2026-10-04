@@ -20,7 +20,11 @@ router.get(
   [verifyToken, validate([query("answer").optional().isString().isLength({ max: 200 })])],
   hintsController.parseAnswer,
 );
-router.post("/:articleId/:area/claim", [verifyToken, cellWrites, validate(cellParams)], hintsController.claim);
+router.post(
+  "/:articleId/:area/claim",
+  [verifyToken, cellWrites, validate([...cellParams, body("overwrite").optional().isBoolean()])],
+  hintsController.claim,
+);
 router.post("/:articleId/:area/release", [verifyToken, cellWrites, validate(cellParams)], hintsController.release);
 router.post(
   "/:articleId/:area/solve",
@@ -31,6 +35,7 @@ router.post(
       ...cellParams,
       body("answer").isString().trim().isLength({ min: 1, max: 200 }).withMessage("Antwoord is verplicht."),
       body("replaceMarker").optional().isBoolean(),
+      body("overwrite").optional().isBoolean(),
     ]),
   ],
   hintsController.solve,

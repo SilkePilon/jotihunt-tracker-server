@@ -170,6 +170,7 @@ De server leest de huntcode en de handgeschreven tijd van de huntfoto met [Googl
 2. Plak de key in de `.env` file bij `GEMINI_API_KEY`. `GEMINI_MODEL` is optioneel (standaard `gemini-3.8-flash`).
 3. De vossenvoorspelling gebruikt hetzelfde key en het model `GEMINI_PREDICTION_MODEL` (standaard `gemini-pro-latest`).
 4. De Gemini-assistent op de hintpagina gebruikt `GEMINI_CHAT_MODEL` (standaard `gemini-3.8-flash`).
+5. Nieuws en opdrachten krijgen automatisch een korte samenvatting met `GEMINI_MODEL`; de tekst van die artikelen wordt daarvoor naar Google gestuurd.
 
 Het lezen gebeurt op de achtergrond, één foto tegelijk (bij netwerkfouten of drukte tot 3 pogingen). Is de code of tijd niet (zeker) gelezen, dan krijgt de hunt het label "Controleren" en kan HQ de waarden aanpassen of opnieuw laten lezen. Zonder key worden foto's niet gelezen en vult HQ code en tijd zelf in.
 

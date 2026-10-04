@@ -19,7 +19,7 @@ export function parseAnswer(req: Request, res: Response) {
 
 export function claim(req: Request, res: Response) {
   const { articleId, area } = cellKey(req);
-  return respond(res, 200, () => board.claimCell(articleId, area, req.user!._id));
+  return respond(res, 200, () => board.claimCell(articleId, area, req.user!._id, req.body?.overwrite === true));
 }
 
 export function release(req: Request, res: Response) {
@@ -29,8 +29,8 @@ export function release(req: Request, res: Response) {
 
 export function solve(req: Request, res: Response) {
   const { articleId, area } = cellKey(req);
-  const { answer, replaceMarker } = req.body;
-  return respond(res, 200, () => board.solveCell(articleId, area, req.user!._id, answer, replaceMarker === true));
+  const { answer, replaceMarker, overwrite } = req.body;
+  return respond(res, 200, () => board.solveCell(articleId, area, req.user!._id, answer, replaceMarker === true, overwrite === true));
 }
 
 export function check(req: Request, res: Response) {

@@ -255,8 +255,8 @@ describe("solveCell", () => {
   test("concurrent RD solves leave one marker at the stored answer", async () => {
     const [a, b] = await Promise.all([makeUser("a"), makeUser("b"), makeCell()]);
     const results = await Promise.allSettled([
-      solveCell(1, "alpha", a._id, "2126 4692"),
-      solveCell(1, "alpha", b._id, "2000 4700"),
+      solveCell(1, "alpha", a._id, "2126 4692", false, true),
+      solveCell(1, "alpha", b._id, "2000 4700", false, true),
     ]);
     expect(results.some((r) => r.status === "fulfilled")).toBe(true);
     for (const result of results) {
@@ -269,8 +269,8 @@ describe("solveCell", () => {
     const users = await Promise.all(Array.from({ length: 8 }, (_, i) => makeUser(`u${i}`)));
     await makeCell();
     for (let round = 0; round < 5; round++) {
-      await solveCell(1, "alpha", users[0]._id, "155000 463000");
-      await Promise.all(users.map((user, i) => solveCell(1, "alpha", user._id, `${150000 + i * 100 + round} ${460000 + i * 100}`)));
+      await solveCell(1, "alpha", users[0]._id, "155000 463000", false, true);
+      await Promise.all(users.map((user, i) => solveCell(1, "alpha", user._id, `${150000 + i * 100 + round} ${460000 + i * 100}`, false, true)));
       await expectConsistent("alpha");
     }
   });
@@ -281,8 +281,8 @@ describe("solveCell", () => {
       await HintCell.updateOne({ area: "alpha" }, { $set: { status: HintCellStatus.Open }, $unset: { answer: 1, answerKind: 1, answerLocation: 1, markerId: 1 } });
       await Marker.deleteMany({});
       await Promise.all([
-        solveCell(1, "alpha", a._id, "155000 463000"),
-        Bun.sleep(round % 4).then(() => solveCell(1, "alpha", b._id, "woord")),
+        solveCell(1, "alpha", a._id, "155000 463000", false, true),
+        Bun.sleep(round % 4).then(() => solveCell(1, "alpha", b._id, "woord", false, true)),
       ]);
       await expectConsistent("alpha");
     }
@@ -298,12 +298,82 @@ describe("solveCell", () => {
     await expectConsistent("alpha");
   });
 
-  test("anyone may answer a cell claimed by someone else (\"Toch een antwoord invullen\")", async () => {
+  test("with overwrite anyone may answer a cell claimed by someone else", async () => {
     const [a, b] = await Promise.all([makeUser("a"), makeUser("b"), makeCell()]);
     await claimCell(1, "alpha", a._id);
-    const cell = await solveCell(1, "alpha", b._id, "doedelzak");
+    const cell = await solveCell(1, "alpha", b._id, "doedelzak", false, true);
     expect(cell.status).toBe(HintCellStatus.Solved);
     expect((cell.claimedBy as unknown as { name: string }).name).toBe("b");
+  });
+});
+
+describe("overwrite guard", () => {
+  test("solving a cell someone else solved is a 409 that names the current answer", async () => {
+    const [a, b] = await Promise.all([makeUser("sanne"), makeUser("daan"), makeCell()]);
+    await solveCell(1, "alpha", a._id, "doedelzak");
+    const error = await expectBoardError(solveCell(1, "alpha", b._id, "haggis"), 409);
+    expect(error.message).toBe("Dit vak is al opgelost door iemand anders");
+    const conflict = error.details.conflict as { kind: string; value: string; by: { _id: string; name: string }; at: Date };
+    expect(conflict.kind).toBe("answer");
+    expect(conflict.value).toBe("doedelzak");
+    expect(conflict.by).toEqual({ _id: String(a._id), name: "sanne" });
+    expect(conflict.at).toBeInstanceOf(Date);
+    const cell = await HintCell.findOne({ articleId: 1, area: "alpha" }).lean();
+    expect(cell?.answer).toBe("doedelzak");
+    expect(String(cell?.claimedBy)).toBe(String(a._id));
+  });
+
+  test("with overwrite the new answer wins and the solver becomes the owner", async () => {
+    const [a, b] = await Promise.all([makeUser("sanne"), makeUser("daan"), makeCell()]);
+    await solveCell(1, "alpha", a._id, "doedelzak");
+    const cell = await solveCell(1, "alpha", b._id, "haggis", false, true);
+    expect(cell.answer).toBe("haggis");
+    expect((cell.claimedBy as unknown as { name: string }).name).toBe("daan");
+  });
+
+  test("solving your own solved cell again needs no confirmation", async () => {
+    const [a] = await Promise.all([makeUser("sanne"), makeCell()]);
+    await solveCell(1, "alpha", a._id, "doedelzak");
+    expect((await solveCell(1, "alpha", a._id, "haggis")).answer).toBe("haggis");
+  });
+
+  test("solving a cell someone else is working on is a claim conflict", async () => {
+    const [a, b] = await Promise.all([makeUser("sanne"), makeUser("daan"), makeCell()]);
+    await claimCell(1, "alpha", a._id);
+    const error = await expectBoardError(solveCell(1, "alpha", b._id, "haggis"), 409);
+    expect(error.message).toBe("Iemand anders is met dit vak bezig");
+    expect(error.details.conflict).toMatchObject({ kind: "claim", value: null, by: { name: "sanne" } });
+    expect((await solveCell(1, "alpha", b._id, "haggis", false, true)).answer).toBe("haggis");
+  });
+
+  test("claiming a cell someone else claimed is a claim conflict; overwrite takes it over", async () => {
+    const [a, b] = await Promise.all([makeUser("sanne"), makeUser("daan"), makeCell()]);
+    await claimCell(1, "alpha", a._id);
+    const error = await expectBoardError(claimCell(1, "alpha", b._id), 409);
+    expect(error.message).toBe("Dit vak is al geclaimd");
+    expect(error.details.conflict).toMatchObject({ kind: "claim", by: { name: "sanne" } });
+    expect((error.details.claimedBy as { name: string }).name).toBe("sanne");
+    const cell = await claimCell(1, "alpha", b._id, true);
+    expect((cell.claimedBy as unknown as { name: string }).name).toBe("daan");
+    expect(cell.status).toBe(HintCellStatus.Solving);
+  });
+
+  test("overwrite does not open a solved or none cell for claiming", async () => {
+    const [a, b] = await Promise.all([makeUser("sanne"), makeUser("daan"), makeCell()]);
+    await solveCell(1, "alpha", a._id, "doedelzak");
+    await expectBoardError(claimCell(1, "alpha", b._id, true), 409);
+  });
+
+  test("two users solving an open cell at once: one wins, the other gets the conflict", async () => {
+    const [a, b] = await Promise.all([makeUser("sanne"), makeUser("daan"), makeCell()]);
+    const results = await Promise.allSettled([solveCell(1, "alpha", a._id, "doedelzak"), solveCell(1, "alpha", b._id, "haggis")]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((result) => result.status === "rejected") as PromiseRejectedResult;
+    expect((rejected.reason as ServiceError).status).toBe(409);
+    expect((rejected.reason as ServiceError).details.conflict).toMatchObject({ kind: "answer" });
+    const cell = await HintCell.findOne({ articleId: 1, area: "alpha" }).lean();
+    const winner = results[0].status === "fulfilled" ? "doedelzak" : "haggis";
+    expect(cell?.answer).toBe(winner);
   });
 });
 

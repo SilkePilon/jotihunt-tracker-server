@@ -7,6 +7,7 @@ import { parseRdAnswer } from "./rd-answer";
 import { isDuplicateKeyError } from "../utils/mongo";
 import { ServiceError } from "../http/service-error";
 import { currentGeneration } from "../demo/demo-mode";
+import { conflictError, setByOther } from "./write-conflict";
 
 type Id = mongoose.Types.ObjectId | string;
 
@@ -94,13 +95,12 @@ export function getBoardJson(): Promise<string> {
   return json;
 }
 
-export async function claimCell(articleId: number, area: string, userId: Id) {
+/** Claim an open cell. With `overwrite`, also take over a cell someone else is solving (after the user confirmed). */
+export async function claimCell(articleId: number, area: string, userId: Id, overwrite = false) {
+  const claimable: Record<string, unknown>[] = [{ status: HintCellStatus.Open }, { status: HintCellStatus.Solving, claimedBy: userId }];
+  if (overwrite) claimable.push({ status: HintCellStatus.Solving });
   const cell = await HintCell.findOneAndUpdate(
-    {
-      articleId,
-      area,
-      $or: [{ status: HintCellStatus.Open }, { status: HintCellStatus.Solving, claimedBy: userId }],
-    },
+    { articleId, area, $or: claimable },
     { $set: { status: HintCellStatus.Solving, claimedBy: userId, claimedAt: new Date() } },
     { returnDocument: "after" },
   ).populate(populateUsers);
@@ -110,10 +110,10 @@ export async function claimCell(articleId: number, area: string, userId: Id) {
   }
 
   const existing = await findCellOr404(articleId, area);
-  const message =
-    existing.status === HintCellStatus.Solving
-      ? "Dit vak is al geclaimd"
-      : `Dit vak is ${existing.status === HintCellStatus.Solved ? "al opgelost" : "gemarkeerd als geen hint"}`;
+  if (existing.status === HintCellStatus.Solving) {
+    throw await conflictError("Dit vak is al geclaimd", "claim", null, existing.claimedBy?._id, existing.claimedAt, { claimedBy: existing.claimedBy ?? null });
+  }
+  const message = `Dit vak is ${existing.status === HintCellStatus.Solved ? "al opgelost" : "gemarkeerd als geen hint"}`;
   throw new ServiceError(409, message, { claimedBy: existing.claimedBy ?? null });
 }
 
@@ -216,15 +216,28 @@ async function syncHintMarker(cellId: mongoose.Types.ObjectId) {
 /**
  * Store an answer. A coordinate (RD) answer places the hint marker of the area and hour (409 with existingMarkerId
  * when another hint marker is already there, unless replaceMarker); a word removes the marker the cell had. The
- * cell is updated first (compare-and-set on its marker link), then the marker follows the answer that won.
+ * cell is updated first with a compare-and-set, then the marker follows the answer that won. The compare-and-set
+ * always covers the cell's marker link; without `overwrite` it also covers status and claimer, so a claim or answer
+ * someone else made meanwhile is not overwritten but leads to the conflict 409 on the next attempt.
+ * A cell someone else solved or is solving is a 409 with `conflict`, unless `overwrite`.
  */
-export async function solveCell(articleId: number, area: string, userId: Id, answer: string, replaceMarker = false) {
+export async function solveCell(articleId: number, area: string, userId: Id, answer: string, replaceMarker = false, overwrite = false) {
   const trimmedAnswer = answer.trim();
   const rd = parseRdAnswer(trimmedAnswer);
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const cell = await readCell({ articleId, area });
     if (!cell) throw new ServiceError(404, "Hintvak niet gevonden");
+    if (!overwrite && cell.status !== HintCellStatus.Open && cell.status !== HintCellStatus.None && setByOther(cell.claimedBy, userId)) {
+      const solved = cell.status === HintCellStatus.Solved;
+      throw await conflictError(
+        solved ? "Dit vak is al opgelost door iemand anders" : "Iemand anders is met dit vak bezig",
+        solved ? "answer" : "claim",
+        solved ? cell.answer : null,
+        cell.claimedBy,
+        cell.claimedAt,
+      );
+    }
 
     if (rd) {
       const existing = await Marker.findOne({ type: MarkerType.Hint, area, time: cell.slotTime }, { _id: 1 }).lean();
@@ -244,7 +257,11 @@ export async function solveCell(articleId: number, area: string, userId: Id, ans
     const unset: Record<string, 1> = { checkedBy: 1 };
     if (!rd) Object.assign(unset, { markerId: 1, answerLocation: 1 });
     const updated = await HintCell.updateOne(
-      { _id: cell._id, markerId: cell.markerId ?? null },
+      // Compare-and-set on what the guard above saw: a concurrent claim or answer makes this attempt decide again.
+      // A confirmed overwrite has nothing to decide again, so it only depends on the marker link.
+      overwrite
+        ? { _id: cell._id, markerId: cell.markerId ?? null }
+        : { _id: cell._id, markerId: cell.markerId ?? null, status: cell.status, claimedBy: cell.claimedBy ?? null },
       {
         $set: {
           answer: trimmedAnswer,
@@ -258,7 +275,7 @@ export async function solveCell(articleId: number, area: string, userId: Id, ans
         $unset: unset,
       },
     );
-    if (updated.matchedCount === 0) continue; // the marker link changed meanwhile: decide again
+    if (updated.matchedCount === 0) continue; // the cell changed meanwhile: decide again
 
     // Answer changed from a coordinate to a word: remove the marker we created earlier
     if (!rd && cell.markerId) await deleteMarkerIfUnlinked(cell.markerId);

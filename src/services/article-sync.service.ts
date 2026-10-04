@@ -101,9 +101,15 @@ export async function syncArticles(apiArticles: ApiArticle[]): Promise<SyncResul
       ).lean();
       result.upserted++;
 
+      const changed = Boolean(previous?.contentHash) && previous?.contentHash !== contentHash;
+      // A summary of the old content would be shown with the new text until the next summary is made
+      if (changed) {
+        await Article.updateOne({ id: apiArticle.id, summaryHash: { $ne: contentHash } }, { $unset: { summary: 1, summaryPoints: 1, summaryHash: 1 } });
+      }
+
       if (apiArticle.type !== "hint") continue;
 
-      if (previous?.contentHash && previous.contentHash !== contentHash) {
+      if (changed) {
         await HintCell.updateMany({ articleId: apiArticle.id }, { $set: { articleChanged: true } });
         result.changedHints.push(apiArticle.id);
       }

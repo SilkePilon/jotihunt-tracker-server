@@ -38,6 +38,21 @@ const ArticleSchema = new mongoose.Schema({
     type: String,
     required: false,
   },
+  /** Short Dutch summary made by Gemini (news and assignments only); empty until made */
+  summary: {
+    type: String,
+    required: false,
+  },
+  /** What the summary means for our team, as short points */
+  summaryPoints: {
+    type: [String],
+    default: undefined,
+  },
+  /** contentHash the summary was made from: a changed article gets a new summary */
+  summaryHash: {
+    type: String,
+    required: false,
+  },
 });
 
 export const Article = mongoose.model("Article", ArticleSchema);

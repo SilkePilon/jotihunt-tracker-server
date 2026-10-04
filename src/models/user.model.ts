@@ -55,16 +55,22 @@ const UserSchema = new mongoose.Schema({
     /** Highest "Meldingen" dialog version shown (client NOTIFICATIONS_PROMPT_VERSION); 0 = never */
     promptedVersion: { type: Number, required: true, default: 0 },
   },
+  /** Ids of the news and assignment articles this user opened on the hints page */
+  readArticles: {
+    type: [Number],
+    default: [],
+  },
   tracker: {
     type: TrackerSchema,
     required: false,
   },
 });
 
-// Exclude password from JSON response
+// Exclude the password and the read state (only served by GET /articles/read) from JSON responses
 UserSchema.set("toJSON", {
   transform: (_doc, ret: Record<string, unknown>) => {
     delete ret.password;
+    delete ret.readArticles;
     return ret;
   },
 });

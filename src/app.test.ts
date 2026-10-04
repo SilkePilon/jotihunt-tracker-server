@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import jwt from "jsonwebtoken";
+import { Article } from "./models/article.model";
 import { hashPassword, User } from "./models/user.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "./test/db";
 
@@ -28,10 +29,10 @@ const tokenFor = (user: { _id: unknown }, iat?: number) => sign(iat === undefine
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
 let emailCounter = 0;
-async function createUser(fields: { admin?: boolean; password?: string; email?: string; requiresPasswordChange?: boolean } = {}) {
+async function createUser(fields: { admin?: boolean; password?: string; email?: string; name?: string; requiresPasswordChange?: boolean } = {}) {
   return User.create({
     email: fields.email ?? `user${++emailCounter}@test.nl`,
-    name: "Test",
+    name: fields.name ?? "Test",
     password: await hashPassword(fields.password ?? "geheim"),
     admin: fields.admin ?? false,
     requiresPasswordChange: fields.requiresPasswordChange ?? false,
@@ -169,6 +170,9 @@ describe("required password change", () => {
       ["/tracker/me", {}],
       ["/hints/board", {}],
       ["/hunt-reports", {}],
+      ["/assignments", {}],
+      ["/assignments/members", {}],
+      ["/articles/read", {}],
       ["/notifications", {}],
       ["/admin/users", {}],
       ["/demo", {}],
@@ -286,6 +290,103 @@ describe("admin user management", () => {
     expect(statuses[0]).toBe(201);
     expect(statuses.slice(1).every((status) => status === 400)).toBe(true);
     expect(await User.countDocuments({ email: "dubbel@test.nl" })).toBe(1);
+  });
+});
+
+describe("hints page: assignments, read state and presence", () => {
+  const makeArticle = (id: number, type: string) => Article.create({ id, title: `Artikel ${id}`, type, publishAt: new Date("2026-10-17T12:00:00Z"), content: "<div>tekst</div>" });
+
+  test("without a token every route answers 401", async () => {
+    const calls: [string, RequestInit & { json?: unknown }][] = [
+      ["/assignments", {}],
+      ["/assignments/members", {}],
+      ["/articles/read", {}],
+      ["/presence", { method: "POST", json: { itemId: 5 } }],
+    ];
+    for (const [path, init] of calls) expect([path, (await request(path, init)).status]).toEqual([path, 401]);
+  });
+
+  test("an assignment write without a body, and an owner write without owner, are a 400", async () => {
+    const token = tokenFor(await createUser());
+    await makeArticle(7, "assignment");
+    for (const path of ["/assignments/7/status", "/assignments/7/owner", "/assignments/7/notes"]) {
+      expect([path, (await request(path, { method: "POST", token })).status]).toEqual([path, 400]);
+    }
+    expect((await request("/assignments/7/owner", { method: "POST", token, json: {} })).status).toBe(400);
+    expect((await request("/assignments/7/owner", { method: "POST", token, json: { overwrite: true } })).status).toBe(400);
+    expect((await request("/assignments/7/owner", { method: "POST", token, json: { owner: "geen-id" } })).status).toBe(400);
+    expect(await request("/assignments", { token }).then((res) => res.json())).toEqual([]);
+  });
+
+  test("the owner can be set to a user and to nobody (null)", async () => {
+    const user = await createUser({ name: "Sanne" });
+    const token = tokenFor(user);
+    await makeArticle(7, "assignment");
+    const given = await request("/assignments/7/owner", { method: "POST", token, json: { owner: String(user._id) } });
+    expect(given.status).toBe(200);
+    expect(((await given.json()) as { owner: { name: string } }).owner.name).toBe("Sanne");
+    const taken = await request("/assignments/7/owner", { method: "POST", token, json: { owner: null } });
+    expect(taken.status).toBe(200);
+    expect(((await taken.json()) as { owner?: unknown }).owner ?? null).toBeNull();
+  });
+
+  test("a status someone else set is a 409 with the conflict; overwrite: true goes through", async () => {
+    const [a, b] = [await createUser({ name: "Sanne" }), await createUser({ name: "Daan" })];
+    await makeArticle(7, "assignment");
+    expect((await request("/assignments/7/status", { method: "POST", token: tokenFor(a), json: { status: "busy" } })).status).toBe(200);
+
+    const refused = await request("/assignments/7/status", { method: "POST", token: tokenFor(b), json: { status: "skipped" } });
+    expect(refused.status).toBe(409);
+    const body = (await refused.json()) as { message: string; conflict: { kind: string; value: string; by: { name: string } } };
+    expect(body.conflict).toMatchObject({ kind: "status", value: "busy", by: { _id: String(a._id), name: "Sanne" } });
+    expect(typeof body.message).toBe("string");
+
+    const forced = await request("/assignments/7/status", { method: "POST", token: tokenFor(b), json: { status: "skipped", overwrite: true } });
+    expect(forced.status).toBe(200);
+    expect((await forced.json()) as { status: string; statusBy: { name: string } }).toMatchObject({ status: "skipped", statusBy: { name: "Daan" } });
+  });
+
+  test("presence: a heartbeat lists the caller, an array as itemId is a 400, leaving is a 204", async () => {
+    const user = await createUser({ name: "Sanne" });
+    const token = tokenFor(user);
+    expect((await request("/presence", { method: "POST", token, json: { itemId: [1, 2] } })).status).toBe(400);
+    expect((await request("/presence", { method: "POST", token, json: { itemId: [5] } })).status).toBe(400);
+    expect((await request("/presence", { method: "POST", token })).status).toBe(400);
+    expect((await request("/presence", { method: "POST", token, json: { itemId: 5, area: "zulu" } })).status).toBe(400);
+
+    const beat = await request("/presence", { method: "POST", token, json: { itemId: 5, area: "CHARLIE" } });
+    expect(beat.status).toBe(200);
+    const list = (await beat.json()) as { userId: string; name: string; itemId: number; area?: string }[];
+    expect(list.find((entry) => entry.userId === String(user._id))).toMatchObject({ name: "Sanne", itemId: 5, area: "charlie" });
+
+    expect((await request("/presence", { method: "DELETE", token })).status).toBe(204);
+    const after = (await (await request("/presence", { method: "POST", token: tokenFor(await createUser()), json: { itemId: "6" } })).json()) as { userId: string; itemId: number }[];
+    expect(after.some((entry) => entry.userId === String(user._id))).toBe(false);
+    expect(after.every((entry) => typeof entry.itemId === "number")).toBe(true);
+  });
+
+  test("marking an article read shows in the read state; a seeded test article is a 404", async () => {
+    const user = await createUser();
+    const token = tokenFor(user);
+    await Promise.all([makeArticle(3, "news"), makeArticle(900001, "news")]);
+    expect((await request("/articles/3/read", { method: "POST", token })).status).toBe(204);
+    expect((await request("/articles/900001/read", { method: "POST", token })).status).toBe(404);
+    const res = await request("/articles/read", { token });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ read: [3], readBy: { "3": 1 } });
+  });
+
+  test("an admin's user answers never carry the read articles", async () => {
+    const admin = await createUser({ admin: true });
+    const token = tokenFor(admin);
+    const created = await request("/admin/users", { method: "POST", token, json: { name: "Nieuw", email: "lezer@test.nl", password: "tijdelijk" } });
+    expect(created.status).toBe(201);
+    expect(JSON.stringify(await created.json())).not.toContain("readArticles");
+    const user = await createUser();
+    await User.updateOne({ _id: user._id }, { $set: { readArticles: [3] } });
+    const updated = await request(`/admin/users/${user._id}`, { method: "PUT", token, json: { name: "Anders" } });
+    expect(updated.status).toBe(200);
+    expect(JSON.stringify(await updated.json())).not.toContain("readArticles");
   });
 });
 
