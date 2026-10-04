@@ -13,7 +13,8 @@ export enum HintCheck {
   Disputed = "disputed",
 }
 
-const NoteSchema = new mongoose.Schema({
+/** A team note with its author; shared by hint cells and assignments */
+export const NoteSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   text: { type: String, required: true },
   createdAt: { type: Date, required: true, default: Date.now },
