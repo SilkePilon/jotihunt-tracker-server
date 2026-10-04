@@ -208,14 +208,14 @@ describe("required password change", () => {
     expect((await request("/markers", { token: accessToken })).status).toBe(200);
   });
 
-  test("a wrong old password on the change screen is a 401 from update-password, flag stays", async () => {
+  test("a wrong old password on the change screen is a 400 from update-password, flag stays", async () => {
     const user = await createUser({ password: "tijdelijk", requiresPasswordChange: true });
     const res = await request("/auth/update-password", {
       method: "POST",
       token: tokenFor(user),
       json: { oldPassword: "fout", newPassword: "eigen", confirmPassword: "eigen" },
     });
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(400);
     expect((await User.findById(user._id))!.requiresPasswordChange).toBe(true);
   });
 
