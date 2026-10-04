@@ -1,11 +1,13 @@
 import { Request, Response } from "express";
 import { existsSync } from "node:fs";
 import { respond, ServiceError } from "../http/service-error";
+import { uploadedThumb } from "../middleware/photo-upload.middleware";
 import { huntOcr } from "../services/hunt-ocr.instance";
 import {
   createHuntReport,
   deleteHuntReport,
   huntReportPhotoPath,
+  type PhotoSize,
   type HuntReportView,
   listHuntReports,
   requestHuntReportRead,
@@ -27,6 +29,7 @@ export function getHuntReports(_req: Request, res: Response) {
 export function postHuntReport(req: Request, res: Response) {
   if (!req.file) return res.status(400).json({ message: "Foto ontbreekt of is geen JPEG, PNG of WebP." });
   const { area, huntCode, huntTime, lng, lat, uploadId } = req.body as Record<string, string | undefined>;
+  const thumb = uploadedThumb(req);
   const location: [number, number] | undefined = lng !== undefined && lat !== undefined ? [Number(lng), Number(lat)] : undefined;
   return respond(res, 201, async () =>
     queueReading(
@@ -36,6 +39,7 @@ export function postHuntReport(req: Request, res: Response) {
           huntCode: huntCode || undefined,
           huntTime: huntTime ? new Date(huntTime) : undefined,
           photo: { buffer: req.file!.buffer, mimetype: req.file!.mimetype },
+          thumb: thumb ? { buffer: thumb.buffer, mimetype: thumb.mimetype } : undefined,
           location,
           uploadId: uploadId || undefined,
         },
@@ -64,7 +68,8 @@ export function deleteReport(req: Request, res: Response) {
 
 export async function getPhoto(req: Request, res: Response) {
   try {
-    const file = await huntReportPhotoPath(String(req.params.id));
+    const size: PhotoSize = req.query?.size === "thumb" ? "thumb" : "full";
+    const file = await huntReportPhotoPath(String(req.params.id), size);
     if (!existsSync(file)) return res.status(404).json({ message: "Foto niet gevonden." });
     res.setHeader("Cache-Control", "private, max-age=86400");
     // The stored type is trusted from the upload: never let a browser sniff it into something else

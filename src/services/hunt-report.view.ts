@@ -33,6 +33,8 @@ export interface HuntReportView {
   status: HuntReportStatus;
   deadline: string;
   photoUrl: string;
+  /** Small list thumbnail; serves the full photo when the report has none */
+  thumbUrl: string;
   ocrStatus: OcrStatus;
   ocrError: string | null;
   codeConfidence: number | null;
@@ -79,6 +81,7 @@ export function toHuntReportView(report: HuntReportViewSource, now: Date, duplic
     status: huntReportStatus({ huntTime, submittedAt: report.submittedAt, site: report.site }, now),
     deadline: submitDeadline(huntTime).toISOString(),
     photoUrl: `/hunt-reports/${id}/photo`,
+    thumbUrl: `/hunt-reports/${id}/photo?size=thumb`,
     ocrStatus: (ocr?.status as OcrStatus | undefined) ?? "done",
     ocrError: ocr?.error ?? null,
     codeConfidence: ocr?.codeConfidence ?? null,

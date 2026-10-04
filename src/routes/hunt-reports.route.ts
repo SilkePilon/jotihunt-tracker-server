@@ -1,5 +1,5 @@
 import express from "express";
-import { body, param } from "express-validator";
+import { body, param, query } from "express-validator";
 import * as huntReportsController from "../controllers/hunt-reports.controller";
 import verifyToken from "../middleware/auth.middleware";
 import { photoUpload } from "../middleware/photo-upload.middleware";
@@ -51,6 +51,11 @@ router.patch(
 );
 router.post("/:id/read", [verifyToken, validate([idParam])], huntReportsController.postRead);
 router.delete("/:id", [verifyToken, validate([idParam])], huntReportsController.deleteReport);
-router.get("/:id/photo", [verifyToken, validate([idParam])], huntReportsController.getPhoto);
+// ?size=thumb: the small list thumbnail (the full photo when the report has none)
+router.get(
+  "/:id/photo",
+  [verifyToken, validate([idParam, query("size").optional().isIn(["full", "thumb"]).withMessage("Onbekende fotogrootte.")])],
+  huntReportsController.getPhoto,
+);
 
 export default router;
