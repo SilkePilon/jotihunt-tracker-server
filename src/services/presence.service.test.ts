@@ -40,6 +40,14 @@ describe("presence", () => {
     expect(presence.list()).toEqual([]);
   });
 
+  test("clear removes everyone", () => {
+    const { presence } = clocked();
+    presence.beat(sanne, 5);
+    presence.beat(daan, 6);
+    presence.clear();
+    expect(presence.list()).toEqual([]);
+  });
+
   test("leave removes the user at once", () => {
     const { presence } = clocked();
     presence.beat(sanne, 5);

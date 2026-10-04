@@ -10,9 +10,9 @@ const router = express.Router();
 
 router.post(
   "/",
-  [verifyToken, limitUserWrites(60), validate([body("itemId").isInt({ min: 0 }), body("area").optional().isString().toLowerCase().isIn(DEFAULT_AREAS)])],
+  [verifyToken, limitUserWrites(60), validate([body("itemId").not().isArray().isInt({ min: 0 }).toInt(), body("area").optional().isString().toLowerCase().isIn(DEFAULT_AREAS)])],
   presenceController.beat,
 );
-router.delete("/", verifyToken, presenceController.leave);
+router.delete("/", [verifyToken, limitUserWrites(60)], presenceController.leave);
 
 export default router;

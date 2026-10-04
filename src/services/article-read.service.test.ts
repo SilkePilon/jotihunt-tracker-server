@@ -27,6 +27,14 @@ describe("article read state", () => {
     expect(error.status).toBe(404);
   });
 
+  test("404 for a seeded test article (never shown to users)", async () => {
+    const [user] = await Promise.all([makeUser("sanne"), makeArticle(900001), makeArticle(3)]);
+    const error = (await markArticleRead(user._id, 900001).catch((caught: unknown) => caught)) as ServiceError;
+    expect(error).toBeInstanceOf(ServiceError);
+    expect(error.status).toBe(404);
+    expect((await User.findById(user._id).lean())?.readArticles).toEqual([]);
+  });
+
   test("getReadState returns the user's own ids and how many users read each article", async () => {
     const [a, b] = await Promise.all([makeUser("sanne"), makeUser("daan"), makeArticle(3), makeArticle(4)]);
     await markArticleRead(a._id, 3);

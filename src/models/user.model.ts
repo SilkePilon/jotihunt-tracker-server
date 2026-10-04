@@ -66,10 +66,11 @@ const UserSchema = new mongoose.Schema({
   },
 });
 
-// Exclude password from JSON response
+// Exclude the password and the read state (only served by GET /articles/read) from JSON responses
 UserSchema.set("toJSON", {
   transform: (_doc, ret: Record<string, unknown>) => {
     delete ret.password;
+    delete ret.readArticles;
     return ret;
   },
 });

@@ -216,7 +216,9 @@ async function syncHintMarker(cellId: mongoose.Types.ObjectId) {
 /**
  * Store an answer. A coordinate (RD) answer places the hint marker of the area and hour (409 with existingMarkerId
  * when another hint marker is already there, unless replaceMarker); a word removes the marker the cell had. The
- * cell is updated first (compare-and-set on its marker link), then the marker follows the answer that won.
+ * cell is updated first with a compare-and-set, then the marker follows the answer that won. The compare-and-set
+ * always covers the cell's marker link; without `overwrite` it also covers status and claimer, so a claim or answer
+ * someone else made meanwhile is not overwritten but leads to the conflict 409 on the next attempt.
  * A cell someone else solved or is solving is a 409 with `conflict`, unless `overwrite`.
  */
 export async function solveCell(articleId: number, area: string, userId: Id, answer: string, replaceMarker = false, overwrite = false) {
@@ -273,7 +275,7 @@ export async function solveCell(articleId: number, area: string, userId: Id, ans
         $unset: unset,
       },
     );
-    if (updated.matchedCount === 0) continue; // the marker link changed meanwhile: decide again
+    if (updated.matchedCount === 0) continue; // the cell changed meanwhile: decide again
 
     // Answer changed from a coordinate to a word: remove the marker we created earlier
     if (!rd && cell.markerId) await deleteMarkerIfUnlinked(cell.markerId);

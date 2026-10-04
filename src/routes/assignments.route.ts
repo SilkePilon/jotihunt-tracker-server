@@ -8,6 +8,12 @@ import { AssignmentStatus } from "../models/assignment.model";
 
 const articleParam = param("articleId").isInt({ min: 0 });
 const overwrite = body("overwrite").optional().isBoolean();
+// The key must be there: null (nobody) or a user id. Without it a body-less request would unassign.
+const owner = body("owner")
+  .exists()
+  .bail()
+  .if((value: unknown) => value !== null)
+  .isMongoId();
 
 // Shared by all assignment writes (status, owner, notes)
 const assignmentWrites = limitUserWrites(60);
@@ -23,7 +29,7 @@ router.post(
 );
 router.post(
   "/:articleId/owner",
-  [verifyToken, assignmentWrites, validate([articleParam, body("owner").optional({ values: "null" }).isMongoId(), overwrite])],
+  [verifyToken, assignmentWrites, validate([articleParam, owner, overwrite])],
   assignmentsController.setOwner,
 );
 router.post(

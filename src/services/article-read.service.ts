@@ -1,13 +1,14 @@
 import mongoose from "mongoose";
 import { ServiceError } from "../http/service-error";
-import { Article } from "../models/article.model";
+import { Article, publicArticlesFilter } from "../models/article.model";
 import { User } from "../models/user.model";
 
 type Id = mongoose.Types.ObjectId | string;
 
-/** Remember that the user opened an article */
+/** Remember that the user opened an article (one of the articles users can see) */
 export async function markArticleRead(userId: Id, articleId: number): Promise<void> {
-  if (!(await Article.exists({ id: articleId }))) throw new ServiceError(404, "Bericht niet gevonden");
+  // $and: the public filter is a condition on `id` too, so spreading it would replace the id itself
+  if (!(await Article.exists({ $and: [{ id: articleId }, publicArticlesFilter()] }))) throw new ServiceError(404, "Bericht niet gevonden");
   await User.updateOne({ _id: userId }, { $addToSet: { readArticles: articleId } });
 }
 

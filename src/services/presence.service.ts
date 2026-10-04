@@ -1,3 +1,5 @@
+import { onDemoSwitch } from "../demo/database-switch";
+
 /** How long a user stays listed after their last heartbeat (the client beats every 10 s) */
 export const PRESENCE_TTL_MS = 25_000;
 
@@ -14,6 +16,8 @@ export interface Presence {
   /** The user has this item (and for a hint, this area) open right now */
   beat(user: { _id: string; name: string }, itemId: number, area?: string): void;
   leave(userId: string): void;
+  /** Forget everyone (the item ids belong to one database) */
+  clear(): void;
   list(): PresenceEntry[];
 }
 
@@ -36,6 +40,9 @@ export function createPresence({ ttlMs = PRESENCE_TTL_MS, now = Date.now }: { tt
     leave(userId) {
       entries.delete(userId);
     },
+    clear() {
+      entries.clear();
+    },
     list() {
       prune();
       return [...entries.values()];
@@ -45,3 +52,6 @@ export function createPresence({ ttlMs = PRESENCE_TTL_MS, now = Date.now }: { tt
 
 /** The presence of the running server */
 export const presence = createPresence();
+
+// Item ids belong to one database: after a demo switch nobody is on an item of the other one
+onDemoSwitch(() => presence.clear());
