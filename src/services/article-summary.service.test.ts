@@ -1,0 +1,159 @@
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { APICallError } from "ai";
+import { Article } from "../models/article.model";
+import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
+import { mockModel } from "../test/ai";
+import { GeminiError } from "./ai/gemini-error";
+import { createArticleSummarizer, createSummaryJob, findPendingSummaries, storeSummary, SUMMARY_TIMEOUT_MS, type ArticleSummary } from "./article-summary.service";
+
+const article = (id: number, type: string, extra: Record<string, unknown> = {}) =>
+  Article.create({ id, title: `Titel ${id}`, type, publishAt: new Date(`2026-10-17T1${id % 10}:00:00Z`), content: `<div>Tekst ${id}</div>`, contentHash: `hash-${id}`, ...extra });
+
+beforeAll(connectTestDb);
+beforeEach(clearTestDb);
+afterAll(disconnectTestDb);
+
+describe("createArticleSummarizer", () => {
+  const input = { title: "Vossen wisselen", type: "news", content: "<div>Om <strong>23:00</strong> wisselen de vossen.</div>" };
+
+  test("the default deadline is 30 seconds", () => {
+    expect(SUMMARY_TIMEOUT_MS).toBe(30_000);
+  });
+
+  test("sends title and plain text, asks for JSON with the schema, returns the cleaned summary", async () => {
+    const model = mockModel(() => JSON.stringify({ summary: "  Om 23:00 wisselen de vossen.  ", points: [" Hunters laten pauzeren ", "", "x".repeat(300)] }));
+    const result = await createArticleSummarizer({ model }).summarize(input);
+    expect(result.summary).toBe("Om 23:00 wisselen de vossen.");
+    expect(result.points).toEqual(["Hunters laten pauzeren", "x".repeat(200)]);
+    const [call] = model.doGenerateCalls;
+    const text = (call.prompt[0].content as { type: string; text: string }[])[0].text;
+    expect(text).toContain("Title: Vossen wisselen");
+    expect(text).toContain("Om 23:00 wisselen de vossen.");
+    expect(text).not.toContain("<strong>");
+    expect(call.responseFormat).toMatchObject({ type: "json" });
+    expect((call.responseFormat as { schema?: unknown }).schema).toBeDefined();
+    expect(call.temperature).toBe(0.2);
+  });
+
+  test("an assignment prompt carries deadline (Dutch time) and points", async () => {
+    const model = mockModel(() => JSON.stringify({ summary: "s", points: [] }));
+    await createArticleSummarizer({ model }).summarize({ title: "Doedelzak", type: "assignment", content: "<div>bouw</div>", endTime: new Date("2026-10-17T13:30:00Z"), maxPoints: 30 });
+    const text = (model.doGenerateCalls[0].prompt[0].content as { text: string }[])[0].text;
+    expect(text).toContain("assignment");
+    expect(text).toContain("Deadline: 15:30");
+    expect(text).toContain("Max points: 30");
+  });
+
+  test("keeps at most 4 points and cuts a long summary", async () => {
+    const model = mockModel(() => JSON.stringify({ summary: "y".repeat(900), points: ["1", "2", "3", "4", "5"] }));
+    const result = await createArticleSummarizer({ model }).summarize(input);
+    expect(result.summary).toHaveLength(600);
+    expect(result.points).toEqual(["1", "2", "3", "4"]);
+  });
+
+  test("an empty summary or a wrong shape is a non-retryable GeminiError", async () => {
+    for (const answer of ['{"summary":"","points":[]}', '{"points":["a"]}', "not json"]) {
+      const error = (await createArticleSummarizer({ model: mockModel(() => answer) })
+        .summarize(input)
+        .catch((caught: unknown) => caught)) as GeminiError;
+      expect(error).toBeInstanceOf(GeminiError);
+      expect(error.retryable).toBe(false);
+    }
+  });
+
+  test("an API error becomes a GeminiError and the model is called once", async () => {
+    const model = mockModel(() => {
+      throw new APICallError({ message: "x", url: "u", requestBodyValues: {}, statusCode: 503, isRetryable: true });
+    });
+    const error = (await createArticleSummarizer({ model })
+      .summarize(input)
+      .catch((caught: unknown) => caught)) as GeminiError;
+    expect(error.status).toBe(503);
+    expect(model.doGenerateCalls).toHaveLength(1);
+  });
+});
+
+describe("findPendingSummaries and storeSummary", () => {
+  test("pending: news and assignments without a summary of their current content, newest first, never hints or seeded test articles", async () => {
+    await article(1, "news");
+    await article(2, "assignment");
+    await article(3, "hint");
+    await article(4, "news", { summary: "klaar", summaryHash: "hash-4" });
+    await article(5, "news", { summary: "oud", summaryHash: "eerdere-hash" });
+    await article(900001, "news");
+    await article(6, "news", { contentHash: undefined });
+    expect((await findPendingSummaries(10)).map((pending) => pending.id)).toEqual([5, 2, 1]);
+    expect((await findPendingSummaries(2)).map((pending) => pending.id)).toEqual([5, 2]);
+  });
+
+  test("storeSummary stores for the content it was made from, and not for content that changed meanwhile", async () => {
+    await article(1, "news");
+    await storeSummary({ id: 1, contentHash: "hash-1" }, { summary: "kort", points: ["a"] });
+    expect(await Article.findOne({ id: 1 }).lean()).toMatchObject({ summary: "kort", summaryPoints: ["a"], summaryHash: "hash-1" });
+    await storeSummary({ id: 1, contentHash: "andere-hash" }, { summary: "fout", points: [] });
+    expect((await Article.findOne({ id: 1 }).lean())?.summary).toBe("kort");
+  });
+});
+
+describe("createSummaryJob", () => {
+  const ok: ArticleSummary = { summary: "kort", points: ["p"] };
+
+  test("summarises pending articles and stores them", async () => {
+    await article(1, "news");
+    await article(2, "assignment");
+    const seen: string[] = [];
+    const job = createSummaryJob({
+      summarizer: {
+        summarize: async (input) => {
+          seen.push(input.title);
+          return ok;
+        },
+      },
+    });
+    const result = await job.run();
+    expect(result.done.sort()).toEqual([1, 2]);
+    expect(seen.sort()).toEqual(["Titel 1", "Titel 2"]);
+    expect(await Article.countDocuments({ summary: "kort" })).toBe(2);
+    expect((await job.run()).done).toEqual([]);
+  });
+
+  test("a failing article is tried twice for the same content, then left alone; other articles go on", async () => {
+    await article(1, "news");
+    await article(2, "news");
+    let calls = 0;
+    const job = createSummaryJob({
+      summarizer: {
+        summarize: async (input) => {
+          if (input.title === "Titel 1") {
+            calls++;
+            throw new GeminiError("Gemini niet bereikbaar", true);
+          }
+          return ok;
+        },
+      },
+    });
+    const first = await job.run();
+    expect(first.done).toEqual([2]);
+    expect(first.failed.map((failure) => failure.id)).toEqual([1]);
+    await job.run();
+    await job.run();
+    expect(calls).toBe(2);
+    // New content: tried again
+    await Article.updateOne({ id: 1 }, { $set: { contentHash: "nieuw" } });
+    await job.run();
+    expect(calls).toBe(3);
+  });
+
+  test("at most `batch` articles per run", async () => {
+    for (const id of [1, 2, 3, 4]) await article(id, "news");
+    const job = createSummaryJob({ summarizer: { summarize: async () => ok }, batch: 3 });
+    expect((await job.run()).done).toHaveLength(3);
+  });
+
+  test("a result is dropped when the tracked store is skipped (demo switch)", async () => {
+    await article(1, "news");
+    const job = createSummaryJob({ summarizer: { summarize: async () => ok }, tracked: async () => undefined });
+    expect((await job.run()).done).toEqual([]);
+    expect((await Article.findOne({ id: 1 }).lean())?.summary).toBeUndefined();
+  });
+});

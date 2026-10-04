@@ -1,6 +1,7 @@
 import cron from "node-cron";
 import { logger } from "../logger";
 import { isPushConfigured } from "../services/push.service";
+import summarizeArticles from "./article-summaries.cron";
 import retrieveJotihuntAreas from "./jotihunt-areas.cron";
 import retrieveJotihuntArticles from "./jotihunt-articles.cron";
 import retrieveJotihuntLogos from "./jotihunt-logos.cron";
@@ -34,6 +35,9 @@ export function scheduleCrons() {
   if (!process.env.ORS_API_KEY) {
     logger.warn("ORS_API_KEY not set, fox prediction uses straight-line walking times");
   }
+
+  // Summaries of news and assignments (Gemini): a few per run, also for demo articles
+  cron.schedule("5,25,45 * * * * *", summarizeArticles, { name: "article-summaries", noOverlap: true });
 
   // Notifications: fox status changes, new articles and hunt deadlines (push + in-app feed)
   cron.schedule("*/10 * * * * *", notify, { name: "notifier", noOverlap: true });
