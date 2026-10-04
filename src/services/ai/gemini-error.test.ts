@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { APICallError } from "ai";
+import { APICallError, RetryError } from "ai";
 import { GeminiError, toGeminiError } from "./gemini-error";
 
 const KEY = "secret-key-9";
@@ -19,6 +19,7 @@ describe("toGeminiError", () => {
 
   test("4xx is not retryable", () => {
     const error = toGeminiError(apiError(400));
+    expect(error.message).toBe("Gemini-verzoek mislukt (HTTP 400)");
     expect(error.retryable).toBe(false);
     expect(error.status).toBe(400);
   });
@@ -30,11 +31,20 @@ describe("toGeminiError", () => {
     expect(error.status).toBeUndefined();
   });
 
-  test("a 2xx status on an API error counts as no answer", () => {
+  test("a 2xx status on an API error is an invalid answer, not retryable", () => {
     const error = toGeminiError(apiError(200));
-    expect(error.message).toBe("Gemini niet bereikbaar");
-    expect(error.retryable).toBe(true);
+    expect(error.message).toBe("Gemini gaf geen geldig antwoord");
+    expect(error.retryable).toBe(false);
     expect(error.status).toBeUndefined();
+  });
+
+  test("a RetryError is mapped by its last error", () => {
+    const retryError = new RetryError({ message: `retries failed ${KEY}`, reason: "maxRetriesExceeded", errors: [apiError(503)] });
+    const error = toGeminiError(retryError);
+    expect(error.message).toBe("Gemini-verzoek mislukt (HTTP 503)");
+    expect(error.message).not.toContain(KEY);
+    expect(error.retryable).toBe(true);
+    expect(error.status).toBe(503);
   });
 
   test("a timeout or abort is retryable", () => {
