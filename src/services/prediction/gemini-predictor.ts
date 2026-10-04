@@ -1,7 +1,7 @@
-import { GeminiError, generateJson, type GeminiHttp } from "../gemini.client";
+import { generateText, jsonSchema, Output, type JSONSchema7, type LanguageModel } from "ai";
+import { toGeminiError } from "../ai/gemini-error";
 import { PREDICTION_SCHEMA } from "./prompt";
 
-export const DEFAULT_PREDICTION_MODEL = "gemini-pro-latest";
 const TIMEOUT_MS = 90_000;
 
 export interface FoxPredictor {
@@ -9,21 +9,24 @@ export interface FoxPredictor {
   predict(prompt: string): Promise<unknown>;
 }
 
-export function createGeminiPredictor({ apiKey, model, http }: { apiKey: string; model: string; http: GeminiHttp }): FoxPredictor {
+/** One Gemini call per prediction; retrying and pausing are the prediction service's job */
+export function createGeminiPredictor({ model, timeoutMs = TIMEOUT_MS }: { model: LanguageModel; timeoutMs?: number }): FoxPredictor {
   return {
     async predict(prompt) {
-      const text = await generateJson({
-        http,
-        apiKey,
-        model,
-        parts: [{ text: prompt }],
-        generationConfig: { responseSchema: PREDICTION_SCHEMA, temperature: 0.2 },
-        timeoutMs: TIMEOUT_MS,
-      });
       try {
-        return JSON.parse(text);
-      } catch {
-        throw new GeminiError("Gemini gaf geen geldig antwoord", false);
+        const result = await generateText({
+          model,
+          prompt,
+          // No validator: validate.ts checks the answer and reports what is wrong with it
+          output: Output.object({ schema: jsonSchema(PREDICTION_SCHEMA as unknown as JSONSchema7) }),
+          temperature: 0.2,
+          maxRetries: 0,
+          timeout: timeoutMs,
+        });
+        // Reading the output throws when the answer was empty: inside the try so it becomes a GeminiError too
+        return result.output;
+      } catch (error) {
+        throw toGeminiError(error);
       }
     },
   };

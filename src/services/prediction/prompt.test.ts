@@ -34,7 +34,7 @@ describe("buildPrompt", () => {
   });
 
   test("schema requires every output field", () => {
-    expect((PREDICTION_SCHEMA as { required: string[] }).required.sort()).toEqual(
+    expect<string[]>([...PREDICTION_SCHEMA.required].sort()).toEqual(
       ["confidence", "pin", "reason", "round", "visitedTeamApiIds"].sort(),
     );
   });

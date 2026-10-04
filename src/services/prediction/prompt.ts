@@ -26,17 +26,18 @@ Task:
 5. reason: one short Dutch sentence, at most 15 words.
 Answer only with the JSON object.`;
 
-export const PREDICTION_SCHEMA: Record<string, unknown> = {
-  type: "OBJECT",
+/** JSON Schema of the answer; the AI SDK passes it to Gemini as the response schema */
+export const PREDICTION_SCHEMA = {
+  type: "object",
   properties: {
-    round: { type: "INTEGER" },
-    visitedTeamApiIds: { type: "ARRAY", items: { type: "INTEGER" } },
-    pin: { type: "OBJECT", properties: { lat: { type: "NUMBER" }, lng: { type: "NUMBER" } }, required: ["lat", "lng"] },
-    confidence: { type: "STRING", enum: ["low", "medium", "high"] },
-    reason: { type: "STRING" },
+    round: { type: "integer" },
+    visitedTeamApiIds: { type: "array", items: { type: "integer" } },
+    pin: { type: "object", properties: { lat: { type: "number" }, lng: { type: "number" } }, required: ["lat", "lng"] },
+    confidence: { type: "string", enum: ["low", "medium", "high"] },
+    reason: { type: "string" },
   },
   required: ["round", "visitedTeamApiIds", "pin", "confidence", "reason"],
-};
+} as const;
 
 export function buildPrompt(facts: AreaFacts): string {
   const data = {
