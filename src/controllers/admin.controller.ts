@@ -25,7 +25,7 @@ async function hasOtherAdmin(userId: string) {
 }
 
 export async function getUsers(req: Request, res: Response) {
-  const users = await User.find().select("-password").lean();
+  const users = await User.find().select("-password -readArticles").lean();
   return res.status(200).json(users);
 }
 

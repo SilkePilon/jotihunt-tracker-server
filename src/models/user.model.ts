@@ -55,6 +55,11 @@ const UserSchema = new mongoose.Schema({
     /** Highest "Meldingen" dialog version shown (client NOTIFICATIONS_PROMPT_VERSION); 0 = never */
     promptedVersion: { type: Number, required: true, default: 0 },
   },
+  /** Ids of the news and assignment articles this user opened on the hints page */
+  readArticles: {
+    type: [Number],
+    default: [],
+  },
   tracker: {
     type: TrackerSchema,
     required: false,
