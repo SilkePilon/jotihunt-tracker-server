@@ -1,7 +1,7 @@
 import express from "express";
 import * as authController from "../controllers/auth.controller";
 import { body } from "express-validator";
-import verifyToken from "../middleware/auth.middleware";
+import verifyToken, { verifyTokenAllowingPasswordChange } from "../middleware/auth.middleware";
 import { validate } from "../middleware/validate.middleware";
 import { limitFailures } from "../middleware/rate-limit";
 
@@ -45,7 +45,8 @@ const loginIpLimiter = limitFailures({
 const router = express.Router();
 
 router.post("/login", loginIpLimiter, loginLimiter, validate(loginValidator), authController.login);
-router.post("/update-password", [verifyToken, validate(updatePasswordValidator)], authController.updatePassword);
+// The only route (besides logging out) a user who must change their password can use
+router.post("/update-password", [verifyTokenAllowingPasswordChange, validate(updatePasswordValidator)], authController.updatePassword);
 router.post("/tutorial", [verifyToken, validate(tutorialValidator)], authController.updateTutorial);
 
 export default router;

@@ -28,13 +28,13 @@ const tokenFor = (user: { _id: unknown }, iat?: number) => sign(iat === undefine
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
 let emailCounter = 0;
-async function createUser(fields: { admin?: boolean; password?: string; email?: string } = {}) {
+async function createUser(fields: { admin?: boolean; password?: string; email?: string; requiresPasswordChange?: boolean } = {}) {
   return User.create({
     email: fields.email ?? `user${++emailCounter}@test.nl`,
     name: "Test",
     password: await hashPassword(fields.password ?? "geheim"),
     admin: fields.admin ?? false,
-    requiresPasswordChange: false,
+    requiresPasswordChange: fields.requiresPasswordChange ?? false,
   });
 }
 
@@ -154,6 +154,90 @@ describe("passwords", () => {
     const admin = await createUser({ admin: true });
     const token = tokenFor(admin, nowSeconds() - 60);
     expect((await request(`/admin/users/${admin._id}`, { method: "PUT", token, json: { password: "reset" } })).status).toBe(200);
+    expect((await request("/markers", { token })).status).toBe(200);
+  });
+});
+
+describe("required password change", () => {
+  const REQUIRED = { message: "Wijzig eerst je wachtwoord.", code: "PASSWORD_CHANGE_REQUIRED" };
+
+  test("every authenticated route answers 403 PASSWORD_CHANGE_REQUIRED", async () => {
+    const user = await createUser({ admin: true, requiresPasswordChange: true });
+    const token = tokenFor(user);
+    const calls: [string, RequestInit & { json?: unknown }][] = [
+      ["/markers", {}],
+      ["/tracker/me", {}],
+      ["/hints/board", {}],
+      ["/hunt-reports", {}],
+      ["/notifications", {}],
+      ["/admin/users", {}],
+      ["/demo", {}],
+      ["/settings/prediction", {}],
+      ["/auth/tutorial", { method: "POST", json: { version: 1 } }],
+      ["/push/subscribe", { method: "POST", json: { endpoint: "https://push.example.nl/x", keys: { p256dh: "a", auth: "b" } } }],
+    ];
+    for (const [path, init] of calls) {
+      const res = await request(path, { ...init, token });
+      expect([path, res.status]).toEqual([path, 403]);
+      expect(await res.json()).toEqual(REQUIRED);
+    }
+  });
+
+  test("an invalid or revoked token is still a 401 (sign out), not a 403", async () => {
+    const user = await createUser({ requiresPasswordChange: true });
+    expect((await request("/markers", { token: "nonsense" })).status).toBe(401);
+    const old = tokenFor(user, nowSeconds() - 60);
+    await User.updateOne({ _id: user._id }, { passwordChangedAt: new Date((nowSeconds() - 30) * 1000) });
+    expect((await request("/markers", { token: old })).status).toBe(401);
+  });
+
+  test("the change screen can change the password and log out (push unsubscribe); then everything works", async () => {
+    const user = await createUser({ password: "tijdelijk", requiresPasswordChange: true });
+    const token = tokenFor(user, nowSeconds() - 60);
+    const unsubscribe = await request("/push/subscribe", { method: "DELETE", token, json: { endpoint: "https://push.example.nl/x" } });
+    expect(unsubscribe.status).toBe(204);
+
+    const res = await request("/auth/update-password", {
+      method: "POST",
+      token,
+      json: { oldPassword: "tijdelijk", newPassword: "eigen", confirmPassword: "eigen" },
+    });
+    expect(res.status).toBe(200);
+    const { accessToken } = (await res.json()) as { accessToken: string };
+    expect((await User.findById(user._id))!.requiresPasswordChange).toBe(false);
+    expect((await request("/markers", { token: accessToken })).status).toBe(200);
+  });
+
+  test("a wrong old password on the change screen is a 400 from update-password, flag stays", async () => {
+    const user = await createUser({ password: "tijdelijk", requiresPasswordChange: true });
+    const res = await request("/auth/update-password", {
+      method: "POST",
+      token: tokenFor(user),
+      json: { oldPassword: "fout", newPassword: "eigen", confirmPassword: "eigen" },
+    });
+    expect(res.status).toBe(400);
+    expect((await User.findById(user._id))!.requiresPasswordChange).toBe(true);
+  });
+
+  test("login still works and reports the flag", async () => {
+    const user = await createUser({ password: "tijdelijk", requiresPasswordChange: true });
+    const res = await request("/auth/login", { method: "POST", json: { email: user.email, password: "tijdelijk" } });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { user: { requiresPasswordChange: boolean } }).user.requiresPasswordChange).toBe(true);
+  });
+
+  test("a user created by an admin must change their password", async () => {
+    const admin = await createUser({ admin: true });
+    const res = await request("/admin/users", { method: "POST", token: tokenFor(admin), json: { name: "Nieuw", email: "nieuw@test.nl", password: "tijdelijk" } });
+    expect(res.status).toBe(201);
+    expect((await User.findOne({ email: "nieuw@test.nl" }))!.requiresPasswordChange).toBe(true);
+  });
+
+  test("an admin resetting their own password chose it themselves: no forced change", async () => {
+    const admin = await createUser({ admin: true });
+    const token = tokenFor(admin, nowSeconds() - 60);
+    expect((await request(`/admin/users/${admin._id}`, { method: "PUT", token, json: { password: "reset" } })).status).toBe(200);
+    expect((await User.findById(admin._id))!.requiresPasswordChange).toBe(false);
     expect((await request("/markers", { token })).status).toBe(200);
   });
 });

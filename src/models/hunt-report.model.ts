@@ -45,6 +45,8 @@ const HuntReportSchema = new mongoose.Schema(
     huntTimeSource: { type: String, enum: FIELD_SOURCES, required: false },
     /** File name in UPLOADS_DIR */
     photo: { type: String, required: true },
+    /** File name of the small list thumbnail the phone sent with the photo; missing on old and demo reports */
+    thumb: { type: String, required: false },
     reportedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     reportedByName: { type: String, required: true },
     location: { type: pointSchema, required: false },

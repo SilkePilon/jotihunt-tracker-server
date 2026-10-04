@@ -72,9 +72,9 @@ export async function updatePassword(req: Request, res: Response) {
   const { oldPassword, newPassword } = req.body;
   const user = req.user!;
 
-  // check if old password is correct
+  // check if old password is correct (400, not 401: a 401 means the session itself is gone)
   if (!(await Bun.password.verify(oldPassword, user.password))) {
-    return res.status(401).json({
+    return res.status(400).json({
       message: "Old password is incorrect",
     });
   }

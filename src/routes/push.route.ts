@@ -1,7 +1,7 @@
 import express from "express";
 import { body } from "express-validator";
 import * as notificationsController from "../controllers/notifications.controller";
-import verifyToken from "../middleware/auth.middleware";
+import verifyToken, { verifyTokenAllowingPasswordChange } from "../middleware/auth.middleware";
 import { validate } from "../middleware/validate.middleware";
 
 const subscribeValidator = [
@@ -14,6 +14,7 @@ const router = express.Router();
 
 router.get("/vapid-key", notificationsController.getVapidKey);
 router.post("/subscribe", [verifyToken, validate(subscribeValidator)], notificationsController.subscribe);
-router.delete("/subscribe", [verifyToken, validate([body("endpoint").isString().notEmpty()])], notificationsController.unsubscribe);
+// Logging out from the password change screen drops the push subscription too
+router.delete("/subscribe", [verifyTokenAllowingPasswordChange, validate([body("endpoint").isString().notEmpty()])], notificationsController.unsubscribe);
 
 export default router;

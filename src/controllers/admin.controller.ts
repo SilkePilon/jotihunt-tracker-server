@@ -91,10 +91,11 @@ export async function updateUser(req: Request, res: Response) {
       if (data.admin !== undefined) user.admin = data.admin;
       if (password) {
         user.password = password;
-        user.requiresPasswordChange = true;
-        // Sign out the user's sessions; an admin resetting their own password keeps the current session
+        // Sign out the user's sessions; an admin resetting their own password keeps the current session, and chose
+        // that password themselves, so they don't have to change it again
         const issuedAt = res.locals.tokenIssuedAt;
         const self = req.user?._id.toString() === id && typeof issuedAt === "number";
+        user.requiresPasswordChange = !self;
         user.passwordChangedAt = self ? new Date(issuedAt * 1000) : passwordChangeTime();
       }
 
