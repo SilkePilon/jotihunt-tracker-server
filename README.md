@@ -252,6 +252,10 @@ In het dashboard dien je als beheerder vervolgens het Apparaat-ID te registreren
 ## 📸 Hunts registreren
 Hunters registreren een hunt met een foto vanaf hun telefoon, plus de vossengroep en de soort (hunt/tegenhunt). De server leest de huntcode (hoofdlettergevoelig) en de handgeschreven tijd van de foto met Gemini (zie `GEMINI_API_KEY`); tot de tijd gelezen is geldt het uploadtijdstip. Dubbele codes worden niet geweigerd maar gemarkeerd. HQ (admins) kan code en tijd corrigeren en een foto opnieuw laten lezen. De foto's staan in de map `uploads` (in Docker het volume `uploads`, het pad is aan te passen met de omgevingsvariabele `UPLOADS_DIR`). HQ stuurt de hunt zelf in op jotihunt.nl en klikt daarna in de tracker op "Ingestuurd" om dat bij te houden.
 
+### Android-app
+
+De APK van de Android-app en een bestand `latest.json` (`{ "versionCode": 1, "versionName": "1.0.0", "file": "jotihunt-1.0.0.apk", "sha256": "<hex>" }`) staan in de map `app-releases` (aan te passen met `APP_DIR`; in Docker een bind mount). De server serveert ze zonder inloggen op `GET /app/latest` en `GET /app/download/<bestand>`. De site toont de downloadknop zodra `GET /app/latest` antwoordt.
+
 ## 🤝 Bijdragen
 - Heb je zelf verbeteringen gemaakt? Open een Pull Request!
 - Ideeën maar geen code-skills? Maak een Issue, wie weet pakt iemand het op.
