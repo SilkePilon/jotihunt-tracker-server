@@ -12,6 +12,7 @@ export const MAX_DEVICES = 10;
 
 const INVALID_CODE = "Deze code is ongeldig of verlopen. Maak op de site een nieuwe code.";
 
+/** A random code of PAIRING_CODE_LENGTH characters from PAIRING_ALPHABET (`random` is injectable for tests). */
 export function generatePairingCode(random: (max: number) => number = randomInt): string {
   let code = "";
   for (let i = 0; i < PAIRING_CODE_LENGTH; i++) code += PAIRING_ALPHABET[random(PAIRING_ALPHABET.length)];
@@ -23,6 +24,7 @@ export function normalizePairingCode(input: string): string {
   return input.toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
+/** Hex SHA-256 of a (normalized) code; only this is stored. */
 export function hashPairingCode(code: string): string {
   return createHash("sha256").update(code).digest("hex");
 }
@@ -47,28 +49,35 @@ export async function redeemPairingCode(input: string, now = new Date()): Promis
   return user;
 }
 
-/** Register a paired phone; drops the least recently seen device beyond MAX_DEVICES. */
+/**
+ * Register a paired phone. One atomic update: the array is sorted by lastSeenAt and cut to MAX_DEVICES, so the least
+ * recently seen devices are dropped and concurrent pairings can't lose each other's device. The new device has
+ * lastSeenAt = now, so it is kept unless an existing device was seen in the future.
+ */
 export async function addDevice(user: UserType, name: string, now = new Date()) {
   const device = { id: randomUUID(), name: name.trim().slice(0, 60) || "Android", createdAt: now, lastSeenAt: now };
-  const devices = [...listDevices(user), device];
-  devices.sort((a, b) => (a.lastSeenAt?.getTime() ?? a.createdAt.getTime()) - (b.lastSeenAt?.getTime() ?? b.createdAt.getTime()));
-  const kept = devices.slice(Math.max(0, devices.length - MAX_DEVICES));
-  user.set("devices", kept);
-  await user.save();
+  const updated = await User.findOneAndUpdate({ _id: user._id }, { $push: { devices: { $each: [device], $sort: { lastSeenAt: 1 }, $slice: -MAX_DEVICES } } }, { returnDocument: "after" });
+  syncDevices(user, updated ? listDevices(updated) : []);
   return { id: device.id, name: device.name };
 }
 
+/** Forget a paired phone, which revokes its device token. False if the user had no device with this id. */
 export async function removeDevice(user: UserType, deviceId: string): Promise<boolean> {
-  const before = user.devices?.length ?? 0;
-  user.set(
-    "devices",
-    (user.devices ?? []).filter((d) => d.id !== deviceId),
+  const result = await User.updateOne({ _id: user._id }, { $pull: { devices: { id: deviceId } } });
+  syncDevices(
+    user,
+    listDevices(user).filter((d) => d.id !== deviceId),
   );
-  if ((user.devices?.length ?? 0) === before) return false;
-  await user.save();
-  return true;
+  return result.modifiedCount > 0;
 }
 
+/** The user's paired phones, least recently seen first. */
 export function listDevices(user: UserType) {
   return (user.devices ?? []).map((d) => ({ id: d.id, name: d.name, createdAt: d.createdAt, lastSeenAt: d.lastSeenAt ?? null }));
+}
+
+/** Mirror the stored array on the loaded document without marking it modified: a later save() must not write it back. */
+function syncDevices(user: UserType, devices: ReturnType<typeof listDevices>) {
+  user.set("devices", devices);
+  user.unmarkModified("devices");
 }

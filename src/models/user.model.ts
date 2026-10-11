@@ -75,7 +75,7 @@ const UserSchema = new mongoose.Schema({
     type: TrackerSchema,
     required: false,
   },
-  /** Phones paired with the Android app (newest last) */
+  /** Phones paired with the Android app, sorted by lastSeenAt (least recently seen first) when a phone is paired */
   devices: {
     type: [DeviceSchema],
     default: [],

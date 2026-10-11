@@ -93,6 +93,18 @@ describe("devices", () => {
     const ids = listDevices(user).map((d) => d.id);
     expect(ids).toHaveLength(MAX_DEVICES);
     expect(ids).not.toContain(first.id);
+    expect(listDevices(user).map((d) => d.name)).toContain("nieuw");
+    expect((await User.findById(user._id))?.devices.map((d) => d.id)).toEqual(ids);
+  });
+
+  test("two concurrent pairings on separately loaded copies of the user both keep their device", async () => {
+    const created = await createUser();
+    const [copyA, copyB] = await Promise.all([User.findById(created._id), User.findById(created._id)]);
+    const [a, b] = await Promise.all([addDevice(copyA!, "A"), addDevice(copyB!, "B")]);
+    const stored = (await User.findById(created._id))?.devices.map((d) => d.id);
+    expect(stored).toHaveLength(2);
+    expect(stored).toContain(a.id);
+    expect(stored).toContain(b.id);
   });
 
   test("device token carries did and kind and expires in 30 days", async () => {
