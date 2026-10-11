@@ -3,6 +3,7 @@ import expressWinston from "express-winston";
 import cors from "cors";
 import compression from "compression";
 import { logger } from "./logger";
+import { parseTrustProxy } from "./utils/trust-proxy";
 import { demoGate } from "./demo/database-switch";
 import { errorHandler } from "./middleware/error.middleware";
 import authRoute from "./routes/auth.route";
@@ -22,9 +23,11 @@ import visitsRoute from "./routes/visits.route";
 import notificationsRoute from "./routes/notifications.route";
 import pushRoute from "./routes/push.route";
 import demoRoute from "./routes/demo.route";
+import appRoute from "./routes/app.route";
 import settingsRoute from "./routes/settings.route";
 
 export const app = express();
+if (process.env.TRUST_PROXY) app.set("trust proxy", parseTrustProxy(process.env.TRUST_PROXY));
 app.disable("x-powered-by");
 app.use((_req, res, next) => {
   // Browsers must never sniff a served file (e.g. an uploaded photo) into another type
@@ -56,6 +59,8 @@ app.use(cors({ maxAge: 86400 }));
 
 // The demo switch itself is not gated; every other request waits for a running switch (see database-switch.ts)
 app.use("/demo", demoRoute);
+// Release files are not in the database, so this stays before the demo gate
+app.use("/app", appRoute);
 app.use(demoGate);
 app.use("/auth", authRoute);
 app.use("/tracker", trackerRoute);

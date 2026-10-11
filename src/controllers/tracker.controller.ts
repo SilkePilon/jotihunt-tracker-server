@@ -1,21 +1,11 @@
 import * as traccarService from "../services/traccar.service";
 import { Request, Response } from "express";
 import { logger } from "../logger";
-import { createTraccarApi } from "../services/traccar-api";
-import { describeTraccarError, traccarHttp } from "../services/traccar-http";
-import { vehicleGroupsFromEnv, type Vehicle } from "../services/tracker-onboarding.helpers";
-import { createTrackerOnboarding } from "../services/tracker-onboarding.service";
+import { describeTraccarError } from "../services/traccar-http";
+import { type Vehicle } from "../services/tracker-onboarding.helpers";
+import { onboarding, vehicleGroups } from "../services/tracker-onboarding.instance";
 import { isDemoMode } from "../demo/demo-mode";
 import { setSimulatedVehicle, simulatedDevices, simulatedPositions } from "../demo/simulated-trackers";
-
-const vehicleGroups = vehicleGroupsFromEnv();
-
-const onboarding = createTrackerOnboarding({
-  api: traccarService.isTraccarConfigured ? createTraccarApi(traccarHttp) : null,
-  clientUrl: process.env.TRACCAR_CLIENT_URL,
-  groups: vehicleGroups,
-  onError: (error) => logger.warn(`Traccar onboarding: ${describeTraccarError(error)}`),
-});
 
 function traccarUnavailable(res: Response) {
   return res.status(503).json({ message: "Traccar is not configured" });

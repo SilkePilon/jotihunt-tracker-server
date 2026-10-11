@@ -29,6 +29,18 @@ export function verifyTokenAllowingPasswordChange(req: Request, res: Response, n
   return authenticate(req, res, next, true);
 }
 
+/** lastSeenAt of a device is written at most this often (every request would be a database write). */
+const DEVICE_SEEN_INTERVAL_MS = 60 * 60 * 1000;
+
+/** Fire-and-forget: a failed or late write (e.g. the user is gone) only logs a warning, never rejects. */
+function touchDevice(userId: unknown, deviceId: string, lastSeenAt: Date | null | undefined) {
+  const now = new Date();
+  if (lastSeenAt && now.getTime() - lastSeenAt.getTime() < DEVICE_SEEN_INTERVAL_MS) return;
+  User.updateOne({ _id: userId, "devices.id": deviceId }, { $set: { "devices.$.lastSeenAt": now } }).catch((error) =>
+    logger.warn(`Could not update device lastSeenAt: ${error}`),
+  );
+}
+
 async function authenticate(req: Request, res: Response, next: NextFunction, allowPasswordChange: boolean) {
   const authHeader = req.headers.authorization;
   const token = authHeader && authHeader.split(" ")[1];
@@ -55,6 +67,14 @@ async function authenticate(req: Request, res: Response, next: NextFunction, all
     return denied(res);
   }
   if (!isIssuedAfterPasswordChange(decoded.iat, user.passwordChangedAt)) return denied(res);
+  // Device tokens (paired phones) stay valid only while the device is still registered on the user
+  if (decoded.did !== undefined) {
+    if (typeof decoded.did !== "string") return denied(res);
+    const device = user.devices?.find((entry) => entry.id === decoded.did);
+    if (!device) return denied(res);
+    touchDevice(user._id, device.id, device.lastSeenAt);
+    res.locals.deviceId = device.id;
+  }
   if (user.requiresPasswordChange && !allowPasswordChange) return res.status(403).json(PASSWORD_CHANGE_REQUIRED);
 
   req.user = user;
@@ -90,4 +110,6 @@ export async function isAdmin(req: Request, res: Response, next: NextFunction) {
 interface JwtPayload {
   _id: string;
   iat?: number;
+  /** Device id of a paired phone (device tokens only) */
+  did?: string;
 }

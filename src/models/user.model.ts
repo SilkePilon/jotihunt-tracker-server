@@ -11,6 +11,17 @@ const TrackerSchema = new mongoose.Schema(
   { _id: false },
 );
 
+/** A paired phone (Android app). Its device token carries `did` = `id`; removing the entry revokes the token. */
+const DeviceSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true },
+    name: { type: String, required: true },
+    createdAt: { type: Date, required: true },
+    lastSeenAt: { type: Date, required: false, default: null },
+  },
+  { _id: false },
+);
+
 const UserSchema = new mongoose.Schema({
   email: {
     type: String,
@@ -63,6 +74,11 @@ const UserSchema = new mongoose.Schema({
   tracker: {
     type: TrackerSchema,
     required: false,
+  },
+  /** Phones paired with the Android app, sorted by lastSeenAt (least recently seen first) when a phone is paired */
+  devices: {
+    type: [DeviceSchema],
+    default: [],
   },
 });
 

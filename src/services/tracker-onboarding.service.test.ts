@@ -141,6 +141,7 @@ describe("getMe", () => {
       configured: true,
       qrUrl: `http://tracker.test:5055/?id=${uniqueId}&${SETTINGS}`,
       deepLink: `org.traccar.client://?url=http%3A%2F%2Ftracker.test%3A5055%2F&id=${uniqueId}&${SETTINGS}`,
+      osmandUrl: "http://tracker.test:5055/",
       uniqueId,
       vehicle: "walking",
       connected: false,

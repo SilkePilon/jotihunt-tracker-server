@@ -24,6 +24,7 @@ export type TrackerMe =
       configured: true;
       qrUrl: string;
       deepLink: string;
+      osmandUrl: string;
       uniqueId: string;
       vehicle: Vehicle;
       connected: boolean;
@@ -124,6 +125,7 @@ export function createTrackerOnboarding(deps: TrackerOnboardingDeps) {
       configured: true,
       qrUrl: buildQrUrl(clientUrl!, uniqueId),
       deepLink: buildDeepLink(clientUrl!, uniqueId),
+      osmandUrl: clientUrl!,
       uniqueId,
       vehicle: ensured.vehicle,
       ...(await status(ensured.device)),

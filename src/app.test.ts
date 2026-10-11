@@ -178,6 +178,9 @@ describe("required password change", () => {
       ["/demo", {}],
       ["/settings/prediction", {}],
       ["/auth/tutorial", { method: "POST", json: { version: 1 } }],
+      ["/tracker/pair", { method: "POST" }],
+      ["/auth/refresh", { method: "POST" }],
+      ["/auth/devices", {}],
       ["/push/subscribe", { method: "POST", json: { endpoint: "https://push.example.nl/x", keys: { p256dh: "a", auth: "b" } } }],
     ];
     for (const [path, init] of calls) {
