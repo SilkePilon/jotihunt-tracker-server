@@ -44,6 +44,16 @@ describe("app releases", () => {
     expect(await download.text()).toBe("APKDATA");
   });
 
+  test("file names with a space get an encoded url that downloads", async () => {
+    writeFileSync(path.join(dir, "jotihunt 1.0.0.apk"), "SPACEDATA");
+    writeFileSync(path.join(dir, "latest.json"), JSON.stringify({ versionCode: 3, versionName: "1.0.0", file: "jotihunt 1.0.0.apk", sha256: "ef" }));
+    const latest = (await (await fetch(`${base}/app/latest`)).json()) as { url: string };
+    expect(latest.url).toBe("/app/download/jotihunt%201.0.0.apk");
+    const download = await fetch(`${base}${latest.url}`);
+    expect(download.status).toBe(200);
+    expect(await download.text()).toBe("SPACEDATA");
+  });
+
   test("only .apk files inside APP_DIR are served", async () => {
     expect((await fetch(`${base}/app/download/latest.json`)).status).toBe(404);
     expect((await fetch(`${base}/app/download/..%2Fsecret.apk`)).status).toBe(404);

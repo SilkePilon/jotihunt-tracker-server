@@ -3,6 +3,7 @@ import expressWinston from "express-winston";
 import cors from "cors";
 import compression from "compression";
 import { logger } from "./logger";
+import { parseTrustProxy } from "./utils/trust-proxy";
 import { demoGate } from "./demo/database-switch";
 import { errorHandler } from "./middleware/error.middleware";
 import authRoute from "./routes/auth.route";
@@ -26,6 +27,7 @@ import appRoute from "./routes/app.route";
 import settingsRoute from "./routes/settings.route";
 
 export const app = express();
+if (process.env.TRUST_PROXY) app.set("trust proxy", parseTrustProxy(process.env.TRUST_PROXY));
 app.disable("x-powered-by");
 app.use((_req, res, next) => {
   // Browsers must never sniff a served file (e.g. an uploaded photo) into another type

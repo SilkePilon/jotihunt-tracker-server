@@ -122,6 +122,7 @@ DISCORD_URL=https://discord.gg/jouw-discord-server # Optioneel
 GROUP_NAME=Jouw Scoutinggroep # Optioneel
 LOGO_URL=https://jouwscoutinggroep.nl/logo.png # Optioneel
 TEAMS_AREA_EDITING=false # Sta toe dat gebruikers de teams-gebieden kunnen aanpassen in de client
+TRUST_PROXY= # Optioneel, zet bijvoorbeeld op 1 achter een reverse proxy, zodat de limieten per IP-adres (inloggen en app koppelen) het echte clientadres zien
 ```
 3. Start de applicatie met:
 ```bash
@@ -255,6 +256,8 @@ Hunters registreren een hunt met een foto vanaf hun telefoon, plus de vossengroe
 ### Android-app
 
 De APK van de Android-app en een bestand `latest.json` (`{ "versionCode": 1, "versionName": "1.0.0", "file": "jotihunt-1.0.0.apk", "sha256": "<hex>" }`) staan in de map `app-releases` (aan te passen met `APP_DIR`; in Docker een bind mount). De server serveert ze zonder inloggen op `GET /app/latest` en `GET /app/download/<bestand>`. De site toont de downloadknop zodra `GET /app/latest` antwoordt.
+
+**Let op:** het koppelen en ontkoppelen van telefoons terwijl demomodus aan staat blijft niet bewaard nadat demomodus is uitgezet (apparaten staan op het gebruikersrecord en demo kopieert de gebruikers). Koppel en ontkoppel dus buiten demomodus.
 
 ## 🤝 Bijdragen
 - Heb je zelf verbeteringen gemaakt? Open een Pull Request!

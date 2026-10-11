@@ -32,5 +32,5 @@ export async function readLatestRelease(dir: string): Promise<AppRelease | null>
   const value = (raw ?? {}) as Partial<{ versionCode: number; versionName: string; file: string; sha256: string }>;
   if (!Number.isInteger(value.versionCode) || typeof value.versionName !== "string" || typeof value.file !== "string" || typeof value.sha256 !== "string") return null;
   if (!releaseFilePath(dir, value.file)) return null;
-  return { versionCode: value.versionCode!, versionName: value.versionName, sha256: value.sha256, url: `/app/download/${value.file}` };
+  return { versionCode: value.versionCode!, versionName: value.versionName, sha256: value.sha256, url: `/app/download/${encodeURIComponent(value.file)}` };
 }
