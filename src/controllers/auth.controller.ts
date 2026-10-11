@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import { hashPassword, needsRehash, passwordChangeTime, setTutorialVersion, User } from "../models/user.model";
-import jwt from "jsonwebtoken";
 import { logger } from "../logger";
+import { signAccessToken } from "../services/access-token";
 
 export async function login(req: Request, res: Response) {
   try {
@@ -54,18 +54,6 @@ export async function login(req: Request, res: Response) {
     logger.error("Error logging in", error);
     return res.status(500).json({ message: "Login failed" });
   }
-}
-
-/**
- * A new access token (with enough lifetime for the whole hunt). Its iat (whole seconds) is never before the user's
- * last password change, so a token issued in the same second as (or just after) a change is not rejected.
- */
-function signAccessToken(user: { _id: unknown; passwordChangedAt?: Date | null }) {
-  const now = Math.floor(Date.now() / 1000);
-  const changedAt = user.passwordChangedAt ? Math.ceil(user.passwordChangedAt.getTime() / 1000) : 0;
-  return jwt.sign({ _id: user._id, iat: Math.max(now, changedAt) }, process.env.JWT_SECRET!, {
-    expiresIn: "36h",
-  });
 }
 
 export async function updatePassword(req: Request, res: Response) {
