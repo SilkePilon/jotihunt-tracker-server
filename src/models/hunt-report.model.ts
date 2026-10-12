@@ -38,8 +38,10 @@ const HuntReportSchema = new mongoose.Schema(
     huntCode: { type: String, required: false, default: null, index: true },
     /** Random id the phone generates per photo, so a retried upload (lost response) doesn't create a second hunt */
     uploadId: { type: String, required: false },
-    /** null until read or entered; the upload time (createdAt) is used meanwhile */
+    /** null until read or entered; the photo time (takenAt), else the upload time (createdAt), is used meanwhile */
     huntTime: { type: Date, required: false, default: null },
+    /** When the phone took the photo (it may have waited in an offline queue); null = unknown, the upload time is used */
+    takenAt: { type: Date, required: false, default: null },
     /** Missing on reports from before OCR (entered by hand, so manual) */
     huntCodeSource: { type: String, enum: FIELD_SOURCES, required: false },
     huntTimeSource: { type: String, enum: FIELD_SOURCES, required: false },

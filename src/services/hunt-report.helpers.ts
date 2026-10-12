@@ -47,9 +47,25 @@ export function photoMimeType(name: string): string {
   return Object.keys(PHOTO_EXTENSIONS).find((type) => PHOTO_EXTENSIONS[type] === extension) ?? "image/jpeg";
 }
 
-/** The hunt time used for status, deadline, sorting and the marker: the read/entered time, else the upload time. */
-export function effectiveHuntTime(report: { huntTime?: Date | null; createdAt: Date }): Date {
-  return report.huntTime ?? report.createdAt;
+/** A photo time (`takenAt`) from the phone is trusted within this window around the upload. */
+export const TAKEN_AT_PAST_MS = 24 * 60 * 60 * 1000;
+export const TAKEN_AT_FUTURE_MS = 5 * 60 * 1000;
+
+/** The phone's photo time when it is a valid date close enough to `now`, else undefined (then the upload time is used). */
+export function acceptedTakenAt(takenAt: Date | undefined, now: Date): Date | undefined {
+  if (!takenAt || Number.isNaN(takenAt.getTime())) return undefined;
+  const diff = takenAt.getTime() - now.getTime();
+  return diff > TAKEN_AT_FUTURE_MS || -diff > TAKEN_AT_PAST_MS ? undefined : takenAt;
+}
+
+/** When the photo was taken: the phone's photo time, else the upload time. Reference for OCR's HH:MM. */
+export function referenceTime(report: { takenAt?: Date | null; createdAt: Date }): Date {
+  return report.takenAt ?? report.createdAt;
+}
+
+/** The hunt time used for status, deadline, sorting and the marker: the read/entered time, else the photo time. */
+export function effectiveHuntTime(report: { huntTime?: Date | null; takenAt?: Date | null; createdAt: Date }): Date {
+  return report.huntTime ?? referenceTime(report);
 }
 
 /** Where a field's value came from; values without a source were entered by hand before OCR existed. */

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { effectiveHuntTime, fieldSource, huntReportStatus, needsReview, normalizeHuntCode, photoMimeType, resolvePhotoExtension, submitDeadline, SUBMIT_WINDOW_MS } from "./hunt-report.helpers";
+import { acceptedTakenAt, effectiveHuntTime, fieldSource, referenceTime, huntReportStatus, needsReview, normalizeHuntCode, photoMimeType, resolvePhotoExtension, submitDeadline, SUBMIT_WINDOW_MS } from "./hunt-report.helpers";
 
 const huntTime = new Date("2026-10-17T12:00:00Z");
 
@@ -111,5 +111,27 @@ describe("needsReview", () => {
   });
   test("reports from before OCR (no ocr, no sources) are fine", () => {
     expect(needsReview({ huntCode: "ABCD", huntTime })).toBe(false);
+  });
+});
+
+describe("takenAt", () => {
+  const now = new Date("2026-10-17T14:30:00Z");
+  test("accepted within 24 h back and 5 min ahead", () => {
+    expect(acceptedTakenAt(new Date("2026-10-17T14:00:00Z"), now)).toEqual(new Date("2026-10-17T14:00:00Z"));
+    expect(acceptedTakenAt(new Date("2026-10-17T14:34:00Z"), now)).toEqual(new Date("2026-10-17T14:34:00Z"));
+  });
+  test("ignored when missing, invalid, too old or too far ahead", () => {
+    expect(acceptedTakenAt(undefined, now)).toBeUndefined();
+    expect(acceptedTakenAt(new Date("nope"), now)).toBeUndefined();
+    expect(acceptedTakenAt(new Date("2026-10-16T14:00:00Z"), now)).toBeUndefined();
+    expect(acceptedTakenAt(new Date("2026-10-17T14:40:00Z"), now)).toBeUndefined();
+  });
+  test("effective time: read time, else photo time, else upload time", () => {
+    const createdAt = new Date("2026-10-17T14:30:00Z");
+    const takenAt = new Date("2026-10-17T14:05:00Z");
+    expect(referenceTime({ takenAt, createdAt })).toEqual(takenAt);
+    expect(referenceTime({ takenAt: null, createdAt })).toEqual(createdAt);
+    expect(effectiveHuntTime({ huntTime: null, takenAt, createdAt })).toEqual(takenAt);
+    expect(effectiveHuntTime({ huntTime: new Date("2026-10-17T14:02:00Z"), takenAt, createdAt })).toEqual(new Date("2026-10-17T14:02:00Z"));
   });
 });

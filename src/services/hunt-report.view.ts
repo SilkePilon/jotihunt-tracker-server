@@ -19,7 +19,7 @@ export interface HuntReportView {
   _id: string;
   area: string;
   huntCode: string | null;
-  /** Effective time: the read/entered time, else the upload time */
+  /** Effective time: the read/entered time, else the photo time, else the upload time */
   huntTime: string;
   huntTimeKnown: boolean;
   huntCodeSource: FieldSource | null;
@@ -48,12 +48,12 @@ export interface HuntReportView {
 /** The stored fields the view is built from: a hydrated document, or a lean object selected with VIEW_FIELDS. */
 export type HuntReportViewSource = Pick<
   HuntReportRecord,
-  "_id" | "area" | "huntCode" | "huntTime" | "huntCodeSource" | "huntTimeSource" | "reportedBy" | "reportedByName" | "submittedAt" | "submittedByName" | "site" | "ocr"
+  "_id" | "area" | "huntCode" | "huntTime" | "takenAt" | "huntCodeSource" | "huntTimeSource" | "reportedBy" | "reportedByName" | "submittedAt" | "submittedByName" | "site" | "ocr"
 >;
 
 /** Projection for lean queries feeding toHuntReportView (and compareAge) */
 export const VIEW_FIELDS =
-  "area huntCode huntTime huntCodeSource huntTimeSource reportedBy reportedByName submittedAt submittedByName site createdAt ocr.status ocr.error ocr.codeConfidence ocr.timeConfidence ocr.stickerBox";
+  "area huntCode huntTime takenAt huntCodeSource huntTimeSource reportedBy reportedByName submittedAt submittedByName site createdAt ocr.status ocr.error ocr.codeConfidence ocr.timeConfidence ocr.stickerBox";
 
 /** Upload time (timestamps); a document getter or a lean field */
 export function createdAtOf(report: object): Date {
@@ -62,7 +62,7 @@ export function createdAtOf(report: object): Date {
 
 export function toHuntReportView(report: HuntReportViewSource, now: Date, duplicateOf: DuplicateOf | null = null): HuntReportView {
   const id = report._id.toString();
-  const huntTime = effectiveHuntTime({ huntTime: report.huntTime, createdAt: createdAtOf(report) });
+  const huntTime = effectiveHuntTime({ huntTime: report.huntTime, takenAt: report.takenAt, createdAt: createdAtOf(report) });
   const ocr = report.ocr ?? null;
   return {
     _id: id,

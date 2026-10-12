@@ -6,7 +6,7 @@ import { HuntReport, type HuntReportDocument } from "../models/hunt-report.model
 import { Marker, MarkerType } from "../models/marker.model";
 import type { UserType } from "../models/user.model";
 import { ServiceError } from "../http/service-error";
-import { fieldSource, HUNT_AREAS, normalizeHuntCode, resolvePhotoExtension } from "./hunt-report.helpers";
+import { acceptedTakenAt, effectiveHuntTime, fieldSource, HUNT_AREAS, normalizeHuntCode, resolvePhotoExtension } from "./hunt-report.helpers";
 import { compareAge, createdAtOf, findDuplicateOf, toHuntReportView, VIEW_FIELDS, type HuntReportView, type HuntReportViewSource } from "./hunt-report.view";
 import { deletePhoto, photoFilePath, savePhoto, uploadsDir } from "./photo-store";
 import { isDuplicateKeyError } from "../utils/mongo";
@@ -19,6 +19,8 @@ export interface NewHuntReport {
   huntCode?: string;
   /** Optional: normally read from the photo by OCR */
   huntTime?: Date;
+  /** Photo time from the phone; used until the sticker time is read */
+  takenAt?: Date;
   photo: { buffer: Buffer; mimetype: string };
   /** Optional small list thumbnail made by the phone; ignored when not an allowed type */
   thumb?: { buffer: Buffer; mimetype: string };
@@ -55,14 +57,14 @@ async function saveReport(report: HuntReportDocument) {
 }
 
 /**
- * Move the report's hunt marker to the report's effective time (the read/entered time, else the upload time), as
+ * Move the report's hunt marker to the report's effective time (the read/entered time, else the photo time, else the upload time), as
  * stored now. Re-checks the report afterwards, so the last of concurrent edits always leaves its own time on the marker.
  */
 export async function syncHuntMarkerTime(reportId: mongoose.Types.ObjectId | string): Promise<void> {
   for (let round = 0; round < 5; round++) {
-    const report = await HuntReport.findById(reportId).select("markerId huntTime createdAt").lean();
+    const report = await HuntReport.findById(reportId).select("markerId huntTime takenAt createdAt").lean();
     if (!report?.markerId) return;
-    await Marker.updateOne({ _id: report.markerId }, { $set: { time: toMinute(report.huntTime ?? report.createdAt) } });
+    await Marker.updateOne({ _id: report.markerId }, { $set: { time: toMinute(effectiveHuntTime(report)) } });
     const after = await HuntReport.findById(reportId).select("huntTime").lean();
     if (!after || (after.huntTime?.getTime() ?? null) === (report.huntTime?.getTime() ?? null)) return;
   }
@@ -84,6 +86,7 @@ export async function createHuntReport(input: NewHuntReport, user: UserType): Pr
   if (retried) return retried;
   const huntCode = input.huntCode ? normalizeHuntCode(input.huntCode) || null : null;
   const huntTime = input.huntTime ? toMinute(input.huntTime) : null;
+  const takenAt = acceptedTakenAt(input.takenAt, new Date()) ?? null;
   const extension = resolvePhotoExtension(input.photo.mimetype);
   if (!extension) throw new ServiceError(400, "Foto moet een JPEG, PNG of WebP zijn.");
 
@@ -103,6 +106,7 @@ export async function createHuntReport(input: NewHuntReport, user: UserType): Pr
       area: input.area as (typeof HUNT_AREAS)[number],
       huntCode,
       huntTime,
+      takenAt,
       huntCodeSource: huntCode ? "manual" : undefined,
       huntTimeSource: huntTime ? "manual" : undefined,
       photo,
@@ -115,11 +119,11 @@ export async function createHuntReport(input: NewHuntReport, user: UserType): Pr
       ocr: { status: huntCode && huntTime ? "done" : "pending", attempts: 0 },
     });
     if (markerId && input.location) {
-      // Until the time is read the marker uses the upload time; the OCR queue moves it to the read time
+      // Until the time is read the marker uses the photo time (else the upload time); the OCR queue moves it to the read time
       await Marker.create({
         _id: markerId,
         area: input.area,
-        time: toMinute(huntTime ?? createdAtOf(report)),
+        time: toMinute(huntTime ?? takenAt ?? createdAtOf(report)),
         type: MarkerType.Hunt,
         location: { type: "Point", coordinates: input.location },
       });
@@ -291,7 +295,7 @@ const MISSING_MARKER_AGE_MS = 60 * 1000;
  */
 export async function restoreMissingHuntMarkers(now = Date.now()): Promise<number> {
   const reports = await HuntReport.find({ markerId: { $exists: true }, location: { $exists: true }, createdAt: { $lt: new Date(now - MISSING_MARKER_AGE_MS) } })
-    .select("area markerId location huntTime createdAt")
+    .select("area markerId location huntTime takenAt createdAt")
     .lean();
   if (reports.length === 0) return 0;
   const existing = new Set((await Marker.find({ _id: { $in: reports.map((report) => report.markerId) } }).select("_id").lean()).map((marker) => String(marker._id)));
@@ -301,7 +305,7 @@ export async function restoreMissingHuntMarkers(now = Date.now()): Promise<numbe
     await Marker.create({
       _id: report.markerId,
       area: report.area,
-      time: toMinute(report.huntTime ?? report.createdAt),
+      time: toMinute(effectiveHuntTime(report)),
       type: MarkerType.Hunt,
       location: { type: "Point", coordinates: report.location.coordinates },
     }).catch((error) => {

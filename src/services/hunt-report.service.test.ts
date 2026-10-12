@@ -201,6 +201,25 @@ describe("createHuntReport", () => {
     expect(view.ocrStatus).toBe("pending");
     expect(view.huntTimeSource).toBe("manual");
   });
+
+  test("takenAt is the fallback time of the view and the marker until the sticker is read", async () => {
+    const user = await makeUser("taken");
+    const takenAt = new Date(Date.now() - 20 * 60 * 1000);
+    const view = await createHuntReport(input({ huntCode: undefined, huntTime: undefined, takenAt, location: [5.9, 52.0] }), user);
+    expect(view.huntTimeKnown).toBe(false);
+    expect(new Date(view.huntTime).getTime()).toBe(takenAt.getTime());
+    const stored = await HuntReport.findById(view._id).lean();
+    const marker = await Marker.findById(stored!.markerId).lean();
+    const minute = new Date(takenAt);
+    minute.setSeconds(0, 0);
+    expect(marker!.time.getTime()).toBe(minute.getTime());
+  });
+
+  test("a takenAt outside the window is ignored (upload time is used)", async () => {
+    const user = await makeUser("old");
+    const view = await createHuntReport(input({ huntCode: undefined, huntTime: undefined, takenAt: new Date(Date.now() - 3 * 24 * 3600 * 1000) }), user);
+    expect(Math.abs(new Date(view.huntTime).getTime() - Date.now())).toBeLessThan(60_000);
+  });
 });
 
 describe("existing reports from before OCR", () => {

@@ -97,7 +97,7 @@ export async function runNotifier(options: NotifierOptions = {}): Promise<AppNot
   // Hunt time can lie before the upload, so look back a bit further than the submit window
   const open = await HuntReport.find(
     { submittedAt: null, deadlineWarnedAt: null, createdAt: { $gte: new Date(now.getTime() - 3 * HUNT_SUBMIT_WINDOW_MS) } },
-    { area: 1, huntTime: 1, createdAt: 1, reportedByName: 1, submittedAt: 1, deadlineWarnedAt: 1 },
+    { area: 1, huntTime: 1, takenAt: 1, createdAt: 1, reportedByName: 1, submittedAt: 1, deadlineWarnedAt: 1 },
   ).lean();
   const claimedIds: unknown[] = [];
   for (const report of dueDeadlineWarnings(open, now)) {

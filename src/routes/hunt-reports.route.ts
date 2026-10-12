@@ -23,6 +23,8 @@ router.post(
       // Code and time are read from the photo by OCR; entering them is optional
       body("huntCode").optional({ values: "falsy" }).isString().trim().isLength({ min: 1, max: 64 }).withMessage("Ongeldige huntcode."),
       body("huntTime").optional({ values: "falsy" }).isISO8601().withMessage("Ongeldige tijd."),
+      // Photo time from the phone (an offline-queued hunt is uploaded later); out-of-window values are ignored
+      body("takenAt").optional({ values: "falsy" }).isISO8601().withMessage("Ongeldige fototijd."),
       body("area").isIn(HUNT_AREAS).withMessage("Onbekend deelgebied."),
       body("lng").optional().isFloat({ min: -180, max: 180 }).withMessage("Ongeldige lengtegraad."),
       body("lat").optional().isFloat({ min: -90, max: 90 }).withMessage("Ongeldige breedtegraad."),

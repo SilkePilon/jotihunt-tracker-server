@@ -1,3 +1,5 @@
+import { effectiveHuntTime } from "./hunt-report.helpers";
+
 export const NOTIFICATION_TYPES = ["fox-status", "hint", "article", "hunt-deadline", "broadcast", "counter-hunt"] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 /** Types a user can switch off; broadcasts from HQ always come through. */
@@ -47,6 +49,7 @@ export function newArticles<T extends { id: number }>(articles: T[], lastArticle
 
 interface DeadlineReport {
   huntTime?: Date | null;
+  takenAt?: Date | null;
   createdAt: Date;
   submittedAt?: Date | null;
   deadlineWarnedAt?: Date | null;
@@ -56,7 +59,7 @@ interface DeadlineReport {
 export function dueDeadlineWarnings<T extends DeadlineReport>(reports: T[], now: Date): T[] {
   return reports.filter((report) => {
     if (report.submittedAt || report.deadlineWarnedAt) return false;
-    const age = now.getTime() - (report.huntTime ?? report.createdAt).getTime();
+    const age = now.getTime() - effectiveHuntTime(report).getTime();
     return age >= DEADLINE_WARNING_AFTER_MS && age < HUNT_SUBMIT_WINDOW_MS;
   });
 }
@@ -81,10 +84,10 @@ export function buildArticleNotification(article: { id: number; title: string; t
 }
 
 export function buildDeadlineNotification(
-  report: { _id: unknown; area: string; huntTime?: Date | null; createdAt: Date; reportedByName: string },
+  report: { _id: unknown; area: string; huntTime?: Date | null; takenAt?: Date | null; createdAt: Date; reportedByName: string },
   now: Date,
 ): NotificationInput {
-  const deadline = (report.huntTime ?? report.createdAt).getTime() + HUNT_SUBMIT_WINDOW_MS;
+  const deadline = effectiveHuntTime(report).getTime() + HUNT_SUBMIT_WINDOW_MS;
   const minutes = Math.max(1, Math.ceil((deadline - now.getTime()) / 60000));
   return {
     type: "hunt-deadline",

@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 import { currentGeneration, runTracked } from "../demo/demo-mode";
 import { HuntReport, type HuntReportDocument } from "../models/hunt-report.model";
 import { GeminiError, type StickerReader } from "./gemini.client";
-import { fieldSource, photoMimeType } from "./hunt-report.helpers";
+import { fieldSource, photoMimeType, referenceTime } from "./hunt-report.helpers";
 import { syncHuntMarkerTime } from "./hunt-report.service";
 import { resolveReadTime, type StickerReading } from "./sticker-ocr.helpers";
 
@@ -74,7 +74,7 @@ export function createHuntOcr(deps: HuntOcrDeps): HuntOcr {
     let timeChanged = false;
     if (fieldSource(report.huntTime, report.huntTimeSource) !== "manual") {
       timeChanged = true;
-      report.huntTime = reading.time ? resolveReadTime(reading.time, report.get("createdAt") as Date) : null;
+      report.huntTime = reading.time ? resolveReadTime(reading.time, referenceTime({ takenAt: report.takenAt, createdAt: report.get("createdAt") as Date })) : null;
       report.huntTimeSource = reading.time ? "ocr" : undefined;
     }
     report.set("ocr", {

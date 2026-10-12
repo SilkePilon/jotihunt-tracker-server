@@ -102,3 +102,11 @@ test("isTypeEnabled: broadcast always on", () => {
   expect(isTypeEnabled("hint", ["hint"])).toBe(false);
   expect(isTypeEnabled("hint", [])).toBe(true);
 });
+
+describe("dueDeadlineWarnings with takenAt", () => {
+  test("counts from the photo time when the sticker time is unknown", () => {
+    const now = new Date("2026-10-17T14:30:00Z");
+    const report = { huntTime: null, takenAt: new Date("2026-10-17T14:05:00Z"), createdAt: new Date("2026-10-17T14:25:00Z"), submittedAt: null, deadlineWarnedAt: null };
+    expect(dueDeadlineWarnings([report], now)).toHaveLength(1); // 25 min after the photo, 5 min after the upload
+  });
+});
