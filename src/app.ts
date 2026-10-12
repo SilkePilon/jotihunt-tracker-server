@@ -4,6 +4,7 @@ import cors from "cors";
 import compression from "compression";
 import { logger } from "./logger";
 import { parseTrustProxy } from "./utils/trust-proxy";
+import { clientIpHeader } from "./utils/client-ip-header";
 import { demoGate } from "./demo/database-switch";
 import { errorHandler } from "./middleware/error.middleware";
 import authRoute from "./routes/auth.route";
@@ -28,6 +29,8 @@ import settingsRoute from "./routes/settings.route";
 
 export const app = express();
 if (process.env.TRUST_PROXY) app.set("trust proxy", parseTrustProxy(process.env.TRUST_PROXY));
+// Behind Cloudflare Tunnel + Traefik (k3s) the real client address is only in CF-Connecting-IP (see client-ip-header.ts)
+if (process.env.CLIENT_IP_HEADER?.trim()) app.use(clientIpHeader(process.env.CLIENT_IP_HEADER));
 app.disable("x-powered-by");
 app.use((_req, res, next) => {
   // Browsers must never sniff a served file (e.g. an uploaded photo) into another type

@@ -123,6 +123,7 @@ GROUP_NAME=Jouw Scoutinggroep # Optioneel
 LOGO_URL=https://jouwscoutinggroep.nl/logo.png # Optioneel
 TEAMS_AREA_EDITING=false # Sta toe dat gebruikers de teams-gebieden kunnen aanpassen in de client
 TRUST_PROXY= # Optioneel, zet bijvoorbeeld op 1 achter een reverse proxy, zodat de limieten per IP-adres (inloggen en app koppelen) het echte clientadres zien
+CLIENT_IP_HEADER= # Optioneel, achter Cloudflare Tunnel + Traefik: cf-connecting-ip (samen met TRUST_PROXY=1); alleen zetten als alle verzoeken via die proxy binnenkomen
 ```
 3. Start de applicatie met:
 ```bash
