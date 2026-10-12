@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import {parseArgs} from "util";
 import {hashPassword, User} from "../models/user.model";
-import {PASSWORD_MIN_LENGTH, PASSWORD_TOO_SHORT} from "../utils/password-policy";
+import {PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, PASSWORD_TOO_SHORT} from "../utils/password-policy";
 
 async function createUser(email: string, password: string, name: string, admin: boolean = false) {
     try {
@@ -57,6 +57,10 @@ if (!values.email || !values.password || !values.name) {
 
 if (values.password.length < PASSWORD_MIN_LENGTH) {
     console.error(PASSWORD_TOO_SHORT);
+    process.exit(1);
+}
+if (values.password.length > PASSWORD_MAX_LENGTH) {
+    console.error(`Password may be at most ${PASSWORD_MAX_LENGTH} characters`);
     process.exit(1);
 }
 
