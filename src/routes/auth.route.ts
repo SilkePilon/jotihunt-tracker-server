@@ -5,6 +5,7 @@ import { body } from "express-validator";
 import verifyToken, { verifyTokenAllowingPasswordChange } from "../middleware/auth.middleware";
 import { validate } from "../middleware/validate.middleware";
 import { limitFailures } from "../middleware/rate-limit";
+import { newPasswordRules } from "../utils/password-policy";
 
 // Validators
 const loginValidator = [
@@ -15,6 +16,7 @@ const loginValidator = [
 const updatePasswordValidator = [
   body("oldPassword").notEmpty().withMessage("Oude wachtwoord mag niet leeg zijn."),
   body("newPassword").notEmpty().withMessage("Nieuw wachtwoord mag niet leeg zijn."),
+  newPasswordRules(body("newPassword")),
   body("confirmPassword").notEmpty().withMessage("Nieuw wachtwoord bevestiging mag niet leeg zijn."),
   body("newPassword")
     .custom((value, { req }) => value === req.body.confirmPassword)

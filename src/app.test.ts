@@ -106,7 +106,7 @@ describe("passwords", () => {
     const res = await request("/auth/update-password", {
       method: "POST",
       token: current,
-      json: { oldPassword: "oud", newPassword: "nieuw", confirmPassword: "nieuw" },
+      json: { oldPassword: "oud", newPassword: "nieuw-wachtwoord", confirmPassword: "nieuw-wachtwoord" },
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { accessToken: string };
@@ -118,9 +118,9 @@ describe("passwords", () => {
 
     const stored = await User.findById(user._id);
     expect(stored!.password).toStartWith("$argon2id$v=19$m=19456,t=2,");
-    expect(await Bun.password.verify("nieuw", stored!.password)).toBe(true);
+    expect(await Bun.password.verify("nieuw-wachtwoord", stored!.password)).toBe(true);
     // A login right after the change (same second) gets a working token too
-    const login = await request("/auth/login", { method: "POST", json: { email: user.email, password: "nieuw" } });
+    const login = await request("/auth/login", { method: "POST", json: { email: user.email, password: "nieuw-wachtwoord" } });
     const { accessToken } = (await login.json()) as { accessToken: string };
     expect((await request("/markers", { token: accessToken })).status).toBe(200);
   });
@@ -143,7 +143,7 @@ describe("passwords", () => {
     const admin = await createUser({ admin: true });
     const user = await createUser();
     const userToken = tokenFor(user, nowSeconds() - 60);
-    const res = await request(`/admin/users/${user._id}`, { method: "PUT", token: tokenFor(admin), json: { password: "reset" } });
+    const res = await request(`/admin/users/${user._id}`, { method: "PUT", token: tokenFor(admin), json: { password: "reset-wachtwoord" } });
     expect(res.status).toBe(200);
     expect((await request("/markers", { token: userToken })).status).toBe(401);
     const stored = await User.findById(user._id);
@@ -154,8 +154,66 @@ describe("passwords", () => {
   test("an admin resetting their own password keeps their session", async () => {
     const admin = await createUser({ admin: true });
     const token = tokenFor(admin, nowSeconds() - 60);
-    expect((await request(`/admin/users/${admin._id}`, { method: "PUT", token, json: { password: "reset" } })).status).toBe(200);
+    expect((await request(`/admin/users/${admin._id}`, { method: "PUT", token, json: { password: "reset-wachtwoord" } })).status).toBe(200);
     expect((await request("/markers", { token })).status).toBe(200);
+  });
+});
+
+describe("minimum password length (8) on set and change, not on login", () => {
+  const TOO_SHORT = "Wachtwoord moet minstens 8 tekens zijn.";
+  const messages = async (res: Response) => JSON.stringify(await res.json());
+
+  test("update-password: 7 characters is a 400 and keeps the old password, 8 is fine", async () => {
+    const user = await createUser({ password: "oud-wachtwoord" });
+    const short = await request("/auth/update-password", {
+      method: "POST",
+      token: tokenFor(user),
+      json: { oldPassword: "oud-wachtwoord", newPassword: "1234567", confirmPassword: "1234567" },
+    });
+    expect(short.status).toBe(400);
+    expect(await messages(short)).toContain(TOO_SHORT);
+    expect(await Bun.password.verify("oud-wachtwoord", (await User.findById(user._id))!.password)).toBe(true);
+
+    const ok = await request("/auth/update-password", {
+      method: "POST",
+      token: tokenFor(user),
+      json: { oldPassword: "oud-wachtwoord", newPassword: "12345678", confirmPassword: "12345678" },
+    });
+    expect(ok.status).toBe(200);
+  });
+
+  test("admin create: 7 characters is a 400, 8 is a 201", async () => {
+    const admin = await createUser({ admin: true });
+    const short = await request("/admin/users", { method: "POST", token: tokenFor(admin), json: { name: "Kort", email: "kort@test.nl", password: "1234567" } });
+    expect(short.status).toBe(400);
+    expect(await messages(short)).toContain(TOO_SHORT);
+    expect(await User.exists({ email: "kort@test.nl" })).toBeNull();
+    const ok = await request("/admin/users", { method: "POST", token: tokenFor(admin), json: { name: "Lang", email: "lang@test.nl", password: "12345678" } });
+    expect(ok.status).toBe(201);
+  });
+
+  test("admin update: 7 characters is a 400, 8 is fine, empty or missing leaves the password alone", async () => {
+    const admin = await createUser({ admin: true });
+    const user = await createUser({ password: "bestaand-wachtwoord" });
+    const put = (json: object) => request(`/admin/users/${user._id}`, { method: "PUT", token: tokenFor(admin), json });
+
+    const short = await put({ password: "1234567" });
+    expect(short.status).toBe(400);
+    expect(await messages(short)).toContain(TOO_SHORT);
+    expect((await put({ name: "Andere naam", password: "" })).status).toBe(200);
+    expect((await put({ name: "Nog een naam" })).status).toBe(200);
+    const stored = await User.findById(user._id);
+    expect(await Bun.password.verify("bestaand-wachtwoord", stored!.password)).toBe(true);
+    expect(stored!.requiresPasswordChange).toBe(false);
+
+    expect((await put({ password: "12345678" })).status).toBe(200);
+    expect(await Bun.password.verify("12345678", (await User.findById(user._id))!.password)).toBe(true);
+  });
+
+  test("an existing short password still logs in (no lock-out)", async () => {
+    const user = await createUser({ password: "kort" });
+    const res = await request("/auth/login", { method: "POST", json: { email: user.email, password: "kort" } });
+    expect(res.status).toBe(200);
   });
 });
 
@@ -207,7 +265,7 @@ describe("required password change", () => {
     const res = await request("/auth/update-password", {
       method: "POST",
       token,
-      json: { oldPassword: "tijdelijk", newPassword: "eigen", confirmPassword: "eigen" },
+      json: { oldPassword: "tijdelijk", newPassword: "eigen-wachtwoord", confirmPassword: "eigen-wachtwoord" },
     });
     expect(res.status).toBe(200);
     const { accessToken } = (await res.json()) as { accessToken: string };
@@ -220,7 +278,7 @@ describe("required password change", () => {
     const res = await request("/auth/update-password", {
       method: "POST",
       token: tokenFor(user),
-      json: { oldPassword: "fout", newPassword: "eigen", confirmPassword: "eigen" },
+      json: { oldPassword: "fout", newPassword: "eigen-wachtwoord", confirmPassword: "eigen-wachtwoord" },
     });
     expect(res.status).toBe(400);
     expect((await User.findById(user._id))!.requiresPasswordChange).toBe(true);
@@ -243,7 +301,7 @@ describe("required password change", () => {
   test("an admin resetting their own password chose it themselves: no forced change", async () => {
     const admin = await createUser({ admin: true });
     const token = tokenFor(admin, nowSeconds() - 60);
-    expect((await request(`/admin/users/${admin._id}`, { method: "PUT", token, json: { password: "reset" } })).status).toBe(200);
+    expect((await request(`/admin/users/${admin._id}`, { method: "PUT", token, json: { password: "reset-wachtwoord" } })).status).toBe(200);
     expect((await User.findById(admin._id))!.requiresPasswordChange).toBe(false);
     expect((await request("/markers", { token })).status).toBe(200);
   });
@@ -287,7 +345,7 @@ describe("admin user management", () => {
   test("a duplicate e-mail that slips past the validator is a 400, not a 500", async () => {
     const admin = await createUser({ admin: true });
     const results = await Promise.all(
-      [1, 2, 3, 4].map(() => request("/admin/users", { method: "POST", token: tokenFor(admin), json: { name: "N", email: "dubbel@test.nl", password: "x" } })),
+      [1, 2, 3, 4].map(() => request("/admin/users", { method: "POST", token: tokenFor(admin), json: { name: "N", email: "dubbel@test.nl", password: "tijdelijk" } })),
     );
     const statuses = results.map((res) => res.status).sort();
     expect(statuses[0]).toBe(201);

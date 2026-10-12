@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import {parseArgs} from "util";
 import {hashPassword, User} from "../models/user.model";
+import {PASSWORD_MIN_LENGTH, PASSWORD_TOO_SHORT} from "../utils/password-policy";
 
 async function createUser(email: string, password: string, name: string, admin: boolean = false) {
     try {
@@ -51,6 +52,11 @@ const {values} = parseArgs({
 
 if (!values.email || !values.password || !values.name) {
     console.error("Email, password and name are required (use flags --email, --password and --name)");
+    process.exit(1);
+}
+
+if (values.password.length < PASSWORD_MIN_LENGTH) {
+    console.error(PASSWORD_TOO_SHORT);
     process.exit(1);
 }
 

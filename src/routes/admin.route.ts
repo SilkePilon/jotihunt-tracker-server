@@ -8,6 +8,7 @@ import verifyToken, { isAdmin } from "../middleware/auth.middleware";
 import { body, param } from "express-validator";
 import { User } from "../models/user.model";
 import { validate } from "../middleware/validate.middleware";
+import { newPasswordRules } from "../utils/password-policy";
 
 // Validations
 const userExists = (value: string) =>
@@ -30,6 +31,7 @@ const createValidator = [
       if (await User.exists({ email: value })) throw new Error("E-mailadres is al in gebruik.");
     }),
   body("password").isString().notEmpty().withMessage("Wachtwoord mag niet leeg zijn."),
+  newPasswordRules(body("password")),
   body("admin").optional().isBoolean().withMessage("Admin mag alleen true/false zijn.").toBoolean(),
 ];
 
@@ -49,7 +51,8 @@ const updateValidator = [
       const user = await User.findOne({ email: value }, { _id: 1 }).lean();
       if (user && user._id.toString() !== req.params?.id) throw new Error("E-mailadres is al in gebruik.");
     }),
-  body("password").optional().isString(),
+  // Empty or missing: the password stays as it is (the edit dialog sends no password unless one is typed)
+  newPasswordRules(body("password").optional({ values: "falsy" })),
   body("admin").optional().isBoolean().withMessage("Admin mag alleen true/false zijn.").toBoolean(),
 ];
 
