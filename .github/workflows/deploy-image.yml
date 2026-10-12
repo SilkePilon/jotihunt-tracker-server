@@ -2,6 +2,8 @@
 name: Create and publish a Docker image
 
 on:
+    # Manual (re)build of the current branch
+    workflow_dispatch:
     release:
         types: [published]
     # main and version tags only, so feature branches don't publish images
