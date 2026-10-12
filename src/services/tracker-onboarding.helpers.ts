@@ -92,6 +92,11 @@ export function vehicleForGroupId(groupId: number | null | undefined, groups: Ve
   return VEHICLES.find((vehicle) => groups[vehicle] === groupId);
 }
 
+/** A device for GET /tracker/devices with the vehicle of its Traccar group (null when the group is no vehicle group), so apps need no group ids. */
+export function withVehicle<T extends { groupId?: number | null }>(device: T, groups: VehicleGroups): T & { vehicle: Vehicle | null } {
+  return { ...device, vehicle: vehicleForGroupId(device.groupId, groups) ?? null };
+}
+
 export function isConnected(lastUpdate: string | Date | null | undefined, now: Date): boolean {
   if (!lastUpdate) return false;
   const time = new Date(lastUpdate).getTime();

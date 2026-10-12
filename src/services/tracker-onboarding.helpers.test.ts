@@ -10,6 +10,7 @@ import {
   startOfDay,
   vehicleForGroupId,
   vehicleGroupsFromEnv,
+  withVehicle,
 } from "./tracker-onboarding.helpers";
 
 const SETTINGS = "accuracy=highest&distance=5&interval=5&heartbeat=30&buffer=true&wakelock=true&stop_detection=true";
@@ -100,5 +101,16 @@ describe("mapStats", () => {
   test("omits missing and invalid fields", () => {
     expect(mapStats({ lastUpdate: null, speed: null, batteryLevel: "80", accuracy: 0 })).toEqual({});
     expect(mapStats({})).toEqual({});
+  });
+});
+
+describe("withVehicle", () => {
+  const groups = { walking: 4, bike: 5, car: 6, motorcycle: undefined };
+  test("adds the vehicle of the device's group", () => {
+    expect(withVehicle({ id: 1, groupId: 5, name: "a" }, groups)).toEqual({ id: 1, groupId: 5, name: "a", vehicle: "bike" });
+  });
+  test("null when the group is not a vehicle group or missing", () => {
+    expect(withVehicle({ id: 2, groupId: 99 }, groups).vehicle).toBeNull();
+    expect(withVehicle({ id: 3, groupId: 0 }, groups).vehicle).toBeNull();
   });
 });

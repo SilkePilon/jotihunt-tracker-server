@@ -2,7 +2,7 @@ import * as traccarService from "../services/traccar.service";
 import { Request, Response } from "express";
 import { logger } from "../logger";
 import { describeTraccarError } from "../services/traccar-http";
-import { type Vehicle } from "../services/tracker-onboarding.helpers";
+import { type Vehicle, withVehicle } from "../services/tracker-onboarding.helpers";
 import { onboarding, vehicleGroups } from "../services/tracker-onboarding.instance";
 import { isDemoMode } from "../demo/demo-mode";
 import { setSimulatedVehicle, simulatedDevices, simulatedPositions } from "../demo/simulated-trackers";
@@ -18,13 +18,13 @@ function traccarFailed(res: Response) {
 
 async function getDevices(_req: Request, res: Response) {
   // Demo mode: the simulated hunters instead of Traccar (positions follow the clock)
-  if (isDemoMode()) return res.json(simulatedDevices(new Date(), vehicleGroups));
+  if (isDemoMode()) return res.json(simulatedDevices(new Date(), vehicleGroups).map((device) => withVehicle(device, vehicleGroups)));
   if (!traccarService.isTraccarConfigured) return traccarUnavailable(res);
   try {
     const [devices, groups] = await Promise.all([traccarService.getDevices(), traccarService.getGroups()]);
     const groupNames = new Map(groups.map((group) => [group.id, group.name]));
     // New objects: the device list is shared between requests for a moment
-    res.json(devices.map((device) => ({ ...device, groupName: groupNames.get(device.groupId) })));
+    res.json(devices.map((device) => withVehicle({ ...device, groupName: groupNames.get(device.groupId) }, vehicleGroups)));
   } catch {
     traccarFailed(res);
   }
