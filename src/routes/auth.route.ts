@@ -1,10 +1,11 @@
 import express from "express";
 import * as authController from "../controllers/auth.controller";
 import * as pairingController from "../controllers/pairing.controller";
+import * as loginController from "../auth/login.controller";
 import { body } from "express-validator";
 import verifyToken from "../middleware/auth.middleware";
 import { validate } from "../middleware/validate.middleware";
-import { limitFailures } from "../middleware/rate-limit";
+import { limitFailures, limitRate } from "../middleware/rate-limit";
 
 // Validators
 const tutorialValidator = [
@@ -25,7 +26,28 @@ const pairLimiter = limitFailures({
   key: (req) => String(req.ip),
 });
 
+// Brute force on verify: 30 failures per address per 15 minutes (each attempt needs a fresh challenge anyway)
+const passkeyLimiter = limitFailures({
+  windowMs: 15 * 60 * 1000,
+  maxFailures: 30,
+  failureStatus: 401,
+  resetOnSuccess: false,
+  key: (req) => String(req.ip),
+});
+const optionsLimiter = limitRate({ windowMs: 15 * 60 * 1000, max: 200, key: (req) => String(req.ip) });
+
 const router = express.Router();
+
+// Web: passkey login, the logged-in user and logout
+router.post("/passkey/login/options", optionsLimiter, loginController.loginOptions);
+router.post(
+  "/passkey/login/verify",
+  passkeyLimiter,
+  validate([body("challengeId").isString().withMessage("challengeId ontbreekt."), body("response").isObject().withMessage("response ontbreekt.")]),
+  loginController.loginVerify,
+);
+router.get("/me", verifyToken, loginController.me);
+router.post("/logout", verifyToken, loginController.logout);
 
 router.post("/tutorial", [verifyToken, validate(tutorialValidator)], authController.updateTutorial);
 
