@@ -361,7 +361,10 @@ export class Life360Service {
       if (generation !== this.generation) return;
       if (!result.notModified) {
         const parsed = parseMembers(result.members);
-        this.memberList = parsed.map((entry) => entry.member);
+        // Life360 sometimes answers location null for minutes while a member still shares: keep their last known fix
+        // (the client greys it out once it is old). Not sharing, or gone from the circle: no carry-over.
+        const previous = new Map(this.memberList.map((member) => [member.id, member.location]));
+        this.memberList = parsed.map(({ member, sharing }) => (member.location || !sharing ? member : { ...member, location: previous.get(member.id) ?? null }));
         this.avatarSources = new Map(parsed.flatMap((entry) => (entry.avatarSource ? [[entry.member.id, entry.avatarSource] as const] : [])));
         for (const id of [...this.avatarCache.keys()]) if (!this.avatarSources.has(id)) this.avatarCache.delete(id);
         for (const id of [...this.avatarFailures.keys()]) if (!this.avatarSources.has(id)) this.avatarFailures.delete(id);

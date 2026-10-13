@@ -53,6 +53,8 @@ export interface Life360Members {
 export interface ParsedLife360Member {
   member: Life360Member;
   avatarSource: string | null;
+  /** false only when Life360 says shareLocation is off; a sharing member may still come without a location */
+  sharing: boolean;
 }
 
 // --- Units ----------------------------------------------------------------------------------------------------------
@@ -106,9 +108,13 @@ export function memberName(firstName: unknown, lastName: unknown): { name: strin
   return name ? { name, initials } : { name: "Onbekend", initials: "?" };
 }
 
-function parseLocation(raw: Raw): Life360Location | null {
+function isSharing(raw: Raw): boolean {
   const shareLocation = record(raw.features)?.shareLocation;
-  if (shareLocation === "0" || shareLocation === 0 || shareLocation === false) return null;
+  return !(shareLocation === "0" || shareLocation === 0 || shareLocation === false);
+}
+
+function parseLocation(raw: Raw): Life360Location | null {
+  if (!isSharing(raw)) return null;
   const location = record(raw.location);
   if (!location) return null;
   const lat = number(location.latitude);
@@ -145,6 +151,7 @@ function parseMember(value: unknown): ParsedLife360Member | null {
       location: parseLocation(raw),
     },
     avatarSource,
+    sharing: isSharing(raw),
   };
 }
 

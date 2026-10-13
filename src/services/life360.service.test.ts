@@ -206,6 +206,33 @@ describe("polling", () => {
     expect(client.memberRequests[2].etag).toBeUndefined();
   });
 
+  test("location null while still sharing: the last known location stays; not sharing or gone from the circle: dropped", async () => {
+    await link();
+    client.memberAnswers = [
+      membersAnswer(rawMember("m1", "Silke", "Pilon"), rawMember("m2", "Anna", "B"), rawMember("m3", "Bram", "C")),
+      { notModified: false, etag: "etag-2", members: [rawMember("m1", "Silke", "Pilon", { location: null }), rawMember("m2", "Anna", "B", { location: null, shareLocation: "0" })] },
+      { notModified: false, etag: "etag-3", members: [rawMember("m1", "Silke", "Pilon", { location: null }), rawMember("m3", "Bram", "C", { location: null })] },
+    ];
+    await service.pollOnce();
+    const first = service.members().members[0].location;
+    expect(first).not.toBeNull();
+
+    advance(30_000);
+    await service.pollOnce();
+    expect(service.members().members.map((member) => [member.id, member.location])).toEqual([
+      ["m1", first],
+      ["m2", null],
+    ]);
+
+    // m1 keeps the carried-over fix again; m3 came back without a fix after being gone: nothing to carry over
+    advance(30_000);
+    await service.pollOnce();
+    expect(service.members().members.map((member) => [member.id, member.location])).toEqual([
+      ["m1", first],
+      ["m3", null],
+    ]);
+  });
+
   test("401: logged out, polling stops, the last members stay (stale); logging in again resumes", async () => {
     await link();
     client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon")), new Life360UnauthorizedError()];

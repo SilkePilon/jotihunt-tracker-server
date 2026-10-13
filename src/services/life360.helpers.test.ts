@@ -14,6 +14,7 @@ describe("parseMembers", () => {
           location: { lat: 52.0907, lon: 5.1214, accuracyM: 15, at: FIX_ISO, driving: true, speedKmh: 48, battery: 84, charging: true },
         },
         avatarSource: "https://www.life360.com/img/user_images/m1.jpg",
+        sharing: true,
       },
     ]);
   });
@@ -28,6 +29,7 @@ describe("parseMembers", () => {
     expect(notSharing.member.location).toBeNull();
     expect(noLocation.member.location).toBeNull();
     expect(notSharing.member.name).toBe("Anna B.");
+    expect([notSharing.sharing, noLocation.sharing]).toEqual([false, true]);
   });
 
   test("unknown values: battery -1 and negative speed are null, missing accuracy is 0, timestamps in ms are accepted", () => {
