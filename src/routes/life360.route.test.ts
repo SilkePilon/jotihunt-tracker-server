@@ -179,4 +179,11 @@ describe("/life360", () => {
     expect((await request("/life360/avatar/m2", { token: user })).status).toBe(404);
     expect((await request("/life360/avatar/nobody", { token: user })).status).toBe(404);
   });
+
+  test("an avatar memberId over 100 characters: 400", async () => {
+    const user = tokenOf(await createUser());
+    expect((await request(`/life360/avatar/${"a".repeat(100)}`, { token: user })).status).toBe(404);
+    expect((await request(`/life360/avatar/${"a".repeat(101)}`, { token: user })).status).toBe(400);
+    expect(client.avatarCalls).toBe(0);
+  });
 });

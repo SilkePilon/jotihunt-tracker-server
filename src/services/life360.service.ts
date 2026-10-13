@@ -40,6 +40,8 @@ export const POLL_INTERVAL_MS = 30_000;
 export const RESEND_MS = 60_000;
 /** After Life360 refused a send with 429/403: wait at least this long */
 const SEND_BLOCK_MIN_MS = 2 * 60_000;
+/** A pending login (waiting for the code) is dropped this long after the code was sent */
+export const PENDING_CODE_MS = 10 * 60_000;
 export const REFRESH_COOLDOWN_MS = 60_000;
 /** 429 while polling: pause at least this long, longer when Retry-After says so */
 export const PAUSE_MIN_MS = 5 * 60_000;
@@ -68,6 +70,8 @@ interface PendingCode {
   transactionId: string;
   deviceId: string;
   resendAt: Date;
+  /** The login is dropped after this (PENDING_CODE_MS after the code was sent) */
+  expiresAt: Date;
 }
 
 interface ChoosingCircle {
@@ -172,7 +176,8 @@ export class Life360Service {
 
   status(): Life360AdminStatus {
     if (!this.options.config) return { state: "unavailable" };
-    if (this.pending) return { state: "code", email: this.pending.email, resendAt: this.pending.resendAt.toISOString() };
+    const pending = this.currentPending();
+    if (pending) return { state: "code", email: pending.email, resendAt: pending.resendAt.toISOString() };
     if (this.choosing) return { state: "circle", email: this.choosing.email, circles: this.choosing.circles.map(({ id, name }) => ({ id, name })) };
     const link = this.link;
     if (!link) return { state: "unlinked" };
@@ -214,7 +219,7 @@ export class Life360Service {
       }
       this.nextSendAt = new Date(now.getTime() + RESEND_MS);
       this.choosing = null;
-      this.pending = { email, transactionId, deviceId, resendAt: this.nextSendAt };
+      this.pending = { email, transactionId, deviceId, resendAt: this.nextSendAt, expiresAt: new Date(now.getTime() + PENDING_CODE_MS) };
       this.options.logger.info("Life360 login code sent");
       return this.status();
     });
@@ -224,7 +229,7 @@ export class Life360Service {
   async verifyCode(code: string, linkedBy: string | null): Promise<Life360AdminStatus> {
     this.requireConfig();
     return this.exclusive(async () => {
-      const pending = this.pending;
+      const pending = this.currentPending();
       if (!pending) throw new ServiceError(409, "Er wacht geen code, vraag eerst een code aan.");
       let token: string;
       try {
@@ -233,7 +238,7 @@ export class Life360Service {
         if (error instanceof Life360CodeInvalidError) throw new ServiceError(400, "Code klopt niet of is verlopen.");
         throw this.loginFailure(error, "code check");
       }
-      if (this.pending !== pending) throw new ServiceError(409, "Het koppelen is afgebroken.");
+      // No re-check of this.pending: every step that changes it (send, unlink, …) runs under the same lock
       this.pending = null;
       return this.acceptToken(token, pending.email, pending.deviceId, linkedBy);
     });
@@ -280,15 +285,16 @@ export class Life360Service {
   async unlink(): Promise<Life360AdminStatus> {
     this.requireConfig();
     return this.exclusive(async () => {
-      if (this.pending || this.choosing) {
+      if (this.currentPending() || this.choosing) {
         this.pending = null;
         this.choosing = null;
         this.options.logger.info("Life360 login cancelled");
         return this.status();
       }
+      // Delete first: when it throws, the link and its polling stay as they were
+      await this.links.deleteOne({ key: LIFE360_LINK_KEY });
       this.generation++;
       this.clearTimer();
-      await this.links.deleteOne({ key: LIFE360_LINK_KEY });
       this.link = null;
       this.phase = "linked";
       this.retryAt = null;
@@ -372,6 +378,15 @@ export class Life360Service {
 
   private now(): Date {
     return this.options.now?.() ?? new Date();
+  }
+
+  /** The pending login, dropped once expired */
+  private currentPending(): PendingCode | null {
+    if (this.pending && this.now() >= this.pending.expiresAt) {
+      this.pending = null;
+      this.options.logger.info("Life360 login code expired");
+    }
+    return this.pending;
   }
 
   private requireConfig(): Life360Config {

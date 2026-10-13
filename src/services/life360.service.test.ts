@@ -163,6 +163,26 @@ describe("linking", () => {
   });
 });
 
+describe("pending code expiry", () => {
+  test("a pending login expires 10 minutes after the code was sent", async () => {
+    await service.sendCode(EMAIL);
+    advance(10 * 60_000 - 1);
+    expect(service.status().state).toBe("code");
+    advance(1);
+    expect(service.status()).toEqual({ state: "unlinked" });
+    await expect(service.verifyCode("123456", "Admin")).rejects.toMatchObject({ status: 409 });
+    expect(client.calls.some((call) => call.startsWith("verify"))).toBe(false);
+  });
+
+  test("an expired re-login of a linked account falls back to the existing link", async () => {
+    await link();
+    advance(60_000);
+    await service.sendCode("ander@example.nl");
+    advance(10 * 60_000);
+    expect(service.status()).toMatchObject({ state: "linked", email: EMAIL });
+  });
+});
+
 describe("polling", () => {
   test("one members call, parsed members, etag, a full call every 5 minutes", async () => {
     await link();
@@ -320,6 +340,24 @@ describe("restart and unlink", () => {
     expect(await life360LinkModel(realDb).countDocuments()).toBe(1);
     expect(await service.unlink()).toEqual({ state: "unlinked" });
     expect(await life360LinkModel(realDb).countDocuments()).toBe(0);
+  });
+
+  test("unlink whose database delete fails: still linked and still polling", async () => {
+    await link();
+    const links = (service as unknown as { links: { deleteOne: () => Promise<unknown> } }).links;
+    const original = links.deleteOne;
+    links.deleteOne = async () => {
+      throw new Error("database down");
+    };
+    try {
+      await expect(service.unlink()).rejects.toThrow("database down");
+    } finally {
+      links.deleteOne = original;
+    }
+    expect(service.status().state).toBe("linked");
+    expect(service.nextPollAt).not.toBeNull();
+    await service.pollOnce();
+    expect(client.memberRequests).toHaveLength(1);
   });
 
   test("a poll that was running during unlink is dropped", async () => {
