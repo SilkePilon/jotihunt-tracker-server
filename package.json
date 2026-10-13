@@ -17,6 +17,7 @@
   "dependencies": {
     "@ai-sdk/google": "^4.0.87",
     "@mtcute/bun": "^0.32.4",
+    "@simplewebauthn/server": "^13",
     "@turf/bearing": "^7.4.0",
     "@turf/distance": "^7.4.0",
     "ai": "^7.0.127",
