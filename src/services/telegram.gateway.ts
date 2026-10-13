@@ -30,6 +30,8 @@ const usernameOf = (message: Message) => {
   return "username" in sender ? (sender.username ?? undefined) : undefined;
 };
 
+const toIncoming = (message: Message): TelegramIncomingMessage => ({ id: message.id, senderUsername: usernameOf(message), text: message.text ?? "", date: message.date });
+
 /**
  * TelegramGateway on mtcute: an in-memory storage (the session lives encrypted in Mongo, see telegram.service.ts),
  * QR login with signInQr, and new messages from the updates loop. One client per gateway; `cancel()` destroys it.
@@ -45,8 +47,10 @@ export class MtcuteTelegramGateway implements TelegramGateway {
   /** Settles the running submitPassword call: resolved when logged in, rejected on a wrong password */
   private passwordResult: Deferred<void> | null = null;
   private login: Promise<unknown> | null = null;
+  private readonly botUsername: string;
 
   constructor(config: TelegramConfig) {
+    this.botUsername = config.botUsername;
     this.client = new TelegramClient({
       apiId: config.apiId,
       apiHash: config.apiHash,
@@ -55,8 +59,7 @@ export class MtcuteTelegramGateway implements TelegramGateway {
       initConnectionOptions: { deviceModel: "Jotihunt tracker", appVersion: "1.0" },
     });
     this.client.onNewMessage.add((message) => {
-      if (message.isOutgoing) return;
-      this.messageCallback?.({ id: message.id, senderUsername: usernameOf(message), text: message.text ?? "", date: message.date });
+      if (!message.isOutgoing) this.messageCallback?.(toIncoming(message));
     });
   }
 
@@ -130,6 +133,12 @@ export class MtcuteTelegramGateway implements TelegramGateway {
 
   onMessage(callback: (message: TelegramIncomingMessage) => void) {
     this.messageCallback = callback;
+  }
+
+  /** The private chat with the bot, newest first (resolves the username once, then mtcute caches the peer). */
+  async recentBotMessages(limit: number): Promise<TelegramIncomingMessage[]> {
+    const history = await this.client.getHistory(this.botUsername, { limit });
+    return history.filter((message) => !message.isOutgoing).map(toIncoming);
   }
 
   onRevoked(callback: () => void) {

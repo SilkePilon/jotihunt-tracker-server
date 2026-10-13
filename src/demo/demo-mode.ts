@@ -92,6 +92,32 @@ export async function runTracked<T>(fn: () => Promise<T>, options: { generation?
   }
 }
 
+/**
+ * runTracked for work that must not be lost (e.g. an alert from a Telegram message): while a switch is in progress it
+ * waits and tries again, up to `attempts` times. `fn` gets the generation it runs in (pass it to follow-up work such as
+ * a push). Resolves `{ value, generation }`, or undefined when it never ran.
+ */
+export async function runTrackedRetrying<T>(
+  fn: (generation: number) => Promise<T>,
+  options: { attempts?: number; waitMs?: number } = {},
+): Promise<{ value: T; generation: number } | undefined> {
+  const attempts = options.attempts ?? 30;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const captured = generation;
+    let ran = false;
+    const value = await runTracked(
+      async () => {
+        ran = true;
+        return fn(captured);
+      },
+      { generation: captured },
+    );
+    if (ran) return { value: value as T, generation: captured };
+    await new Promise<void>((resolve) => setTimeout(resolve, options.waitMs ?? 1_000).unref?.());
+  }
+  return undefined;
+}
+
 /** @internal Used by database-switch.ts only. */
 export function setDemoSwitchInProgress(inProgress: boolean) {
   switchInProgress = inProgress;

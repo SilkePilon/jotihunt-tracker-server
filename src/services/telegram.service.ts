@@ -3,11 +3,12 @@ import { ServiceError } from "../http/service-error";
 import { AppNotification } from "../models/notification.model";
 import { TELEGRAM_LINK_KEY, telegramLinkModel, type TelegramLinkDoc } from "../models/telegram-link.model";
 import { telegramMessageModel, type TelegramMessageDoc } from "../models/telegram-message.model";
-import { currentGeneration, runTracked } from "../demo/demo-mode";
+import { runTracked, runTrackedRetrying } from "../demo/demo-mode";
 import { sendToAll } from "./push.service";
 import {
   buildTelegramCounterHuntNotification,
   classifyBotMessage,
+  COUNTER_HUNT_WINDOW_MS,
   decodeSessionKey,
   decryptSession,
   encryptSession,
@@ -50,6 +51,8 @@ export interface TelegramGateway {
   /** Connect with a stored session and start receiving messages; throws SessionRevokedError when it is no longer valid. */
   connect(session: string): Promise<void>;
   onMessage(callback: (message: TelegramIncomingMessage) => void): void;
+  /** The latest messages of the chat with the bot (catch-up after a restart; may include other senders). */
+  recentBotMessages(limit: number): Promise<TelegramIncomingMessage[]>;
   /** Called when a running session is revoked (logged out from another device). */
   onRevoked(callback: () => void): void;
   /** Log the session out at Telegram. */
@@ -163,11 +166,16 @@ export interface TelegramServiceOptions {
   pendingTimeoutMs?: number;
   /** Wait between tries when a tegenhunt alert is skipped by a running demo switch */
   alertRetryMs?: number;
+  /** Receives the happy-hour messages (happy-hour.service.ts) */
+  happyHour?: { handleMessage(message: { telegramId: number; text: string; date: Date }): Promise<void> };
+  /** Tests only */
+  now?: () => Date;
 }
 
 const MESSAGES_LIMIT = 50;
 const MESSAGES_MAX = 200;
-const ALERT_ATTEMPTS = 30;
+/** Messages read from the bot chat after every connect, to catch up on what came in while the server was down */
+const CATCH_UP_LIMIT = 30;
 const describe = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms).unref?.());
 const isDuplicateKey = (error: unknown) => (error as { code?: number })?.code === 11000;
@@ -355,7 +363,10 @@ export class TelegramService {
       throw error;
     }
     this.options.logger.info(`Message from @${config.botUsername} (${kind})`);
-    if (kind === "tegenhunt") await this.alertCounterHunt(message);
+    // Read late (catch-up after a restart): a tegenhunt older than its 30 minutes is only stored
+    const age = (this.options.now?.() ?? new Date()).getTime() - message.date.getTime();
+    if (kind === "tegenhunt" && age < COUNTER_HUNT_WINDOW_MS) await this.alertCounterHunt(message);
+    if (kind === "happy-hour") await this.options.happyHour?.handleMessage({ telegramId: message.id, text: message.text, date: message.date });
   }
 
   // --- Internals ----------------------------------------------------------------------------------------------------
@@ -426,6 +437,7 @@ export class TelegramService {
     this.active = gateway;
     await previous?.cancel().catch(() => undefined);
     this.listen(gateway);
+    void this.catchUp(gateway);
     this.options.logger.info(`Telegram linked (${pending.linkedBy ?? "unknown admin"}), listening to @${config.botUsername}`);
   }
 
@@ -438,6 +450,19 @@ export class TelegramService {
       if (this.active !== gateway) return;
       void this.dropRevoked(gateway);
     });
+  }
+
+  /** Handle the latest messages of the bot chat (oldest first); known ones are skipped by their Telegram id. */
+  private async catchUp(gateway: TelegramGateway) {
+    try {
+      const messages = await gateway.recentBotMessages(CATCH_UP_LIMIT);
+      for (const message of [...messages].sort((a, b) => a.id - b.id)) {
+        if (this.active !== gateway) return;
+        await this.handleMessage(message);
+      }
+    } catch (error) {
+      this.options.logger.warn(`Could not read the latest Telegram messages: ${describe(error)}`);
+    }
   }
 
   private async dropRevoked(gateway: TelegramGateway) {
@@ -491,6 +516,7 @@ export class TelegramService {
     this.retryDelay = this.options.retryInitialMs ?? 5_000;
     this.active = gateway;
     this.listen(gateway);
+    void this.catchUp(gateway);
     this.options.logger.info(`Telegram connected as ${link.account.name}, listening to @${config.botUsername}`);
   }
 
@@ -500,26 +526,21 @@ export class TelegramService {
    */
   private async alertCounterHunt(message: TelegramIncomingMessage) {
     const input = buildTelegramCounterHuntNotification({ telegramId: message.id, text: message.text, date: message.date });
-    for (let attempt = 0; attempt < ALERT_ATTEMPTS; attempt++) {
-      const generation = currentGeneration();
-      const notification = await runTracked(
-        async () => {
-          if (await AppNotification.exists({ type: "counter-hunt", "data.telegramId": message.id })) return null;
-          return AppNotification.create(input);
-        },
-        { generation },
-      );
-      if (notification === undefined) {
-        await delay(this.options.alertRetryMs ?? 1_000);
-        continue;
-      }
-      if (notification) {
-        this.options.logger.info(`Tegenhunt alert sent: ${input.title}`);
-        void runTracked(() => sendToAll(notification), { generation });
-      }
+    const result = await runTrackedRetrying(
+      async () => {
+        if (await AppNotification.exists({ type: "counter-hunt", "data.telegramId": message.id })) return null;
+        return AppNotification.create(input);
+      },
+      { waitMs: this.options.alertRetryMs },
+    );
+    if (!result) {
+      this.options.logger.error(`Tegenhunt alert for Telegram message ${message.id} skipped: a demo switch kept running`);
       return;
     }
-    this.options.logger.error(`Tegenhunt alert for Telegram message ${message.id} skipped: a demo switch kept running`);
+    const notification = result.value;
+    if (!notification) return;
+    this.options.logger.info(`Tegenhunt alert sent: ${input.title}`);
+    void runTracked(() => sendToAll(notification), { generation: result.generation });
   }
 }
 

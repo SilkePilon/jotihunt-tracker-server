@@ -255,3 +255,60 @@ describe("bot messages", () => {
     expect((await service.listMessages()).linked).toBe(true);
   });
 });
+
+describe("catch-up", () => {
+  const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000);
+
+  test("on start the latest bot messages are read; only a tegenhunt within its 30 minutes alerts", async () => {
+    await storeLink();
+    prepare = (gateway) => {
+      gateway.history = [
+        { id: 33, senderUsername: "Jotihunt_bot", text: "Tegenhunt, windrichting west", date: minutesAgo(5) },
+        { id: 32, senderUsername: "iemand", text: "Tegenhunt uit het noorden", date: minutesAgo(10) },
+        { id: 31, senderUsername: "Jotihunt_bot", text: "Tegenhunt, windrichting oost", date: minutesAgo(40) },
+        { id: 30, senderUsername: "Jotihunt_bot", text: "Je hunt is goedgekeurd", date: minutesAgo(50) },
+      ];
+    };
+    const restarted = createService();
+    await restarted.start();
+    await until(async () => (await restarted.listMessages()).messages.length === 3);
+    expect((await restarted.listMessages()).messages.map((message) => message.id)).toEqual(["33", "31", "30"]);
+    const notifications = await AppNotification.find().lean();
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].data).toMatchObject({ direction: 270, telegramId: 33 });
+
+    // A second connect reads the same messages again: nothing new
+    const again = createService();
+    await again.start();
+    await Bun.sleep(50);
+    expect(await AppNotification.countDocuments()).toBe(1);
+    expect((await again.listMessages()).messages).toHaveLength(3);
+    await again.stop();
+    await restarted.stop();
+  });
+
+  test("after linking the bot chat is read too", async () => {
+    prepare = (gateway) => {
+      gateway.history = [{ id: 40, senderUsername: "Jotihunt_bot", text: "Nieuwe opdracht", date: minutesAgo(1) }];
+    };
+    await service.startLink("Admin");
+    gateways[0].qr.resolve("linked");
+    await until(async () => (await service.listMessages()).messages.length === 1);
+  });
+
+  test("happy-hour messages go to the happy hour service", async () => {
+    const received: number[] = [];
+    const withHappyHour = new TelegramService({
+      config: CONFIG,
+      connection: realDb,
+      gateway: () => new FakeGateway(),
+      logger,
+      happyHour: { handleMessage: async (message) => void received.push(message.telegramId) },
+    });
+    await withHappyHour.handleMessage(botMessage(50, "Happy hour van 21:00 tot 22:00"));
+    await withHappyHour.handleMessage(botMessage(50, "Happy hour van 21:00 tot 22:00"));
+    await withHappyHour.handleMessage(botMessage(51, "Nieuwe opdracht"));
+    expect(received).toEqual([50]);
+  });
+});
+

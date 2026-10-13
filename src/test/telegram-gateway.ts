@@ -25,6 +25,8 @@ export class FakeGateway implements TelegramGateway {
   cancelled = false;
   messageCallback: ((message: TelegramIncomingMessage) => void) | null = null;
   revokedCallback: (() => void) | null = null;
+  /** What recentBotMessages returns (the bot chat's history) */
+  history: TelegramIncomingMessage[] = [];
 
   async startQr(handlers: { onUrl(url: string, expires: Date): void; onScanned(): void }) {
     queueMicrotask(() => handlers.onUrl("tg://login?token=abc", new Date("2026-10-17T20:00:30Z")));
@@ -48,6 +50,9 @@ export class FakeGateway implements TelegramGateway {
   }
   onMessage(callback: (message: TelegramIncomingMessage) => void) {
     this.messageCallback = callback;
+  }
+  async recentBotMessages(limit: number) {
+    return this.history.slice(0, limit);
   }
   onRevoked(callback: () => void) {
     this.revokedCallback = callback;
