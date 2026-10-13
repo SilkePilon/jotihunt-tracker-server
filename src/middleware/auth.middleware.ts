@@ -80,6 +80,12 @@ function touchDevice(userId: unknown, deviceId: string, lastSeenAt: Date | null 
   );
 }
 
+/** After verifyToken: only a web session (not a paired phone's device token) may manage the account's passkeys. */
+export function requireWebSession(_req: Request, res: Response, next: NextFunction) {
+  if (typeof res.locals.sessionId !== "string") return res.status(403).json({ message: "Alleen vanuit de website." });
+  next();
+}
+
 export async function isAdmin(req: Request, res: Response, next: NextFunction) {
   if (!req.user) return res.status(401).json({ message: "Access denied" });
   if (!req.user.admin) return res.status(403).json({ message: "Access denied" });

@@ -11,6 +11,7 @@ import { createInvite } from "./invites";
 import { setInvitesPaused } from "./invite-setting";
 import { createRecoveryLink } from "./recovery";
 import { Team } from "../models/team.model";
+import { signDeviceToken } from "../services/access-token";
 
 installFakeWebauthn();
 process.env.JWT_SECRET ??= "test-secret-test-secret-test-secret";
@@ -243,5 +244,17 @@ describe("account: add passkey", () => {
     const { challengeId } = await json<{ challengeId: string }>(await request("/account/passkeys/options", { method: "POST", token: tokenFor(a) }));
     const res = await request("/account/passkeys/verify", { method: "POST", token: tokenFor(b), json: { challengeId, response: { id: "cred-b" } } });
     expect(res.status).toBe(400);
+  });
+
+  test("a paired phone (device token) can not add a passkey: 403", async () => {
+    const user = await User.create({ name: "Tim", devices: [{ id: "phone-1", name: "Pixel", createdAt: new Date() }] });
+    const token = signDeviceToken(user, "phone-1");
+    expect((await request("/auth/me", { token })).status).toBe(200);
+    const options = await request("/account/passkeys/options", { method: "POST", token });
+    expect(options.status).toBe(403);
+    expect(await json<Record<string, unknown>>(options)).toEqual({ message: "Alleen vanuit de website." });
+    const verify = await request("/account/passkeys/verify", { method: "POST", token, json: { challengeId: "x", response: { id: "cred-tim" } } });
+    expect(verify.status).toBe(403);
+    expect((await User.findById(user._id))!.passkeys).toHaveLength(0);
   });
 });
