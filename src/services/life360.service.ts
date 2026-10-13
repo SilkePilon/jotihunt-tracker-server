@@ -279,13 +279,15 @@ export class Life360Service {
   }
 
   /**
-   * Cancel a pending login; without one, delete the link and forget the members. Runs under the login lock (409 while a
-   * login step is running), so a login that saves its link can't race the delete and leave the database and memory apart.
+   * Cancel a pending login; without one, delete the link and forget the members. A pending login that has expired still
+   * counts as one (the admin clicked cancel on it), so that click never deletes a working link. Runs under the login lock
+   * (409 while a login step is running), so a login that saves its link can't race the delete and leave the database and
+   * memory apart.
    */
   async unlink(): Promise<Life360AdminStatus> {
     this.requireConfig();
     return this.exclusive(async () => {
-      if (this.currentPending() || this.choosing) {
+      if (this.pending || this.choosing) {
         this.pending = null;
         this.choosing = null;
         this.options.logger.info("Life360 login cancelled");
@@ -334,7 +336,11 @@ export class Life360Service {
     }
     let fetching = this.avatarFetches.get(memberId);
     if (!fetching || fetching.source !== source) {
-      fetching = { source, promise: this.fetchAvatar(memberId, source) };
+      // Removed when done, but only if still this fetch: an older one (from before an unlink/relink) must not drop a newer one
+      const promise: Promise<CachedAvatar | 404 | 502> = this.fetchAvatar(memberId, source).finally(() => {
+        if (this.avatarFetches.get(memberId)?.promise === promise) this.avatarFetches.delete(memberId);
+      });
+      fetching = { source, promise };
       this.avatarFetches.set(memberId, fetching);
     }
     const fetched = await fetching.promise;
@@ -547,8 +553,6 @@ export class Life360Service {
       if (status === 502) this.options.logger.warn(`Life360 avatar not fetched: ${describeError(error)}`);
       if (generation === this.generation) this.avatarFailures.set(memberId, { source, status, until: this.now().getTime() + AVATAR_FAILURE_MS });
       return status;
-    } finally {
-      if (this.avatarFetches.get(memberId)?.source === source) this.avatarFetches.delete(memberId);
     }
   }
 

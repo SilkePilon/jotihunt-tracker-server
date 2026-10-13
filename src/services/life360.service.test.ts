@@ -334,6 +334,20 @@ describe("restart and unlink", () => {
     expect(await life360LinkModel(realDb).countDocuments()).toBe(0);
   });
 
+  test("cancelling a re-login after its code expired only clears that login; the link stays and keeps polling", async () => {
+    await link();
+    advance(60_000);
+    await service.sendCode("ander@example.nl");
+    advance(10 * 60_000 + 1);
+    expect(await service.unlink()).toMatchObject({ state: "linked", email: EMAIL, circleName: "Jotihunt" });
+    expect(await life360LinkModel(realDb).countDocuments()).toBe(1);
+    expect(service.status()).toMatchObject({ state: "linked", email: EMAIL });
+    await expect(service.verifyCode("123456", "Admin")).rejects.toMatchObject({ status: 409 });
+    expect(service.nextPollAt).not.toBeNull();
+    await service.pollOnce();
+    expect(client.memberRequests).toHaveLength(1);
+  });
+
   test("unlink whose database delete fails: still linked and still polling", async () => {
     await link();
     const links = (service as unknown as { links: { deleteOne: () => Promise<unknown> } }).links;
@@ -475,6 +489,32 @@ describe("refresh and avatars", () => {
     client.avatars.delete(M1_AVATAR);
     const stale = await Promise.all([service.avatar("m1"), service.avatar("m1")]);
     expect(stale).toEqual([JPEG_IMAGE, JPEG_IMAGE]);
+    expect(client.avatarCalls).toBe(2);
+  });
+
+  test("an avatar fetch from before an unlink and relink does not drop the newer shared fetch", async () => {
+    await link();
+    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"))];
+    await service.pollOnce();
+    client.avatars.set(M1_AVATAR, JPEG_IMAGE);
+    let releaseOld!: () => void;
+    client.avatarHold = new Promise<void>((resolve) => (releaseOld = resolve));
+    const old = service.avatar("m1");
+    await until(() => client.avatarCalls === 1);
+    await service.unlink();
+    advance(60_000);
+    await link();
+    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"))];
+    await service.pollOnce();
+    let releaseNew!: () => void;
+    client.avatarHold = new Promise<void>((resolve) => (releaseNew = resolve));
+    const first = service.avatar("m1");
+    await until(() => client.avatarCalls === 2);
+    releaseOld();
+    await old;
+    const second = service.avatar("m1");
+    releaseNew();
+    expect(await Promise.all([first, second])).toEqual([JPEG_IMAGE, JPEG_IMAGE]);
     expect(client.avatarCalls).toBe(2);
   });
 });
