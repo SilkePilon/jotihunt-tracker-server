@@ -2,6 +2,8 @@ import mongoose from "mongoose";
 import { debug, logger } from "./logger";
 import { app } from "./app";
 import { scheduleCrons } from "./crons/schedule";
+import { publicAppUrl, webauthnConfig } from "./auth/config";
+import { setAuthConnection } from "./auth/auth-db";
 import { initPredictionSetting } from "./settings/prediction-setting";
 import { getDemoStateStore, initDemoMode, onDemoSwitch } from "./demo/database-switch";
 import { installDemoWorld } from "./demo/demo-world";
@@ -37,6 +39,15 @@ if (process.env.JWT_SECRET.length < 32 || process.env.JWT_SECRET.startsWith("cha
   logger.warn("JWT_SECRET is short or the example placeholder, set a long random value");
 }
 
+// Passkeys need the relying party settings; links need the public URL
+try {
+  webauthnConfig();
+  publicAppUrl();
+} catch (error) {
+  logger.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
+
 // Database connection
 const db = process.env.MONGO_URI;
 if (!db) {
@@ -53,6 +64,8 @@ await initDemoMode(db, { logger: { info: (message) => logger.info(message), warn
 
 // Global settings live in the real database (also in demo mode); cached in memory from here on
 await initPredictionSetting(getDemoStateStore());
+// Sessions, invites and herstel-links live in the real database, also while demo mode is on
+setAuthConnection(getDemoStateStore().connection);
 
 // Telegram (tegenhunts and other @Jotihunt_bot messages). The link and the messages live in the real database like the
 // settings; connecting runs in the background (retried with backoff) so a Telegram outage never delays the start
