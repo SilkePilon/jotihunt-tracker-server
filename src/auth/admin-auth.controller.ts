@@ -4,6 +4,7 @@ import { isObjectIdString } from "../utils/mongo";
 import { invitesPaused, setInvitesPaused } from "./invite-setting";
 import { createInvite, inviteState, inviteUrl, listInvites, revokeInvite, type InviteExpiry } from "./invites";
 import type { InviteDoc } from "./models";
+import { createRecoveryLink } from "./recovery";
 
 async function adminInvites(list: InviteDoc[], now = new Date()) {
   const creators = await User.find({ _id: { $in: list.map((invite) => invite.createdBy) } }, { name: 1 }).lean();
@@ -44,4 +45,11 @@ export async function getInvitesPaused(_req: Request, res: Response) {
 
 export async function putInvitesPaused(req: Request, res: Response) {
   return res.status(200).json({ paused: await setInvitesPaused(req.body.paused, String(req.user!._id)) });
+}
+
+export async function postRecoveryLink(req: Request, res: Response) {
+  const id = String(req.params.id);
+  if (!isObjectIdString(id) || !(await User.exists({ _id: id }))) return res.status(404).json({ message: "Er is geen gebruiker met dit ID." });
+  const { url, expiresAt } = await createRecoveryLink(id, req.user!._id);
+  return res.status(201).json({ url, expiresAt });
 }

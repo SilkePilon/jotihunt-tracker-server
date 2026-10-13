@@ -46,6 +46,7 @@ router.post(
   adminAuthController.postInvite,
 );
 router.delete("/invites/:id", [verifyToken, isAdmin], adminAuthController.deleteInvite);
+router.post("/users/:id/recovery-link", [verifyToken, isAdmin], adminAuthController.postRecoveryLink);
 router.post(
   "/broadcast",
   [verifyToken, isAdmin, validate([body("message").isString().trim().isLength({ min: 1, max: 200 }).withMessage("Bericht moet 1 tot 200 tekens zijn.")])],

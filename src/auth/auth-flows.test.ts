@@ -9,6 +9,7 @@ import { sessions } from "./models";
 import { createAccount } from "./user-store";
 import { createInvite } from "./invites";
 import { setInvitesPaused } from "./invite-setting";
+import { createRecoveryLink } from "./recovery";
 import { Team } from "../models/team.model";
 
 installFakeWebauthn();
@@ -187,5 +188,60 @@ describe("invites: admin", () => {
     expect(await json<Record<string, unknown>>(await request("/settings/invites-paused", { token: tokenFor(hunter) }))).toEqual({ paused: false });
     expect((await request("/settings/invites-paused", { method: "PUT", token: tokenFor(hunter), json: { paused: true } })).status).toBe(403);
     expect(await json<Record<string, unknown>>(await request("/settings/invites-paused", { method: "PUT", token: tokenFor(admin), json: { paused: true } }))).toEqual({ paused: true });
+  });
+});
+
+const tokenOf = (url: string) => url.split("/herstel/")[1];
+
+describe("herstel-links", () => {
+  test("admin makes a link; it adds a passkey, logs in, and works once", async () => {
+    const admin = await withSession(await User.create({ name: "Silke", admin: true }));
+    const mark = await User.create({ name: "Mark", admin: true });
+    const made = await request(`/admin/users/${mark._id}/recovery-link`, { method: "POST", token: tokenFor(admin) });
+    expect(made.status).toBe(201);
+    const { url } = await json<{ url: string }>(made);
+    expect(url).toStartWith("https://jotihunt.test/herstel/");
+    const token = tokenOf(url);
+    expect(await json<Record<string, unknown>>(await request(`/herstel/${token}`))).toEqual({ valid: true, name: "Mark" });
+    const { challengeId } = await json<{ challengeId: string }>(await request(`/herstel/${token}/register/options`, { method: "POST" }));
+    const res = await request(`/herstel/${token}/register/verify`, { method: "POST", json: { challengeId, response: { id: "cred-mark" } } });
+    expect(res.status).toBe(200);
+    expect((await json<{ user: { name: string; passkeyCount: number } }>(res)).user).toMatchObject({ name: "Mark", passkeyCount: 1 });
+    expect((await request(`/herstel/${token}`)).status).toBe(404);
+    expect((await request(`/herstel/${token}/no-passkey`, { method: "POST" })).status).toBe(410);
+  });
+
+  test("without passkey: logs in once; expired links are 404", async () => {
+    const user = await User.create({ name: "Tim" });
+    const { url } = await createRecoveryLink(user._id, null);
+    expect((await request(`/herstel/${tokenOf(url)}/no-passkey`, { method: "POST" })).status).toBe(200);
+    const old = await createRecoveryLink(user._id, null, new Date(Date.now() - 2 * 60 * 60 * 1000));
+    expect((await request(`/herstel/${tokenOf(old.url)}`)).status).toBe(404);
+  });
+
+  test("non-admins can not make links", async () => {
+    const hunter = await withSession(await User.create({ name: "Tim" }));
+    expect((await request(`/admin/users/${hunter._id}/recovery-link`, { method: "POST", token: tokenFor(hunter) })).status).toBe(403);
+  });
+});
+
+describe("account: add passkey", () => {
+  test("a logged-in user adds a passkey", async () => {
+    const user = await withSession(await User.create({ name: "Tim" }));
+    const { challengeId, options } = await json<{ challengeId: string; options: { excludeCredentials: unknown[] } }>(
+      await request("/account/passkeys/options", { method: "POST", token: tokenFor(user) }),
+    );
+    expect(options.excludeCredentials).toEqual([]);
+    const res = await request("/account/passkeys/verify", { method: "POST", token: tokenFor(user), json: { challengeId, response: { id: "cred-tim" } } });
+    expect(res.status).toBe(201);
+    expect((await json<{ user: { passkeyCount: number } }>(res)).user.passkeyCount).toBe(1);
+  });
+
+  test("a challenge of another user is refused", async () => {
+    const a = await withSession(await User.create({ name: "A" }));
+    const b = await withSession(await User.create({ name: "B" }));
+    const { challengeId } = await json<{ challengeId: string }>(await request("/account/passkeys/options", { method: "POST", token: tokenFor(a) }));
+    const res = await request("/account/passkeys/verify", { method: "POST", token: tokenFor(b), json: { challengeId, response: { id: "cred-b" } } });
+    expect(res.status).toBe(400);
   });
 });
