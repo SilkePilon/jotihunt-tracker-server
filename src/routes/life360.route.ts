@@ -9,10 +9,6 @@ const router = express.Router();
 
 router.get("/members", [verifyToken], life360Controller.getMembers);
 // Proxied so browsers never contact Life360; verifyToken reads the Authorization header, so the client loads it as a blob
-router.get(
-  "/avatar/:memberId",
-  [verifyToken, validate([param("memberId").isString().isLength({ min: 1, max: 100 }).withMessage("Ongeldig lid.")])],
-  life360Controller.getAvatar,
-);
+router.get("/avatar/:memberId", [verifyToken, validate([param("memberId").isString().isLength({ min: 1, max: 100 }).withMessage("Ongeldig lid.")])], life360Controller.getAvatar);
 
 export default router;

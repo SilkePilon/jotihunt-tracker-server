@@ -4,15 +4,7 @@ import mongoose, { type Connection } from "mongoose";
 import { life360LinkModel } from "../models/life360-link.model";
 import { FakeLife360Client, TOKEN } from "../test/life360-client";
 import { FIX_TIME, rawMember } from "../test/life360-fixtures";
-import {
-  Life360BlockedError,
-  Life360CodeInvalidError,
-  Life360NetworkError,
-  Life360NotFoundError,
-  Life360RateLimitedError,
-  Life360UnauthorizedError,
-  Life360UpstreamError,
-} from "./life360.client";
+import { Life360BlockedError, Life360CodeInvalidError, Life360NetworkError, Life360NotFoundError, Life360RateLimitedError, Life360UnauthorizedError, Life360UpstreamError } from "./life360.client";
 import type { Life360Config } from "./life360.helpers";
 import { Life360Service, type Life360ServiceOptions } from "./life360.service";
 import { decryptSession } from "./telegram.helpers";

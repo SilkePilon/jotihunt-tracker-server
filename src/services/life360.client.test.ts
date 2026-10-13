@@ -29,19 +29,19 @@ function fakeTransport(...answers: Answer[]) {
     const answer = answers.shift();
     if (!answer) throw new Error("No answer queued");
     if (answer instanceof Error) throw answer;
-    const body =
-      answer.json !== undefined ? Buffer.from(JSON.stringify(answer.json)) : typeof answer.body === "string" ? Buffer.from(answer.body) : (answer.body ?? Buffer.alloc(0));
+    const body = answer.json !== undefined ? Buffer.from(JSON.stringify(answer.json)) : typeof answer.body === "string" ? Buffer.from(answer.body) : (answer.body ?? Buffer.alloc(0));
     return { status: answer.status ?? 200, headers: answer.headers ?? {}, body };
   };
   return { client: new Life360Client(transport), requests };
 }
 
-const failure = (promise: Promise<unknown>) => promise.then(
-  () => {
-    throw new Error("Expected a rejection");
-  },
-  (error: unknown) => error,
-);
+const failure = (promise: Promise<unknown>) =>
+  promise.then(
+    () => {
+      throw new Error("Expected a rejection");
+    },
+    (error: unknown) => error,
+  );
 
 describe("login (e-mail code)", () => {
   test("sendCode: iOS client token, CloudEvents headers and the device id, like the proven test login", async () => {
@@ -188,11 +188,7 @@ describe("avatar", () => {
   });
 
   test("relative redirects resolve against the current URL; at most 2 redirects", async () => {
-    const twice = fakeTransport(
-      { status: 302, headers: { location: "/img/a.jpg" } },
-      { status: 307, headers: { location: S3 } },
-      { headers: { "content-type": "image/webp" }, body: JPEG },
-    );
+    const twice = fakeTransport({ status: 302, headers: { location: "/img/a.jpg" } }, { status: 307, headers: { location: S3 } }, { headers: { "content-type": "image/webp" }, body: JPEG });
     expect((await twice.client.avatar("https://www.life360.com/x.jpg")).contentType).toBe("image/webp");
     expect(twice.requests.map((request) => request.url)).toEqual(["https://www.life360.com/x.jpg", "https://www.life360.com/img/a.jpg", S3]);
 

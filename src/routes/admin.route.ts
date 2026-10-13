@@ -85,7 +85,19 @@ router.post(
 );
 router.post(
   "/life360/verify",
-  [verifyToken, isAdmin, validate([body("code").isString().withMessage("De code is 6 cijfers.").bail().trim().matches(/^\d{6}$/).withMessage("De code is 6 cijfers.")])],
+  [
+    verifyToken,
+    isAdmin,
+    validate([
+      body("code")
+        .isString()
+        .withMessage("De code is 6 cijfers.")
+        .bail()
+        .trim()
+        .matches(/^\d{6}$/)
+        .withMessage("De code is 6 cijfers."),
+    ]),
+  ],
   life360Controller.verifyCode,
 );
 router.post(
@@ -107,10 +119,7 @@ router.put(
   [
     verifyToken,
     isAdmin,
-    validate([
-      param("id").isInt({ min: 1 }).withMessage("Ongeldig toestel-ID."),
-      body("vehicle").isIn(VEHICLES).withMessage("Voertuig moet walking, bike, car of motorcycle zijn."),
-    ]),
+    validate([param("id").isInt({ min: 1 }).withMessage("Ongeldig toestel-ID."), body("vehicle").isIn(VEHICLES).withMessage("Voertuig moet walking, bike, car of motorcycle zijn.")]),
   ],
   trackerController.putDeviceVehicle,
 );

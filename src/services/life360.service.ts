@@ -2,15 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Connection, Model } from "mongoose";
 import { ServiceError } from "../http/service-error";
 import { LIFE360_LINK_KEY, life360LinkModel, type Life360LinkDoc } from "../models/life360-link.model";
-import {
-  Life360BlockedError,
-  Life360CodeInvalidError,
-  Life360NotFoundError,
-  Life360RateLimitedError,
-  Life360UnauthorizedError,
-  Life360UpstreamError,
-  type Life360Api,
-} from "./life360.client";
+import { Life360BlockedError, Life360CodeInvalidError, Life360NotFoundError, Life360RateLimitedError, Life360UnauthorizedError, Life360UpstreamError, type Life360Api } from "./life360.client";
 import { liveCount, parseMembers, type Life360AdminStatus, type Life360Circle, type Life360Config, type Life360Member, type Life360Members } from "./life360.helpers";
 import { decryptSession, encryptSession } from "./telegram.helpers";
 
@@ -260,7 +252,10 @@ export class Life360Service {
   async pasteToken(token: string, linkedBy: string | null): Promise<Life360AdminStatus> {
     this.requireConfig();
     return this.exclusive(async () => {
-      const clean = token.trim().replace(/^bearer\s+/i, "").trim();
+      const clean = token
+        .trim()
+        .replace(/^bearer\s+/i, "")
+        .trim();
       if (!clean) throw new ServiceError(400, "Token werkt niet.");
       return this.acceptToken(clean, null, this.link?.deviceId ?? this.processDeviceId, linkedBy);
     });
@@ -274,7 +269,12 @@ export class Life360Service {
     const now = this.now();
     if (this.refreshAvailableAt && now < this.refreshAvailableAt) throw new ServiceError(429, "Even wachten, verversen kan één keer per minuut.");
     this.refreshAvailableAt = new Date(now.getTime() + REFRESH_COOLDOWN_MS);
-    void this.requestLocations(link.token, link.circleId, this.memberList.map((member) => member.id), this.generation);
+    void this.requestLocations(
+      link.token,
+      link.circleId,
+      this.memberList.map((member) => member.id),
+      this.generation,
+    );
     return { refreshAvailableAt: this.refreshAvailableAt.toISOString() };
   }
 

@@ -192,8 +192,7 @@ export function parseRetryAfterMs(value: string | undefined, now = Date.now()): 
   return Number.isNaN(date) ? null : Math.max(0, date - now);
 }
 
-const isHtml = (response: Life360HttpResponse) =>
-  (response.headers["content-type"] ?? "").includes("text/html") || response.body.subarray(0, 64).toString("utf8").trimStart().startsWith("<");
+const isHtml = (response: Life360HttpResponse) => (response.headers["content-type"] ?? "").includes("text/html") || response.body.subarray(0, 64).toString("utf8").trimStart().startsWith("<");
 
 type Step = "send" | "verify" | "data";
 
@@ -233,11 +232,11 @@ const AVATAR_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gi
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const MAX_AVATAR_REDIRECTS = 2;
 
-/** The URL when it is https on life360.com, a subdomain of it, or Life360's image bucket; otherwise null. */
-function avatarUrl(url: string): URL | null {
+/** The URL (relative to `base`, for a redirect) when it is https on life360.com, a subdomain of it, or Life360's image bucket; otherwise null. */
+function avatarUrl(url: string, base?: URL): URL | null {
   let parsed: URL;
   try {
-    parsed = new URL(url);
+    parsed = new URL(url, base);
   } catch {
     return null;
   }
@@ -342,8 +341,9 @@ export class Life360Client implements Life360Api {
    * and every hop must be https on an allow-listed host; only jpeg/png/webp/gif come back.
    */
   async avatar(url: string): Promise<{ contentType: string; body: Buffer }> {
-    let current = avatarUrl(url);
-    if (!current) throw new Life360NotFoundError("Avatar URL not allowed");
+    const first = avatarUrl(url);
+    if (!first) throw new Life360NotFoundError("Avatar URL not allowed");
+    let current: URL = first;
     for (let hop = 0; ; hop++) {
       let response: Life360HttpResponse;
       try {
@@ -353,12 +353,8 @@ export class Life360Client implements Life360Api {
       }
       if (REDIRECT_STATUSES.has(response.status)) {
         if (hop >= MAX_AVATAR_REDIRECTS) throw new Life360UpstreamError("Avatar redirected too often", response.status);
-        let next: URL | null = null;
-        try {
-          next = response.headers.location ? avatarUrl(new URL(response.headers.location, current).toString()) : null;
-        } catch {
-          next = null;
-        }
+        const location = response.headers.location;
+        const next: URL | null = location ? avatarUrl(location, current) : null;
         if (!next) throw new Life360UpstreamError("Avatar redirected to a host that is not allowed", response.status);
         current = next;
         continue;
