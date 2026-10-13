@@ -1,0 +1,355 @@
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { randomBytes } from "node:crypto";
+import mongoose, { type Connection } from "mongoose";
+import { life360LinkModel } from "../models/life360-link.model";
+import { FakeLife360Client, TOKEN } from "../test/life360-client";
+import { FIX_TIME, rawMember } from "../test/life360-fixtures";
+import {
+  Life360BlockedError,
+  Life360CodeInvalidError,
+  Life360NetworkError,
+  Life360NotFoundError,
+  Life360RateLimitedError,
+  Life360UnauthorizedError,
+  Life360UpstreamError,
+} from "./life360.client";
+import type { Life360Config } from "./life360.helpers";
+import { Life360Service, type Life360ServiceOptions } from "./life360.service";
+import { decryptSession } from "./telegram.helpers";
+
+const KEY = randomBytes(32).toString("base64");
+const EMAIL = "jotihunt@example.nl";
+const uri = process.env.MONGO_URI_TEST ?? "mongodb://localhost:27017/jotihunt-test";
+
+/** Stands in for the demo state store's connection to the real database */
+let realDb: Connection;
+let client: FakeLife360Client;
+let clock: Date;
+let service: Life360Service;
+const logs: string[] = [];
+const logger = { info: (message: string) => logs.push(message), warn: (message: string) => logs.push(message), error: (message: string) => logs.push(message) };
+
+function createService(config: Life360Config | null = { sessionKey: KEY }, extra: Partial<Life360ServiceOptions> = {}) {
+  return new Life360Service({ config, connection: realDb, client, logger, autoPoll: false, now: () => clock, ...extra });
+}
+const advance = (ms: number) => (clock = new Date(clock.getTime() + ms));
+const membersAnswer = (...members: unknown[]) => ({ notModified: false as const, etag: "etag-1", members });
+const until = async (check: () => boolean) => {
+  for (let i = 0; i < 200; i++) {
+    if (check()) return;
+    await Bun.sleep(5);
+  }
+  throw new Error("Timed out");
+};
+/** Code + verify with the only circle: linked */
+async function link() {
+  await service.sendCode(EMAIL);
+  return service.verifyCode("123456", "Admin");
+}
+
+beforeAll(async () => {
+  realDb = await mongoose.createConnection(uri).asPromise();
+});
+beforeEach(async () => {
+  await life360LinkModel(realDb).deleteMany({});
+  client = new FakeLife360Client();
+  clock = new Date((FIX_TIME + 60) * 1000);
+  logs.length = 0;
+  service = createService();
+  await service.start();
+});
+afterEach(() => service.stop());
+afterAll(async () => {
+  await realDb.close();
+});
+
+describe("feature off", () => {
+  test("without LIFE360_SESSION_KEY: unavailable, logins refused, members empty", async () => {
+    const off = createService(null);
+    await off.start();
+    expect(off.available).toBe(false);
+    expect(off.status()).toEqual({ state: "unavailable" });
+    await expect(off.sendCode(EMAIL)).rejects.toMatchObject({ status: 503 });
+    await expect(off.pasteToken("tok", "Admin")).rejects.toMatchObject({ status: 503 });
+    await expect(off.unlink()).rejects.toMatchObject({ status: 503 });
+    expect(off.members()).toEqual({ linked: false, stale: false, members: [] });
+    await off.stop();
+  });
+});
+
+describe("linking", () => {
+  test("e-mail code → linked with the only circle; the token is stored encrypted and never shown or logged", async () => {
+    expect(service.status()).toEqual({ state: "unlinked" });
+    expect(await service.sendCode(EMAIL)).toEqual({ state: "code", email: EMAIL, resendAt: new Date(clock.getTime() + 60_000).toISOString() });
+    expect(client.calls[0]).toMatch(/^send jotihunt@example\.nl [0-9A-F-]{36}$/);
+
+    const linked = await service.verifyCode("123456", "Admin");
+    expect(linked).toEqual({ state: "linked", email: EMAIL, circleName: "Jotihunt", memberCount: 0, liveCount: 0, lastPollAt: null, refreshAvailableAt: null });
+    expect(client.calls).toContain("verify tx-1 123456");
+
+    const doc = await life360LinkModel(realDb).findOne().lean();
+    expect(doc).toMatchObject({ key: "life360", email: EMAIL, circleId: "c1", circleName: "Jotihunt", linkedBy: "Admin" });
+    expect(doc!.deviceId).toBe(client.calls[0].split(" ")[2]);
+    expect(JSON.stringify(doc)).not.toContain(TOKEN);
+    expect(decryptSession({ ciphertext: doc!.tokenCiphertext, iv: doc!.iv, tag: doc!.tag }, KEY)).toBe(TOKEN);
+    expect(service.nextPollAt).toEqual(clock);
+    expect(JSON.stringify(logs)).not.toContain(TOKEN);
+  });
+
+  test("a new code only after 60 s", async () => {
+    await service.sendCode(EMAIL);
+    await expect(service.sendCode(EMAIL)).rejects.toMatchObject({ status: 429 });
+    advance(60_000);
+    expect((await service.sendCode(EMAIL)).state).toBe("code");
+    expect(client.calls.filter((call) => call.startsWith("send"))).toHaveLength(2);
+  });
+
+  test("send errors: no account 404, bad address 400, unreachable 502, Life360 limit 429 for at least 2 minutes", async () => {
+    client.sendError = new Life360NotFoundError();
+    await expect(service.sendCode("x@example.nl")).rejects.toMatchObject({ status: 404, message: "Geen Life360-account met dit adres." });
+    expect(service.status()).toEqual({ state: "unlinked" });
+    client.sendError = new Life360UpstreamError("Life360 answered 400 (syntax)", 400);
+    await expect(service.sendCode("x@example.nl")).rejects.toMatchObject({ status: 400, message: "E-mailadres is ongeldig." });
+    client.sendError = new Life360NetworkError("ECONNRESET");
+    await expect(service.sendCode("x@example.nl")).rejects.toMatchObject({ status: 502 });
+    client.sendError = new Life360RateLimitedError(null);
+    await expect(service.sendCode("x@example.nl")).rejects.toMatchObject({ status: 429 });
+    client.sendError = null;
+    advance(119_000);
+    await expect(service.sendCode("x@example.nl")).rejects.toMatchObject({ status: 429 });
+    advance(1_000);
+    expect((await service.sendCode("x@example.nl")).state).toBe("code");
+  });
+
+  test("verify: 409 without a pending code; 400 on a wrong code and the code stays pending", async () => {
+    await expect(service.verifyCode("123456", "Admin")).rejects.toMatchObject({ status: 409 });
+    await service.sendCode(EMAIL);
+    client.verifyError = new Life360CodeInvalidError("mismatch");
+    await expect(service.verifyCode("000000", "Admin")).rejects.toMatchObject({ status: 400, message: "Code klopt niet of is verlopen." });
+    expect(service.status().state).toBe("code");
+    client.verifyError = new Life360RateLimitedError(30_000);
+    await expect(service.verifyCode("000000", "Admin")).rejects.toMatchObject({ status: 429 });
+  });
+
+  test("more than one circle: the admin picks one", async () => {
+    client.circleList = [
+      { id: "c1", name: "Jotihunt" },
+      { id: "c2", name: "Familie" },
+    ];
+    await expect(service.chooseCircle("c1", "Admin")).rejects.toMatchObject({ status: 409 });
+    await service.sendCode(EMAIL);
+    expect(await service.verifyCode("123456", "Admin")).toEqual({ state: "circle", email: EMAIL, circles: client.circleList });
+    expect(await life360LinkModel(realDb).countDocuments()).toBe(0);
+    await expect(service.chooseCircle("c9", "Admin")).rejects.toMatchObject({ status: 400, message: "Onbekende kring." });
+    expect(await service.chooseCircle("c2", "Admin")).toMatchObject({ state: "linked", circleName: "Familie" });
+    expect((await life360LinkModel(realDb).findOne().lean())!.circleId).toBe("c2");
+  });
+
+  test("paste token: checked with /users/me, e-mail from the account, 'Bearer ' prefix removed", async () => {
+    client.meError = new Life360UnauthorizedError();
+    await expect(service.pasteToken("bad", "Admin")).rejects.toMatchObject({ status: 400, message: "Token werkt niet." });
+    client.meError = null;
+    client.circleList = [];
+    await expect(service.pasteToken("tok", "Admin")).rejects.toMatchObject({ status: 400, message: "Dit Life360-account zit in geen enkele kring." });
+    client.circleList = [{ id: "c1", name: "Jotihunt" }];
+    client.circlesError = new Life360RateLimitedError(null);
+    await expect(service.pasteToken("tok", "Admin")).rejects.toMatchObject({ status: 429 });
+    client.circlesError = null;
+    expect(await service.pasteToken("Bearer  tok ", "Admin")).toMatchObject({ state: "linked", email: EMAIL, circleName: "Jotihunt" });
+    expect(client.calls).toContain("me tok");
+  });
+});
+
+describe("polling", () => {
+  test("one members call, parsed members, etag, a full call every 5 minutes", async () => {
+    await link();
+    client.memberAnswers = [
+      membersAnswer(
+        rawMember("m1", "Silke", "Pilon"),
+        rawMember("m2", "Anna", "", { shareLocation: "0" }),
+        rawMember("m3", "Bram", "de Vries", { location: { timestamp: String(FIX_TIME - 20 * 60) } }),
+      ),
+      { notModified: true },
+    ];
+    await service.pollOnce();
+    expect(client.memberRequests[0]).toEqual({ token: TOKEN, circleId: "c1", etag: undefined });
+    expect(service.members().members.map((member) => [member.id, member.name, member.location !== null])).toEqual([
+      ["m1", "Silke P.", true],
+      ["m2", "Anna", false],
+      ["m3", "Bram D.", true],
+    ]);
+    expect(service.status()).toEqual({ state: "linked", email: EMAIL, circleName: "Jotihunt", memberCount: 3, liveCount: 1, lastPollAt: clock.toISOString(), refreshAvailableAt: null });
+    expect(service.nextPollAt).toEqual(new Date(clock.getTime() + 30_000));
+
+    advance(30_000);
+    await service.pollOnce();
+    expect(client.memberRequests[1].etag).toBe("etag-1");
+    expect(service.members().members).toHaveLength(3);
+
+    advance(5 * 60_000);
+    await service.pollOnce();
+    expect(client.memberRequests[2].etag).toBeUndefined();
+  });
+
+  test("401: logged out, polling stops, the last members stay (stale); logging in again resumes", async () => {
+    await link();
+    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon")), new Life360UnauthorizedError()];
+    await service.pollOnce();
+    advance(30_000);
+    await service.pollOnce();
+    expect(service.status()).toEqual({ state: "loggedOut", email: EMAIL, circleName: "Jotihunt" });
+    expect(service.members()).toMatchObject({ linked: true, stale: true });
+    expect(service.members().members).toHaveLength(1);
+    expect(service.nextPollAt).toBeNull();
+    await service.pollOnce();
+    expect(client.memberRequests).toHaveLength(2);
+
+    advance(60_000);
+    await service.sendCode(EMAIL);
+    expect((await service.verifyCode("123456", "Admin")).state).toBe("linked");
+    expect(service.members()).toMatchObject({ linked: true, stale: false });
+    expect(service.members().members).toHaveLength(1);
+  });
+
+  test("429: paused until Retry-After, at least 5 minutes; then linked again", async () => {
+    await link();
+    client.memberAnswers = [new Life360RateLimitedError(60_000), new Life360RateLimitedError(2 * 60 * 60_000), membersAnswer(rawMember("m1", "Silke", "Pilon"))];
+    await service.pollOnce();
+    const retryAt = new Date(clock.getTime() + 5 * 60_000);
+    expect(service.status()).toEqual({ state: "paused", email: EMAIL, circleName: "Jotihunt", retryAt: retryAt.toISOString(), memberCount: 0, liveCount: 0 });
+    expect(service.nextPollAt).toEqual(retryAt);
+    expect(service.members()).toEqual({ linked: true, stale: true, members: [] });
+
+    clock = retryAt;
+    await service.pollOnce();
+    expect(service.status()).toMatchObject({ state: "paused", retryAt: new Date(clock.getTime() + 2 * 60 * 60_000).toISOString() });
+
+    advance(2 * 60 * 60_000);
+    await service.pollOnce();
+    expect(service.status()).toMatchObject({ state: "linked", memberCount: 1 });
+    expect(service.nextPollAt).toEqual(new Date(clock.getTime() + 30_000));
+  });
+
+  test("403 (Cloudflare block): paused 5 minutes", async () => {
+    await link();
+    client.memberAnswers = [new Life360BlockedError()];
+    await service.pollOnce();
+    expect(service.status()).toMatchObject({ state: "paused", retryAt: new Date(clock.getTime() + 5 * 60_000).toISOString() });
+  });
+
+  test("network and unexpected errors: retried with backoff up to 5 minutes, the state stays linked", async () => {
+    await link();
+    client.memberAnswers = [new Life360NetworkError("ECONNRESET"), new Life360UpstreamError("Life360 answered 502", 502), new Life360NetworkError("ETIMEDOUT")];
+    const waits: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      await service.pollOnce();
+      const wait = service.nextPollAt!.getTime() - clock.getTime();
+      waits.push(wait);
+      advance(wait);
+    }
+    expect(waits).toEqual([30_000, 60_000, 120_000, 240_000, 300_000, 300_000]);
+    expect(service.status().state).toBe("linked");
+    client.memberAnswers = [membersAnswer()];
+    await service.pollOnce();
+    expect(service.nextPollAt!.getTime() - clock.getTime()).toBe(30_000);
+  });
+
+  test("the poll loop runs on its own", async () => {
+    await service.stop();
+    service = createService({ sessionKey: KEY }, { autoPoll: true, pollIntervalMs: 5 });
+    await service.start();
+    await link();
+    await until(() => client.memberRequests.length >= 3);
+  });
+});
+
+describe("restart and unlink", () => {
+  test("restart: the stored link is loaded and polled again", async () => {
+    await link();
+    await service.stop();
+    service = createService();
+    await service.start();
+    expect(service.status()).toMatchObject({ state: "linked", email: EMAIL, circleName: "Jotihunt", lastPollAt: null });
+    expect(service.nextPollAt).toEqual(clock);
+    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"))];
+    await service.pollOnce();
+    expect(client.memberRequests.at(-1)).toMatchObject({ token: TOKEN, circleId: "c1" });
+    expect(service.members().members).toHaveLength(1);
+  });
+
+  test("restart with another LIFE360_SESSION_KEY: logged out (an admin logs in again), the link is kept", async () => {
+    await link();
+    await service.stop();
+    service = createService({ sessionKey: randomBytes(32).toString("base64") });
+    await service.start();
+    expect(service.status()).toEqual({ state: "loggedOut", email: EMAIL, circleName: "Jotihunt" });
+    expect(service.nextPollAt).toBeNull();
+    expect(logs.some((line) => line.includes("decrypt"))).toBe(true);
+    expect(await life360LinkModel(realDb).countDocuments()).toBe(1);
+  });
+
+  test("unlink deletes the link and clears the members; with a pending login it only cancels that login", async () => {
+    await link();
+    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"))];
+    await service.pollOnce();
+    advance(60_000);
+    await service.sendCode("ander@example.nl");
+    expect(service.status().state).toBe("code");
+
+    expect(await service.unlink()).toMatchObject({ state: "linked", circleName: "Jotihunt" });
+    expect(await life360LinkModel(realDb).countDocuments()).toBe(1);
+
+    expect(await service.unlink()).toEqual({ state: "unlinked" });
+    expect(await life360LinkModel(realDb).countDocuments()).toBe(0);
+    expect(service.members()).toEqual({ linked: false, stale: false, members: [] });
+    expect(service.nextPollAt).toBeNull();
+  });
+
+  test("a poll that was running during unlink is dropped", async () => {
+    await link();
+    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"))];
+    let release!: () => void;
+    client.hold = new Promise<void>((resolve) => (release = resolve));
+    const poll = service.pollOnce();
+    await service.unlink();
+    release();
+    await poll;
+    expect(service.members()).toEqual({ linked: false, stale: false, members: [] });
+    expect(service.nextPollAt).toBeNull();
+  });
+});
+
+describe("refresh and avatars", () => {
+  test("refresh asks every member for a fresh fix (404s ignored), at most once per minute", async () => {
+    await expect(service.refresh()).rejects.toMatchObject({ status: 409 });
+    await link();
+    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"), rawMember("m2", "Anna", ""))];
+    await service.pollOnce();
+    client.requestErrors.set("m1", new Life360NotFoundError());
+    const available = new Date(clock.getTime() + 60_000).toISOString();
+    expect(await service.refresh()).toEqual({ refreshAvailableAt: available });
+    await until(() => client.requested.length === 2);
+    expect(client.requested).toEqual(["m1", "m2"]);
+    expect(service.status()).toMatchObject({ refreshAvailableAt: available });
+    await expect(service.refresh()).rejects.toMatchObject({ status: 429 });
+    advance(60_000);
+    expect(service.status()).toMatchObject({ refreshAvailableAt: null });
+    await service.refresh();
+  });
+
+  test("avatars are proxied with a 1 hour cache; members without an avatar or unknown ids: 404", async () => {
+    await link();
+    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"), rawMember("m2", "Anna", "", { avatar: null }))];
+    await service.pollOnce();
+    const jpeg = { contentType: "image/jpeg", body: Buffer.from([0xff, 0xd8, 0xff]) };
+    client.avatars.set("https://www.life360.com/img/user_images/m1.jpg", jpeg);
+    expect(await service.avatar("m1")).toEqual(jpeg);
+    await service.avatar("m1");
+    expect(client.avatarCalls).toBe(1);
+    advance(60 * 60_000);
+    await service.avatar("m1");
+    expect(client.avatarCalls).toBe(2);
+    await expect(service.avatar("m2")).rejects.toMatchObject({ status: 404 });
+    await expect(service.avatar("nobody")).rejects.toMatchObject({ status: 404 });
+  });
+});
