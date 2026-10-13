@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import mongoose, { type Connection } from "mongoose";
 import { life360LinkModel } from "../models/life360-link.model";
 import { FakeLife360Client, TOKEN } from "../test/life360-client";
-import { FIX_TIME, rawMember } from "../test/life360-fixtures";
+import { DEVICE_FIX_ISO, FIX_ISO, FIX_TIME, rawDeviceLocation, rawMember } from "../test/life360-fixtures";
 import { Life360BlockedError, Life360CodeInvalidError, Life360NetworkError, Life360NotFoundError, Life360RateLimitedError, Life360UnauthorizedError, Life360UpstreamError } from "./life360.client";
 import type { Life360Config } from "./life360.helpers";
 import { Life360Service, type Life360ServiceOptions } from "./life360.service";
@@ -176,7 +176,7 @@ describe("pending code expiry", () => {
 });
 
 describe("polling", () => {
-  test("one members call, parsed members, etag, a full call every 5 minutes", async () => {
+  test("first poll: the roster (v3) and the positions (v5); then v5 every 30 s and the roster every 5 minutes (full call)", async () => {
     await link();
     client.memberAnswers = [
       membersAnswer(
@@ -187,7 +187,8 @@ describe("polling", () => {
       { notModified: true },
     ];
     await service.pollOnce();
-    expect(client.memberRequests[0]).toEqual({ token: TOKEN, circleId: "c1", etag: undefined });
+    expect(client.memberRequests).toEqual([{ token: TOKEN, circleId: "c1", etag: undefined }]);
+    expect(client.deviceRequests).toEqual([{ token: TOKEN, circleId: "c1" }]);
     expect(service.members().members.map((member) => [member.id, member.name, member.location !== null])).toEqual([
       ["m1", "Silke P.", true],
       ["m2", "Anna", false],
@@ -196,14 +197,20 @@ describe("polling", () => {
     expect(service.status()).toEqual({ state: "linked", email: EMAIL, circleName: "Jotihunt", memberCount: 3, liveCount: 1, lastPollAt: clock.toISOString(), refreshAvailableAt: null });
     expect(service.nextPollAt).toEqual(new Date(clock.getTime() + 30_000));
 
+    for (let i = 0; i < 9; i++) {
+      advance(30_000);
+      await service.pollOnce();
+    }
+    expect(client.memberRequests).toHaveLength(1);
+    expect(client.deviceRequests).toHaveLength(10);
+    expect(service.members().members).toHaveLength(3);
+    expect(service.nextPollAt).toEqual(new Date(clock.getTime() + 30_000));
+
     advance(30_000);
     await service.pollOnce();
-    expect(client.memberRequests[1].etag).toBe("etag-1");
-    expect(service.members().members).toHaveLength(3);
-
-    advance(5 * 60_000);
-    await service.pollOnce();
-    expect(client.memberRequests[2].etag).toBeUndefined();
+    expect(client.memberRequests).toHaveLength(2);
+    expect(client.memberRequests[1].etag).toBeUndefined();
+    expect(client.deviceRequests).toHaveLength(11);
   });
 
   test("location null while still sharing: the last known location stays; not sharing or gone from the circle: dropped", async () => {
@@ -217,7 +224,7 @@ describe("polling", () => {
     const first = service.members().members[0].location;
     expect(first).not.toBeNull();
 
-    advance(30_000);
+    advance(5 * 60_000);
     await service.pollOnce();
     expect(service.members().members.map((member) => [member.id, member.location])).toEqual([
       ["m1", first],
@@ -225,7 +232,7 @@ describe("polling", () => {
     ]);
 
     // m1 keeps the carried-over fix again; m3 came back without a fix after being gone: nothing to carry over
-    advance(30_000);
+    advance(5 * 60_000);
     await service.pollOnce();
     expect(service.members().members.map((member) => [member.id, member.location])).toEqual([
       ["m1", first],
@@ -237,7 +244,7 @@ describe("polling", () => {
     await link();
     client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon")), new Life360UnauthorizedError()];
     await service.pollOnce();
-    advance(30_000);
+    advance(5 * 60_000);
     await service.pollOnce();
     expect(service.status()).toEqual({ state: "loggedOut", email: EMAIL, circleName: "Jotihunt" });
     expect(service.members()).toMatchObject({ linked: true, stale: true });
@@ -301,7 +308,175 @@ describe("polling", () => {
     service = createService({ sessionKey: KEY }, { autoPoll: true, pollIntervalMs: 5 });
     await service.start();
     await link();
-    await until(() => client.memberRequests.length >= 3);
+    await until(() => client.deviceRequests.length >= 3);
+  });
+});
+
+describe("v5 positions", () => {
+  const at = (iso: string, seconds: number) => new Date(Date.parse(iso) + seconds * 1000).toISOString();
+  const locations = () => service.members().members.map((member) => [member.id, member.location && [member.location.lat, member.location.at]]);
+
+  test("the v5 position wins over v3; members only from the roster; liveCount uses the merged fix time", async () => {
+    await link();
+    client.memberAnswers = [
+      membersAnswer(
+        rawMember("m1", "Silke", "Pilon"),
+        rawMember("m2", "Anna", "B", { location: null }),
+        rawMember("m3", "Bram", "C", { location: { timestamp: String(FIX_TIME - 20 * 60) } }),
+        rawMember("m4", "Dirk", "D", { location: null }),
+      ),
+    ];
+    client.deviceAnswers = [[rawDeviceLocation("m1"), rawDeviceLocation("m2", { latitude: 52.2 }), rawDeviceLocation("m3", { latitude: 52.3 }), rawDeviceLocation("stranger")]];
+    await service.pollOnce();
+    expect(locations()).toEqual([
+      ["m1", [52.1, DEVICE_FIX_ISO]],
+      ["m2", [52.2, DEVICE_FIX_ISO]],
+      ["m3", [52.3, DEVICE_FIX_ISO]],
+      ["m4", null],
+    ]);
+    expect(service.status()).toMatchObject({ state: "linked", memberCount: 4, liveCount: 3 });
+  });
+
+  test("between roster calls only v5 moves members; a device missing from v5 keeps its last position, not the older v3 one", async () => {
+    await link();
+    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"), rawMember("m2", "Anna", "B"))];
+    client.deviceAnswers = [[rawDeviceLocation("m1"), rawDeviceLocation("m2")], [rawDeviceLocation("m1", { latitude: 52.5, lastObserved: at(DEVICE_FIX_ISO, 30) })]];
+    await service.pollOnce();
+    advance(30_000);
+    await service.pollOnce();
+    expect(client.memberRequests).toHaveLength(1);
+    expect(locations()).toEqual([
+      ["m1", [52.5, at(DEVICE_FIX_ISO, 30)]],
+      ["m2", [52.1, DEVICE_FIX_ISO]],
+    ]);
+  });
+
+  test("sharing turned off (seen at the next roster call): no position, even when v5 still has one", async () => {
+    await link();
+    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon")), membersAnswer(rawMember("m1", "Silke", "Pilon", { shareLocation: "0" }))];
+    client.deviceAnswers = [[rawDeviceLocation("m1")]];
+    await service.pollOnce();
+    advance(5 * 60_000);
+    await service.pollOnce();
+    expect(locations()).toEqual([["m1", null]]);
+  });
+
+  test("v5 401: logged out, no more calls", async () => {
+    await link();
+    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"))];
+    client.deviceAnswers = [new Life360UnauthorizedError()];
+    await service.pollOnce();
+    expect(service.status()).toEqual({ state: "loggedOut", email: EMAIL, circleName: "Jotihunt" });
+    expect(service.members()).toMatchObject({ stale: true });
+    expect(service.members().members).toHaveLength(1);
+    expect(service.nextPollAt).toBeNull();
+  });
+
+  test("v5 429 and 403: paused like v3 (the roster of that poll is kept); then both calls again", async () => {
+    await link();
+    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"))];
+    client.deviceAnswers = [new Life360RateLimitedError(10 * 60_000), new Life360BlockedError(), [rawDeviceLocation("m1")]];
+    await service.pollOnce();
+    const retryAt = new Date(clock.getTime() + 10 * 60_000);
+    expect(service.status()).toEqual({ state: "paused", email: EMAIL, circleName: "Jotihunt", retryAt: retryAt.toISOString(), memberCount: 1, liveCount: 1 });
+    expect(service.nextPollAt).toEqual(retryAt);
+
+    clock = retryAt;
+    await service.pollOnce();
+    expect(service.status()).toMatchObject({ state: "paused", retryAt: new Date(clock.getTime() + 5 * 60_000).toISOString() });
+
+    advance(5 * 60_000);
+    await service.pollOnce();
+    expect(service.status()).toMatchObject({ state: "linked" });
+    expect(client.memberRequests).toHaveLength(3);
+    expect(locations()).toEqual([["m1", [52.1, DEVICE_FIX_ISO]]]);
+  });
+
+  test("v5 network and unexpected errors: backoff up to 5 minutes, still linked", async () => {
+    await link();
+    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"))];
+    client.deviceAnswers = [new Life360NetworkError("ECONNRESET"), new Life360UpstreamError("Life360 answered 502", 502), new Life360NetworkError("ETIMEDOUT")];
+    const waits: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      await service.pollOnce();
+      const wait = service.nextPollAt!.getTime() - clock.getTime();
+      waits.push(wait);
+      advance(wait);
+    }
+    expect(waits).toEqual([30_000, 60_000, 120_000]);
+    expect(service.status().state).toBe("linked");
+    expect(service.members().members[0].location!.at).toBe(FIX_ISO);
+  });
+
+  test("v5 404 or 400 (endpoint gone): logged once, v3 positions every 30 s instead of pausing; v5 tried again after an hour", async () => {
+    await link();
+    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"))];
+    client.deviceAnswers = [new Life360NotFoundError()];
+    await service.pollOnce();
+    expect(service.status()).toMatchObject({ state: "linked", memberCount: 1, liveCount: 1 });
+    expect(service.nextPollAt).toEqual(new Date(clock.getTime() + 30_000));
+    expect(client.memberRequests).toHaveLength(1);
+    for (let i = 0; i < 3; i++) {
+      advance(30_000);
+      await service.pollOnce();
+    }
+    expect(client.deviceRequests).toHaveLength(1);
+    expect(client.memberRequests).toHaveLength(4);
+    expect(client.memberRequests[1].etag).toBe("etag-1");
+    expect(logs.filter((line) => line.includes("v5"))).toHaveLength(1);
+
+    client.deviceAnswers = [new Life360UpstreamError("Life360 answered 400", 400)];
+    advance(60 * 60_000);
+    await service.pollOnce();
+    expect(client.deviceRequests).toHaveLength(2);
+    expect(service.status().state).toBe("linked");
+    advance(30_000);
+    await service.pollOnce();
+    expect(client.deviceRequests).toHaveLength(2);
+    expect(logs.filter((line) => line.includes("v5"))).toHaveLength(2);
+
+    client.deviceAnswers = [[rawDeviceLocation("m1")]];
+    advance(60 * 60_000);
+    await service.pollOnce();
+    advance(30_000);
+    const rosterCalls = client.memberRequests.length;
+    await service.pollOnce();
+    expect(client.memberRequests).toHaveLength(rosterCalls);
+    expect(client.deviceRequests).toHaveLength(4);
+    expect(locations()).toEqual([["m1", [52.1, DEVICE_FIX_ISO]]]);
+  });
+
+  test("v5 gone on a poll without a roster call: the roster (v3 positions) is fetched in the same poll", async () => {
+    await link();
+    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"))];
+    client.deviceAnswers = [[], new Life360NotFoundError()];
+    await service.pollOnce();
+    advance(30_000);
+    await service.pollOnce();
+    expect(client.memberRequests).toHaveLength(2);
+    expect(service.status().state).toBe("linked");
+    expect(locations()).toEqual([["m1", [52.0907, FIX_ISO]]]);
+  });
+
+  test("a v5 call that was running during unlink is dropped", async () => {
+    await link();
+    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"))];
+    await service.pollOnce();
+    advance(30_000);
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => (release = resolve));
+    const original = client.deviceLocations.bind(client);
+    client.deviceLocations = async (token, circleId) => {
+      await hold;
+      return original(token, circleId);
+    };
+    client.deviceAnswers = [[rawDeviceLocation("m1")]];
+    const poll = service.pollOnce();
+    await service.unlink();
+    release();
+    await poll;
+    expect(service.members()).toEqual({ linked: false, stale: false, members: [] });
+    expect(service.nextPollAt).toBeNull();
   });
 });
 
@@ -443,8 +618,9 @@ describe("refresh and avatars", () => {
 
   test("logged out: avatars only from the cache (also when older than 1 h), Life360 is not called with the dead token", async () => {
     await link();
-    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"), rawMember("m2", "Anna", "")), new Life360UnauthorizedError()];
+    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"), rawMember("m2", "Anna", ""))];
     await service.pollOnce();
+    client.deviceAnswers = [new Life360UnauthorizedError()];
     const jpeg = { contentType: "image/jpeg", body: Buffer.from([0xff, 0xd8, 0xff]) };
     client.avatars.set("https://www.life360.com/img/user_images/m1.jpg", jpeg);
     client.avatars.set("https://www.life360.com/img/user_images/m2.jpg", jpeg);
@@ -461,8 +637,9 @@ describe("refresh and avatars", () => {
 
   test("paused: avatars only from the cache (whatever its age), Life360 is not called", async () => {
     await link();
-    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"), rawMember("m2", "Anna", "")), new Life360RateLimitedError(null)];
+    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"), rawMember("m2", "Anna", ""))];
     await service.pollOnce();
+    client.deviceAnswers = [new Life360RateLimitedError(null)];
     client.avatars.set(M1_AVATAR, JPEG_IMAGE);
     client.avatars.set(M2_AVATAR, JPEG_IMAGE);
     await service.avatar("m1");

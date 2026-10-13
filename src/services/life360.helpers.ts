@@ -60,12 +60,17 @@ export interface ParsedLife360Member {
 // --- Units ----------------------------------------------------------------------------------------------------------
 
 /**
- * Life360 sends `accuracy` as a string. ha-life360 converts it from feet to metres; our one real sample ("50.0") can't
+ * v3 only (v5 accuracy is taken as metres). Life360 v3 sends `accuracy` as a string. ha-life360 converts it from feet to metres; our one real sample ("50.0") can't
  * tell. The real test (compare with a known fix) is still pending: if it turns out to be metres, set this to 1.
  */
 export const ACCURACY_TO_METRES = 0.3048;
 /** `speed` is about m/s (ha-life360 multiplies by 2.25 for mph); negative means unknown. */
 export const SPEED_TO_KMH = 3.6;
+/**
+ * v5 has no isDriving flag: a device counts as driving when Life360 says inTransit, or its speed (m/s) is at least this
+ * (18 km/h: above walking and jogging, so a hunter on foot is not shown as driving; a car in town is).
+ */
+export const DRIVING_SPEED_MS = 5;
 /** A member whose last fix is at most this old counts as live (liveCount). */
 export const LIVE_WINDOW_MS = 15 * 60 * 1000;
 
@@ -161,6 +166,89 @@ export function parseMembers(list: unknown): ParsedLife360Member[] {
   return list.flatMap((value) => {
     const parsed = parseMember(value);
     return parsed ? [parsed] : [];
+  });
+}
+
+// --- v5 device locations --------------------------------------------------------------------------------------------
+
+/** One device of GET /v5/circles/devices/locations: its owner (the v3 member id) and the position. */
+export interface Life360DeviceLocation {
+  userId: string;
+  location: Life360Location;
+}
+
+function isoTime(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function parseDevice(value: unknown): Life360DeviceLocation | null {
+  const raw = record(value);
+  if (!raw) return null;
+  const owners = Array.isArray(raw.owners) ? raw.owners : [];
+  const userId = text(record(owners[0])?.userId);
+  const lat = number(raw.latitude);
+  const lon = number(raw.longitude);
+  const at = isoTime(raw.lastObserved);
+  if (!userId || lat === null || lon === null || at === null) return null;
+  if (Math.abs(lat) > 90 || Math.abs(lon) > 180 || (lat === 0 && lon === 0)) return null;
+  // v5 sends numbers; accuracy is taken as metres (the app shows the same 50 as v3's "50.0", which ha-life360 reads as feet)
+  const accuracy = number(raw.accuracy);
+  const speed = number(raw.speed);
+  const battery = number(raw.batteryLevel);
+  return {
+    userId,
+    location: {
+      lat,
+      lon,
+      accuracyM: accuracy !== null && accuracy > 0 ? Math.round(accuracy) : 0,
+      at,
+      driving: raw.inTransit === true || (speed !== null && speed >= DRIVING_SPEED_MS),
+      speedKmh: speed !== null && speed >= 0 ? Math.round(speed * SPEED_TO_KMH) : null,
+      battery: battery !== null && battery >= 0 ? Math.min(Math.round(battery), 100) : null,
+      charging: raw.batteryCharging === true,
+    },
+  };
+}
+
+/**
+ * The items of GET /v5/circles/devices/locations (the array, or the whole `{data:{items}}` answer), one entry per device
+ * with a usable fix. Only the position fields come out (no device ids, wifi or app details).
+ */
+export function parseDeviceLocations(raw: unknown): Life360DeviceLocation[] {
+  const items = Array.isArray(raw) ? raw : record(record(raw)?.data)?.items;
+  if (!Array.isArray(items)) return [];
+  return items.flatMap((item) => {
+    const parsed = parseDevice(item);
+    return parsed ? [parsed] : [];
+  });
+}
+
+/** One position per member: with several devices, the one with the most recent lastObserved. */
+export function latestByUser(devices: Life360DeviceLocation[]): Map<string, Life360Location> {
+  const byUser = new Map<string, Life360Location>();
+  for (const { userId, location } of devices) {
+    const current = byUser.get(userId);
+    if (!current || Date.parse(location.at) > Date.parse(current.at)) byUser.set(userId, location);
+  }
+  return byUser;
+}
+
+/**
+ * The members of the v3 roster with their position: the v5 position when there is one; else the v3 position; else the
+ * last known position (`previous`) while the member still shares (Life360 sometimes answers no position for minutes).
+ * A v3 position older than the last known one is skipped, so a member never jumps back in time. Not sharing: null.
+ */
+export function mergeLocations(roster: ParsedLife360Member[], devices: Map<string, Life360Location>, previous: Map<string, Life360Location | null>): Life360Member[] {
+  return roster.map(({ member, sharing }) => {
+    if (!sharing) return { ...member, location: null };
+    const v5 = devices.get(member.id);
+    if (v5) return { ...member, location: v5 };
+    const known = previous.get(member.id) ?? null;
+    const v3 = member.location;
+    if (v3 && (!known || Date.parse(v3.at) >= Date.parse(known.at))) return member;
+    return { ...member, location: known };
   });
 }
 

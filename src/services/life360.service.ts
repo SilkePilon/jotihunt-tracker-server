@@ -3,7 +3,18 @@ import type { Connection, Model } from "mongoose";
 import { ServiceError } from "../http/service-error";
 import { LIFE360_LINK_KEY, life360LinkModel, type Life360LinkDoc } from "../models/life360-link.model";
 import { Life360BlockedError, Life360CodeInvalidError, Life360NotFoundError, Life360RateLimitedError, Life360UnauthorizedError, Life360UpstreamError, type Life360Api } from "./life360.client";
-import { liveCount, parseMembers, type Life360AdminStatus, type Life360Circle, type Life360Config, type Life360Member, type Life360Members } from "./life360.helpers";
+import {
+  latestByUser,
+  liveCount,
+  mergeLocations,
+  parseMembers,
+  type Life360AdminStatus,
+  type Life360Circle,
+  type Life360Config,
+  type Life360Member,
+  type Life360Members,
+  type ParsedLife360Member,
+} from "./life360.helpers";
 import { decryptSession, encryptSession } from "./telegram.helpers";
 
 export interface Life360Logger {
@@ -41,6 +52,10 @@ export const PAUSE_MIN_MS = 5 * 60_000;
 export const BLOCKED_PAUSE_MS = 5 * 60_000;
 export const BACKOFF_INITIAL_MS = 30_000;
 export const BACKOFF_MAX_MS = 5 * 60_000;
+/** The v3 roster (names, avatars, sharing) at most this often; positions come from v5 every poll */
+export const ROSTER_INTERVAL_MS = 5 * 60_000;
+/** After v5 answered 404/400 (endpoint gone?): v3 positions only, v5 tried again after this */
+export const V5_RETRY_MS = 60 * 60_000;
 /** A members call without if-none-match at least this often: some accounts get endless 304s (ha-life360 #98) */
 export const FULL_POLL_MS = 5 * 60_000;
 export const AVATAR_CACHE_MS = 60 * 60_000;
@@ -90,8 +105,10 @@ interface CachedAvatar {
 }
 
 /**
- * The team's Life360 circle: an admin links a (dedicated) Life360 account by e-mail code, the server polls the circle's
- * members every 30 s (one call, if-none-match) and keeps the latest members in memory only. One poller per server process
+ * The team's Life360 circle: an admin links a (dedicated) Life360 account by e-mail code. Every 30 s the server reads the
+ * circle's device positions (v5, one call); the roster (v3 members: names, avatars, sharing) only every 5 min. v3 started
+ * answering location null for sharing members (2026-10-13) while v5 stayed fresh; when v5 answers 404/400 the server falls
+ * back to v3 positions (members call every poll, if-none-match). The latest members live in memory only. One poller per server process
  * (the server runs as a single replica).
  *
  * States: unavailable (no key) · unlinked · code (waiting for the 6 digits) · circle (pick one of several) · linked ·
@@ -107,6 +124,11 @@ export class Life360Service {
   private phase: "linked" | "loggedOut" | "paused" = "linked";
   private retryAt: Date | null = null;
   private memberList: Life360Member[] = [];
+  /** The latest v3 roster (with its v3 positions and sharing flags); memberList is this merged with the positions */
+  private roster: ParsedLife360Member[] = [];
+  private lastRosterAt: Date | null = null;
+  /** Set while v5 is unusable (404/400): v3 positions only until then */
+  private v5RetryAt: Date | null = null;
   private avatarSources = new Map<string, string>();
   private readonly avatarCache = new Map<string, CachedAvatar>();
   /** Failed fetches by member id (not retried until `until`) */
@@ -134,7 +156,7 @@ export class Life360Service {
     return this.options.config !== null;
   }
 
-  /** When the next members call is due (null: not polling). */
+  /** When the next poll is due (null: not polling). */
   get nextPollAt(): Date | null {
     return this.scheduledAt;
   }
@@ -303,6 +325,7 @@ export class Life360Service {
       this.backoffMs = 0;
       this.lastPollAt = null;
       this.refreshAvailableAt = null;
+      this.v5RetryAt = null;
       this.clearMembers();
       this.options.logger.info("Life360 unlinked");
       return this.status();
@@ -349,27 +372,34 @@ export class Life360Service {
     throw new ServiceError(fetched, fetched === 404 ? NO_AVATAR : AVATAR_UNAVAILABLE);
   }
 
-  /** One members call and its consequences; never throws. Called by the timer (and by tests). */
+  /** One poll (roster when due, then the v5 positions) and its consequences; never throws. Called by the timer (and by tests). */
   async pollOnce(): Promise<void> {
     const link = this.link;
     if (this.stopped || !link?.token || this.phase === "loggedOut") return;
+    const token = link.token;
     const generation = this.generation;
     const started = this.now();
-    const full = !this.lastFullPollAt || started.getTime() - this.lastFullPollAt.getTime() >= FULL_POLL_MS;
     try {
-      const result = await this.options.client.members(link.token, link.circleId, full ? undefined : (this.etag ?? undefined));
-      if (generation !== this.generation) return;
-      if (!result.notModified) {
-        const parsed = parseMembers(result.members);
-        // Life360 sometimes answers location null for minutes while a member still shares: keep their last known fix
-        // (the client greys it out once it is old). Not sharing, or gone from the circle: no carry-over.
-        const previous = new Map(this.memberList.map((member) => [member.id, member.location]));
-        this.memberList = parsed.map(({ member, sharing }) => (member.location || !sharing ? member : { ...member, location: previous.get(member.id) ?? null }));
-        this.avatarSources = new Map(parsed.flatMap((entry) => (entry.avatarSource ? [[entry.member.id, entry.avatarSource] as const] : [])));
-        for (const id of [...this.avatarCache.keys()]) if (!this.avatarSources.has(id)) this.avatarCache.delete(id);
-        for (const id of [...this.avatarFailures.keys()]) if (!this.avatarSources.has(id)) this.avatarFailures.delete(id);
-        this.etag = result.etag;
-        if (full) this.lastFullPollAt = started;
+      const useV5 = !this.v5RetryAt || started >= this.v5RetryAt;
+      let rosterFetched = false;
+      if (!useV5 || !this.lastRosterAt || started.getTime() - this.lastRosterAt.getTime() >= ROSTER_INTERVAL_MS) {
+        if (!(await this.fetchRoster(token, link.circleId, started, generation))) return;
+        rosterFetched = true;
+      }
+      if (useV5) {
+        try {
+          const devices = await this.options.client.deviceLocations(token, link.circleId);
+          if (generation !== this.generation) return;
+          this.memberList = mergeLocations(this.roster, latestByUser(devices), this.lastLocations());
+          if (this.v5RetryAt) this.options.logger.info("Life360 v5 device locations answer again");
+          this.v5RetryAt = null;
+        } catch (error) {
+          const gone = error instanceof Life360NotFoundError || (error instanceof Life360UpstreamError && error.status === 400);
+          if (!gone || generation !== this.generation) throw error;
+          this.v5RetryAt = new Date(started.getTime() + V5_RETRY_MS);
+          this.options.logger.warn(`Life360 v5 device locations unavailable (${describeError(error)}), using v3 positions until ${this.v5RetryAt.toISOString()}`);
+          if (!rosterFetched && !(await this.fetchRoster(token, link.circleId, started, generation))) return;
+        }
       }
       if (this.phase === "paused") this.options.logger.info("Life360 polling resumed");
       this.phase = "linked";
@@ -485,12 +515,43 @@ export class Life360Service {
     }
     this.etag = null;
     this.lastFullPollAt = null;
+    this.lastRosterAt = null;
+    this.v5RetryAt = null;
     this.options.logger.info(`Life360 linked to circle ${circle.name} (${linkedBy ?? "unknown admin"})`);
     this.schedule(0);
   }
 
+  /**
+   * One v3 members call (if-none-match, a full call every 5 min): the roster, its avatars and the v3 positions merged with
+   * the last known ones. False when the link changed meanwhile (the answer is dropped).
+   */
+  private async fetchRoster(token: string, circleId: string, started: Date, generation: number): Promise<boolean> {
+    const full = !this.lastFullPollAt || started.getTime() - this.lastFullPollAt.getTime() >= FULL_POLL_MS;
+    const result = await this.options.client.members(token, circleId, full ? undefined : (this.etag ?? undefined));
+    if (generation !== this.generation) return false;
+    if (!result.notModified) {
+      this.roster = parseMembers(result.members);
+      // Life360 sometimes answers location null for minutes while a member still shares: the last known fix stays (the
+      // client greys it out once it is old). Not sharing, or gone from the circle: no carry-over.
+      this.memberList = mergeLocations(this.roster, new Map(), this.lastLocations());
+      this.avatarSources = new Map(this.roster.flatMap((entry) => (entry.avatarSource ? [[entry.member.id, entry.avatarSource] as const] : [])));
+      for (const id of [...this.avatarCache.keys()]) if (!this.avatarSources.has(id)) this.avatarCache.delete(id);
+      for (const id of [...this.avatarFailures.keys()]) if (!this.avatarSources.has(id)) this.avatarFailures.delete(id);
+      this.etag = result.etag;
+      if (full) this.lastFullPollAt = started;
+    }
+    this.lastRosterAt = started;
+    return true;
+  }
+
+  private lastLocations() {
+    return new Map(this.memberList.map((member) => [member.id, member.location]));
+  }
+
   private clearMembers() {
     this.memberList = [];
+    this.roster = [];
+    this.lastRosterAt = null;
     this.avatarSources = new Map();
     this.avatarCache.clear();
     this.avatarFailures.clear();

@@ -15,6 +15,7 @@ import {
   type Life360HttpRequest,
   type Life360Transport,
 } from "./life360.client";
+import { DEVICE_FIX_ISO, rawDeviceLocation } from "../test/life360-fixtures";
 
 const DEVICE = "0F8E2C3A-1111-2222-3333-444455556666";
 const ANDROID_UA = "com.life360.android.safetymapd/KOKO/23.50.0 android/13";
@@ -139,6 +140,53 @@ describe("data", () => {
     expect(await client.members("tok", "c1", "v1")).toEqual({ notModified: true });
     expect(requests[1].headers["if-none-match"]).toBe("v1");
     expect(await failure(client.members("tok", "c1"))).toBeInstanceOf(Life360UpstreamError);
+  });
+
+  test("deviceLocations (v5): providers query, circleid and CloudEvents headers, Bearer + Android UA; parsed items", async () => {
+    const { client, requests } = fakeTransport({ json: { data: { items: [rawDeviceLocation("m1"), { owners: [] }] } } });
+    expect(await client.deviceLocations("tok", "c/1")).toEqual([
+      { userId: "m1", location: { lat: 52.1, lon: 5.2, accuracyM: 20, at: DEVICE_FIX_ISO, driving: false, speedKmh: 0, battery: 77, charging: false } },
+    ]);
+    const [request] = requests;
+    expect(request).toMatchObject({ method: "GET", url: "https://api-cloudfront.life360.com/v5/circles/devices/locations?providers[]=life360&providers[]=jiobit&providers[]=tile" });
+    expect(request.headers).toMatchObject({
+      accept: "application/json",
+      "cache-control": "no-cache",
+      authorization: "Bearer tok",
+      "user-agent": ANDROID_UA,
+      circleid: "c/1",
+      "ce-specversion": "1.0",
+      "ce-type": "com.life360.cloud.platform.devices.locations.v1",
+    });
+    expect(request.headers["ce-id"]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(request.headers["ce-source"]).toMatch(/^\/ANDROID\/13\/Pixel\/[0-9a-f-]{36}$/);
+    expect(new Date(request.headers["ce-time"]).toISOString()).toBe(request.headers["ce-time"]);
+  });
+
+  test("deviceLocations errors: 401, 429, 403 Cloudflare HTML, 404, 400, no items; never the token in a message", async () => {
+    const { client } = fakeTransport(
+      { status: 401, json: {} },
+      { status: 429, headers: { "retry-after": "60" }, body: "" },
+      { status: 403, headers: { "content-type": "text/html" }, body: "<!DOCTYPE html>blocked" },
+      { status: 404, json: {} },
+      { status: 400, json: { error: { code: "syntax" } } },
+      { json: { data: {} } },
+      new Error("socket hang up"),
+    );
+    const errors = [];
+    for (let i = 0; i < 7; i++) errors.push(await failure(client.deviceLocations("secret-token", "c1")));
+    expect(errors.map((error) => (error as Error).constructor)).toEqual([
+      Life360UnauthorizedError,
+      Life360RateLimitedError,
+      Life360BlockedError,
+      Life360NotFoundError,
+      Life360UpstreamError,
+      Life360UpstreamError,
+      Life360NetworkError,
+    ]);
+    expect((errors[1] as Life360RateLimitedError).retryAfterMs).toBe(60_000);
+    expect((errors[4] as Life360UpstreamError).status).toBe(400);
+    for (const error of errors) expect((error as Error).message).not.toContain("secret-token");
   });
 
   test("requestLocation: form body type=location", async () => {

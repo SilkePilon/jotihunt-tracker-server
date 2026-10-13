@@ -63,3 +63,35 @@ export function rawMember(id: string, firstName: string, lastName: string, optio
     medical: null,
   };
 }
+
+/** lastObserved of rawDeviceLocation: 30 s after FIX_TIME */
+export const DEVICE_FIX_ISO = "2026-10-15T12:00:30.000Z";
+
+/**
+ * One item of GET /v5/circles/devices/locations with every key the real account saw (2026-10-13); typed values, ISO times.
+ * Fake coordinates (not the v3 fixture's, so tests can tell the sources apart).
+ */
+export function rawDeviceLocation(userId: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    deviceId: `android-${userId}`,
+    latitude: 52.1,
+    longitude: 5.2,
+    accuracy: 20,
+    firstObserved: "2026-10-15T09:00:00.000Z",
+    lastObserved: DEVICE_FIX_ISO,
+    batteryLevel: 77,
+    batteryCharging: false,
+    wifiConnected: true,
+    speed: 0,
+    inTransit: false,
+    userActivity: "unknown",
+    updated: "2026-10-15T12:00:31.112Z",
+    state: { wifi: { time: DEVICE_FIX_ISO, connected: true } },
+    owners: [{ userId }],
+    provider: "life360",
+    type: "phone",
+    os: "android",
+    appVersion: "26.38.0K build 2926490",
+    ...overrides,
+  };
+}

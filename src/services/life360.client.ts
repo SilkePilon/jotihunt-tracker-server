@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import http from "node:http";
 import https from "node:https";
-import type { Life360Circle } from "./life360.helpers";
+import { parseDeviceLocations, type Life360Circle, type Life360DeviceLocation } from "./life360.helpers";
 
 /**
  * Thin client for Life360's unofficial mobile API. The headers are those of the proven test login (2026-10-13,
@@ -228,6 +228,18 @@ function dataHeaders(token: string): Record<string, string> {
   return { accept: "application/json", "cache-control": "no-cache", authorization: `Bearer ${token}`, "user-agent": ANDROID_USER_AGENT };
 }
 
+/** Extra headers of the v5 device-locations call (the Android app's, verified on a real account 2026-10-13) */
+function deviceLocationHeaders(circleId: string): Record<string, string> {
+  return {
+    circleid: circleId,
+    "ce-specversion": "1.0",
+    "ce-id": randomUUID(),
+    "ce-time": new Date().toISOString(),
+    "ce-type": "com.life360.cloud.platform.devices.locations.v1",
+    "ce-source": `/ANDROID/13/Pixel/${randomUUID()}`,
+  };
+}
+
 const AVATAR_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const MAX_AVATAR_REDIRECTS = 2;
@@ -258,6 +270,8 @@ export interface Life360Api {
   /** Heavily rate-limited at Life360: only while linking, never in the poll loop */
   circles(token: string): Promise<Life360Circle[]>;
   members(token: string, circleId: string, etag?: string): Promise<Life360MembersResult>;
+  /** Positions of every device in the circle (v5): one call, fresh even when v3 answers location null */
+  deviceLocations(token: string, circleId: string): Promise<Life360DeviceLocation[]>;
   requestLocation(token: string, circleId: string, memberId: string): Promise<void>;
   /** Public URLs: no token */
   avatar(url: string): Promise<{ contentType: string; body: Buffer }>;
@@ -321,6 +335,20 @@ export class Life360Client implements Life360Api {
     const list = at(parseJson(response.body), "members");
     if (!Array.isArray(list)) throw new Life360UpstreamError("Unexpected members answer", response.status);
     return { notModified: false, etag: nonEmpty(response.headers["l360-etag"]), members: list };
+  }
+
+  async deviceLocations(token: string, circleId: string): Promise<Life360DeviceLocation[]> {
+    const response = await this.call(
+      {
+        method: "GET",
+        url: `${this.baseUrl}/v5/circles/devices/locations?providers[]=life360&providers[]=jiobit&providers[]=tile`,
+        headers: { ...dataHeaders(token), ...deviceLocationHeaders(circleId) },
+      },
+      "data",
+    );
+    const json = parseJson(response.body);
+    if (!Array.isArray(at(json, "data", "items"))) throw new Life360UpstreamError("Unexpected device locations answer", response.status);
+    return parseDeviceLocations(json);
   }
 
   async requestLocation(token: string, circleId: string, memberId: string): Promise<void> {

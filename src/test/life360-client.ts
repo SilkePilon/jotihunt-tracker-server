@@ -1,5 +1,5 @@
 import { Life360NotFoundError, type Life360Api, type Life360MembersResult } from "../services/life360.client";
-import type { Life360Circle } from "../services/life360.helpers";
+import { parseDeviceLocations, type Life360Circle, type Life360DeviceLocation } from "../services/life360.helpers";
 
 /** The access token the fake hands out (secret in real life) */
 export const TOKEN = "life360-token-secret";
@@ -16,6 +16,9 @@ export class FakeLife360Client implements Life360Api {
   /** Answers of members(), in order; the last one repeats. Empty: no members. */
   memberAnswers: (Life360MembersResult | Error)[] = [];
   memberRequests: { token: string; circleId: string; etag: string | undefined }[] = [];
+  /** Answers of deviceLocations() (raw v5 items, parsed like the real client), in order; the last one repeats. Empty: no devices. */
+  deviceAnswers: (unknown[] | Error)[] = [];
+  deviceRequests: { token: string; circleId: string }[] = [];
   /** When set, members() waits for it before answering */
   hold: Promise<void> | null = null;
   /** When set, me() waits for it before answering (a login step in progress) */
@@ -62,6 +65,14 @@ export class FakeLife360Client implements Life360Api {
     if (!answer) return { notModified: false, etag: null, members: [] };
     if (answer instanceof Error) throw answer;
     return answer;
+  }
+
+  async deviceLocations(token: string, circleId: string): Promise<Life360DeviceLocation[]> {
+    this.deviceRequests.push({ token, circleId });
+    const answer = this.deviceAnswers.length > 1 ? this.deviceAnswers.shift()! : this.deviceAnswers[0];
+    if (!answer) return [];
+    if (answer instanceof Error) throw answer;
+    return parseDeviceLocations(answer);
   }
 
   async requestLocation(_token: string, _circleId: string, memberId: string) {
