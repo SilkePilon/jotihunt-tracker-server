@@ -305,6 +305,20 @@ describe("restart and unlink", () => {
     expect(service.nextPollAt).toBeNull();
   });
 
+  test("unlink while a login step is running: 409 busy, so the database and memory never disagree", async () => {
+    await service.sendCode(EMAIL);
+    let release!: () => void;
+    client.meHold = new Promise<void>((resolve) => (release = resolve));
+    const verify = service.verifyCode("123456", "Admin");
+    await until(() => client.calls.some((call) => call.startsWith("me ")));
+    await expect(service.unlink()).rejects.toMatchObject({ status: 409 });
+    release();
+    expect((await verify).state).toBe("linked");
+    expect(await life360LinkModel(realDb).countDocuments()).toBe(1);
+    expect(await service.unlink()).toEqual({ state: "unlinked" });
+    expect(await life360LinkModel(realDb).countDocuments()).toBe(0);
+  });
+
   test("a poll that was running during unlink is dropped", async () => {
     await link();
     client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"))];
@@ -351,5 +365,23 @@ describe("refresh and avatars", () => {
     expect(client.avatarCalls).toBe(2);
     await expect(service.avatar("m2")).rejects.toMatchObject({ status: 404 });
     await expect(service.avatar("nobody")).rejects.toMatchObject({ status: 404 });
+  });
+
+  test("logged out: avatars only from the cache (also when older than 1 h), Life360 is not called with the dead token", async () => {
+    await link();
+    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"), rawMember("m2", "Anna", "")), new Life360UnauthorizedError()];
+    await service.pollOnce();
+    const jpeg = { contentType: "image/jpeg", body: Buffer.from([0xff, 0xd8, 0xff]) };
+    client.avatars.set("https://www.life360.com/img/user_images/m1.jpg", jpeg);
+    client.avatars.set("https://www.life360.com/img/user_images/m2.jpg", jpeg);
+    await service.avatar("m1");
+    advance(30_000);
+    await service.pollOnce();
+    expect(service.status().state).toBe("loggedOut");
+
+    advance(2 * 60 * 60_000);
+    expect(await service.avatar("m1")).toEqual(jpeg);
+    await expect(service.avatar("m2")).rejects.toMatchObject({ status: 404 });
+    expect(client.avatarCalls).toBe(1);
   });
 });

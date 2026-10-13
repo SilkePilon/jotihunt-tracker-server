@@ -265,27 +265,32 @@ export class Life360Service {
     return { refreshAvailableAt: this.refreshAvailableAt.toISOString() };
   }
 
-  /** Cancel a pending login; without one, delete the link and forget the members. */
+  /**
+   * Cancel a pending login; without one, delete the link and forget the members. Runs under the login lock (409 while a
+   * login step is running), so a login that saves its link can't race the delete and leave the database and memory apart.
+   */
   async unlink(): Promise<Life360AdminStatus> {
     this.requireConfig();
-    if (this.pending || this.choosing) {
-      this.pending = null;
-      this.choosing = null;
-      this.options.logger.info("Life360 login cancelled");
+    return this.exclusive(async () => {
+      if (this.pending || this.choosing) {
+        this.pending = null;
+        this.choosing = null;
+        this.options.logger.info("Life360 login cancelled");
+        return this.status();
+      }
+      this.generation++;
+      this.clearTimer();
+      await this.links.deleteOne({ key: LIFE360_LINK_KEY });
+      this.link = null;
+      this.phase = "linked";
+      this.retryAt = null;
+      this.backoffMs = 0;
+      this.lastPollAt = null;
+      this.refreshAvailableAt = null;
+      this.clearMembers();
+      this.options.logger.info("Life360 unlinked");
       return this.status();
-    }
-    this.generation++;
-    this.clearTimer();
-    await this.links.deleteOne({ key: LIFE360_LINK_KEY });
-    this.link = null;
-    this.phase = "linked";
-    this.retryAt = null;
-    this.backoffMs = 0;
-    this.lastPollAt = null;
-    this.refreshAvailableAt = null;
-    this.clearMembers();
-    this.options.logger.info("Life360 unlinked");
-    return this.status();
+    });
   }
 
   /** The latest members (memory only). `stale` while logged out or paused: these are the last known positions. */
@@ -294,7 +299,10 @@ export class Life360Service {
     return { linked: true, stale: this.phase !== "linked", members: this.memberList };
   }
 
-  /** The avatar of a member, fetched from Life360 by the server (cached 1 h) so browsers never contact Life360. */
+  /**
+   * The avatar of a member, fetched from Life360 by the server (cached 1 h) so browsers never contact Life360. While logged
+   * out the token is dead: only the cache (whatever its age) is served.
+   */
   async avatar(memberId: string): Promise<{ contentType: string; body: Buffer }> {
     const source = this.avatarSources.get(memberId);
     const token = this.link?.token;
@@ -302,7 +310,8 @@ export class Life360Service {
     const now = this.now().getTime();
     const cached = this.avatarCache.get(memberId);
     const usable = cached && cached.source === source ? cached : null;
-    if (usable && now - usable.fetchedAt < AVATAR_CACHE_MS) return { contentType: usable.contentType, body: usable.body };
+    if (usable && (this.phase === "loggedOut" || now - usable.fetchedAt < AVATAR_CACHE_MS)) return { contentType: usable.contentType, body: usable.body };
+    if (this.phase === "loggedOut") throw new ServiceError(404, "Geen foto.");
     try {
       const image = await this.options.client.avatar(source, token);
       this.avatarCache.set(memberId, { source, contentType: image.contentType, body: image.body, fetchedAt: now });

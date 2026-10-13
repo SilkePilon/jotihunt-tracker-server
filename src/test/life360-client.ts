@@ -18,6 +18,8 @@ export class FakeLife360Client implements Life360Api {
   memberRequests: { token: string; circleId: string; etag: string | undefined }[] = [];
   /** When set, members() waits for it before answering */
   hold: Promise<void> | null = null;
+  /** When set, me() waits for it before answering (a login step in progress) */
+  meHold: Promise<void> | null = null;
   requested: string[] = [];
   requestErrors = new Map<string, Error>();
   /** Avatar images by Life360 URL; unknown URLs: NotFound */
@@ -38,6 +40,7 @@ export class FakeLife360Client implements Life360Api {
 
   async me(token: string) {
     this.calls.push(`me ${token}`);
+    if (this.meHold) await this.meHold;
     if (this.meError) throw this.meError;
     return { email: this.email };
   }
