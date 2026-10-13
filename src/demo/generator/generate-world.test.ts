@@ -72,6 +72,8 @@ beforeAll(async () => {
     await db.dropDatabase();
     await db.collection("teams").insertMany(seedTeams());
     await db.collection("users").insertOne({ name: "HQ", admin: true });
+    // A real hunter who happens to share a demo hunter's name: must stay in the demo database (else locked out)
+    await db.collection("users").insertOne({ name: DEMO_HUNTERS[0].name, admin: false, webauthnUserId: "real-namesake" });
   });
   installDemoWorld();
   await initDemoMode(realUri);
@@ -136,8 +138,9 @@ describe("demo world generator (full run)", () => {
     expect(await Marker.countDocuments({ type: MarkerType.Hunt })).toBe(10);
     expect(await Marker.countDocuments({ time: { $gt: now } })).toBe(0);
 
-    // Users: the copied real user + 8 demo hunters with trackers
-    expect(await User.countDocuments()).toBe(9);
+    // Users: the 2 copied real users + 8 demo hunters with trackers
+    expect(await User.countDocuments()).toBe(10);
+    expect(await User.countDocuments({ webauthnUserId: "real-namesake", name: DEMO_HUNTERS[0].name })).toBe(1);
     const hunters = await User.find({ "tracker.deviceId": { $gte: 900001 } }).lean();
     expect(hunters.map((user) => user.name).sort()).toEqual(DEMO_HUNTERS.map((hunter) => hunter.name).sort());
     expect(hunters.every((user) => !user.admin)).toBe(true);
@@ -165,7 +168,7 @@ describe("demo world generator (full run)", () => {
     // The real database is untouched: no areas assigned, no demo users
     await withRealDb(async (db) => {
       expect(await db.collection("teams").countDocuments({ area: { $exists: true } })).toBe(0);
-      expect(await db.collection("users").countDocuments()).toBe(1);
+      expect(await db.collection("users").countDocuments()).toBe(2);
       expect(await db.collection("articles").countDocuments()).toBe(0);
     });
   }, 60_000);

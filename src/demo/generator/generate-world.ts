@@ -80,7 +80,8 @@ async function createDemoUsers() {
     admin: false,
     tracker: { deviceId: DEMO_DEVICE_ID_BASE + index, uniqueId: `demo-${hunter.name.toLowerCase()}`, vehicle: hunter.vehicle },
   }));
-  await User.deleteMany({ name: { $in: docs.map((doc) => doc.name) }, admin: false });
+  // Only earlier demo hunters (by their demo tracker id): the copied real users may share a demo hunter's name
+  await User.deleteMany({ "tracker.uniqueId": { $in: docs.map((doc) => doc.tracker.uniqueId) } });
   return User.insertMany(docs);
 }
 
