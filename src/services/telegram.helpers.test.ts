@@ -8,7 +8,7 @@ import {
   decodeSessionKey,
   decryptSession,
   encryptSession,
-  isBotSender,
+  isBotMessage,
   maskPhone,
   parseCounterHuntDirection,
 } from "./telegram.helpers";
@@ -23,6 +23,15 @@ describe("classifyBotMessage", () => {
     expect(classifyBotMessage("Jullie inzending is ontvangen")).toBe("assignment");
     expect(classifyBotMessage("Het is Happy Hour! Dubbele punten")).toBe("happy-hour");
     expect(classifyBotMessage("Welkom bij de Jotihunt")).toBe("other");
+  });
+  test("a tegenhunt only when it looks like a start", () => {
+    expect(classifyBotMessage("Happy hour van 21:00 tot 22:00! Hunts tellen dubbel, tegenhunts niet.")).toBe("happy-hour");
+    expect(classifyBotMessage("Jullie tegenhunt is goedgekeurd")).toBe("hunt-approved");
+    expect(classifyBotMessage("Jullie tegenhunt is afgekeurd")).toBe("hunt-rejected");
+    expect(classifyBotMessage("Lees de regels over de tegenhunt")).toBe("other");
+    expect(classifyBotMessage("Tegenhunt! Windrichting: Z")).toBe("tegenhunt");
+    expect(classifyBotMessage("De tegenhunt begint om 21:14")).toBe("tegenhunt");
+    expect(classifyBotMessage("Tegenhunt: jullie hebben 30 minuten")).toBe("tegenhunt");
   });
 });
 
@@ -54,6 +63,16 @@ describe("parseCounterHuntDirection", () => {
     expect(parseCounterHuntDirection("Tegenhunt, kom uit Z")).toBe(180);
     expect(parseCounterHuntDirection("tegenhunt windrichting: zw")).toBe(225);
     expect(parseCounterHuntDirection("tegenhunt richting o")).toBe(90);
+  });
+  test("the word after (wind)richting / (van)uit het wins over other compass words", () => {
+    expect(parseCounterHuntDirection("Tegenhunt vanuit Arnhem-Zuid, windrichting noordoost")).toBe(45);
+    expect(parseCounterHuntDirection("Tegenhunt bij Zuid-Holland, uit het westen")).toBe(270);
+    expect(parseCounterHuntDirection("Oost-Gelre: tegenhunt, richting ZW")).toBe(225);
+  });
+  test("conflicting directions give null", () => {
+    expect(parseCounterHuntDirection("Tegenhunt, windrichting noord of windrichting zuid")).toBeNull();
+    expect(parseCounterHuntDirection("Tegenhunt: noord en zuid")).toBeNull();
+    expect(parseCounterHuntDirection("Tegenhunt windrichting noord, kom uit het noorden")).toBe(0);
   });
   test("no direction", () => {
     expect(parseCounterHuntDirection("Er is een tegenhunt gestart! Zoek de sticker.")).toBeNull();
@@ -95,11 +114,14 @@ describe("maskPhone", () => {
   });
 });
 
-describe("isBotSender", () => {
-  test("case-insensitive, with or without @", () => {
-    expect(isBotSender("jotihunt_BOT", "@Jotihunt_bot")).toBe(true);
-    expect(isBotSender("someone", "Jotihunt_bot")).toBe(false);
-    expect(isBotSender(undefined, "Jotihunt_bot")).toBe(false);
+describe("isBotMessage", () => {
+  const message = { senderUsername: "jotihunt_BOT", senderIsBot: true, privateChat: true };
+  test("the bot's username (case-insensitive, with or without @), a bot, in the private chat with it", () => {
+    expect(isBotMessage(message, "@Jotihunt_bot")).toBe(true);
+    expect(isBotMessage({ ...message, senderUsername: "someone" }, "Jotihunt_bot")).toBe(false);
+    expect(isBotMessage({ ...message, senderUsername: undefined }, "Jotihunt_bot")).toBe(false);
+    expect(isBotMessage({ ...message, senderIsBot: false }, "Jotihunt_bot")).toBe(false);
+    expect(isBotMessage({ ...message, privateChat: false }, "Jotihunt_bot")).toBe(false);
   });
 });
 

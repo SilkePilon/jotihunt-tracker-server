@@ -1,8 +1,9 @@
 import { MemoryStorage, TelegramClient, tl, type Message } from "@mtcute/bun";
+import { logger } from "../logger";
 import { SessionRevokedError, WrongPasswordError, type TelegramConfig, type TelegramGateway, type TelegramIncomingMessage } from "./telegram.service";
 
 /** RPC errors that mean the session is gone for good (logged out elsewhere, account deleted or banned). */
-const REVOKED_ERRORS = new Set(["AUTH_KEY_UNREGISTERED", "SESSION_REVOKED", "SESSION_EXPIRED", "USER_DEACTIVATED", "USER_DEACTIVATED_BAN", "AUTH_KEY_INVALID"]);
+const REVOKED_ERRORS = new Set(["AUTH_KEY_UNREGISTERED", "SESSION_REVOKED", "SESSION_EXPIRED", "USER_DEACTIVATED", "USER_DEACTIVATED_BAN", "AUTH_KEY_INVALID", "AUTH_KEY_DUPLICATED"]);
 const isRevoked = (error: unknown) => tl.RpcError.is(error) && REVOKED_ERRORS.has(error.text);
 
 /**
@@ -25,12 +26,18 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-const usernameOf = (message: Message) => {
-  const sender = message.sender;
-  return "username" in sender ? (sender.username ?? undefined) : undefined;
+const toIncoming = (message: Message): TelegramIncomingMessage => {
+  const { sender, chat } = message;
+  return {
+    id: message.id,
+    senderUsername: "username" in sender ? (sender.username ?? undefined) : undefined,
+    senderIsBot: sender.type === "user" && sender.isBot,
+    // A private chat is the chat with the sender itself (not a group or channel the bot posts in)
+    privateChat: chat.type === "user" && chat.id === sender.id,
+    text: message.text ?? "",
+    date: message.date,
+  };
 };
-
-const toIncoming = (message: Message): TelegramIncomingMessage => ({ id: message.id, senderUsername: usernameOf(message), text: message.text ?? "", date: message.date });
 
 /**
  * TelegramGateway on mtcute: an in-memory storage (the session lives encrypted in Mongo, see telegram.service.ts),
@@ -57,6 +64,11 @@ export class MtcuteTelegramGateway implements TelegramGateway {
       storage: new MemoryStorage(),
       logLevel: MTCUTE_LOG_WARN,
       initConnectionOptions: { deviceModel: "Jotihunt tracker", appVersion: "1.0" },
+    });
+    // Errors of the updates loop and connections; a revoked session ends the link
+    this.client.onError.add((error) => {
+      if (isRevoked(error)) this.revokedCallback?.();
+      else logger.warn(`Telegram client error: ${error.message}`);
     });
     this.client.onNewMessage.add((message) => {
       if (!message.isOutgoing) this.messageCallback?.(toIncoming(message));

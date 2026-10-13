@@ -12,7 +12,7 @@ import {
   decodeSessionKey,
   decryptSession,
   encryptSession,
-  isBotSender,
+  isBotMessage,
   maskPhone,
   parseCounterHuntDirection,
   type BotMessageKind,
@@ -30,6 +30,10 @@ export interface TelegramAccount {
 export interface TelegramIncomingMessage {
   id: number;
   senderUsername?: string;
+  /** The sender is a bot account */
+  senderIsBot?: boolean;
+  /** Sent in the private chat with the sender (not a group or channel) */
+  privateChat?: boolean;
   text: string;
   date: Date;
 }
@@ -123,10 +127,16 @@ export interface TelegramAdminStatus {
   account?: { name: string; username?: string; phoneMasked?: string };
   linkedAt?: string;
   lastMessageAt?: string;
+  /** The listener is running (linked and connected) */
+  connected: boolean;
+  /** Short Dutch description of the last problem (no secrets) */
+  lastError?: string;
 }
 
 export interface TelegramMessages {
   linked: boolean;
+  /** Messages are coming in right now; false while linked means the connection is lost */
+  connected: boolean;
   messages: { id: string; text: string; kind: BotMessageKind; receivedAt: string }[];
 }
 
@@ -147,6 +157,8 @@ interface PendingLogin {
   linkedBy: string | null;
   failed?: boolean;
   submitting?: boolean;
+  /** Telegram accepted the login (the gateway holds a live session that must be logged out when cancelled) */
+  loggedIn?: boolean;
   timer?: ReturnType<typeof setTimeout>;
 }
 
@@ -164,9 +176,10 @@ export interface TelegramServiceOptions {
   firstUrlTimeoutMs?: number;
   /** A login nobody finishes is cancelled after this */
   pendingTimeoutMs?: number;
-  /** Wait between tries when a tegenhunt alert is skipped by a running demo switch */
+  /** Wait between tries when a tegenhunt alert is skipped by a running demo switch, and how often to try */
   alertRetryMs?: number;
-  /** Receives the happy-hour messages (happy-hour.service.ts) */
+  alertAttempts?: number;
+  /** Receives the happy-hour messages (happy-hour.service.ts); throws when a message could not be handled */
   happyHour?: { handleMessage(message: { telegramId: number; text: string; date: Date }): Promise<void> };
   /** Tests only */
   now?: () => Date;
@@ -176,6 +189,10 @@ const MESSAGES_LIMIT = 50;
 const MESSAGES_MAX = 200;
 /** Messages read from the bot chat after every connect, to catch up on what came in while the server was down */
 const CATCH_UP_LIMIT = 30;
+const LINK_FAILED = "Koppelen met Telegram is mislukt.";
+const NOT_CONNECTED = "Geen verbinding met Telegram, wordt opnieuw geprobeerd.";
+const CANNOT_DECRYPT = "Sessie kan niet worden ontsleuteld (TELEGRAM_SESSION_KEY gewijzigd?)";
+const REVOKED = "De sessie is ingetrokken in Telegram; koppel opnieuw.";
 const describe = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms).unref?.());
 const isDuplicateKey = (error: unknown) => (error as { code?: number })?.code === 11000;
@@ -183,17 +200,26 @@ const isDuplicateKey = (error: unknown) => (error as { code?: number })?.code ==
 /**
  * The group's Telegram account: linking by QR (admins), listening to @Jotihunt_bot and alerting everyone on a
  * tegenhunt. One listener per server process (the server runs as a single replica). At most one pending login.
+ *
+ * Demo mode: the link and the bot messages live in the real database, but alerts (notifications, happy hours) are
+ * written to the current database like every other alert. A real tegenhunt during demo mode therefore lands in the
+ * demo database and is gone when demo mode is switched off (accepted: demo mode is not used during the event).
  */
 export class TelegramService {
   private readonly links: Model<TelegramLinkDoc>;
   private readonly messages: Model<TelegramMessageDoc>;
   private pending: PendingLogin | null = null;
   private active: TelegramGateway | null = null;
+  /** Ciphertext of the active session, so a revoked session only deletes its own link */
+  private activeCiphertext: string | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryDelay: number;
-  /** Bumped on every link/unlink, so a slow reconnect of an old link never becomes active */
+  /** Bumped on every link/unlink, so a slow reconnect or link of an old state never becomes active */
   private linkGeneration = 0;
   private stopped = false;
+  private lastError: string | null = null;
+  /** Telegram ids being handled right now (live and catch-up can deliver the same message at once) */
+  private readonly handling = new Set<number>();
 
   constructor(private readonly options: TelegramServiceOptions) {
     this.links = telegramLinkModel(options.connection);
@@ -223,24 +249,24 @@ export class TelegramService {
   }
 
   async status(): Promise<TelegramAdminStatus> {
-    if (!this.options.config) return { state: "unavailable" };
+    if (!this.options.config) return { state: "unavailable", connected: false };
     const pending = this.pending;
     if (pending) {
-      const status: TelegramAdminStatus = { state: pending.state };
+      const status: TelegramAdminStatus = { state: pending.state, connected: false };
       if (pending.state === "qr" && pending.url) status.url = pending.url;
       if (pending.state === "qr" && pending.expiresAt) status.expiresAt = pending.expiresAt.toISOString();
       if (pending.state === "password" && pending.hint) status.hint = pending.hint;
       return status;
     }
     const link = await this.readLink();
-    if (!link) return { state: "unlinked" };
+    if (!link) return this.withError({ state: "unlinked", connected: false });
     const account: NonNullable<TelegramAdminStatus["account"]> = { name: link.account.name };
     if (link.account.username) account.username = link.account.username;
     if (link.account.phoneMasked) account.phoneMasked = link.account.phoneMasked;
-    const status: TelegramAdminStatus = { state: "linked", account, linkedAt: link.linkedAt.toISOString() };
+    const status: TelegramAdminStatus = { state: "linked", account, linkedAt: link.linkedAt.toISOString(), connected: this.active !== null };
     const last = await this.messages.findOne({}, { receivedAt: 1 }).sort({ receivedAt: -1 }).lean();
     if (last) status.lastMessageAt = last.receivedAt.toISOString();
-    return status;
+    return status.connected ? status : this.withError(status);
   }
 
   /** Start a QR login (or return the running one); answers once the first QR URL is known. */
@@ -250,6 +276,7 @@ export class TelegramService {
     if (await this.readLink()) throw new ServiceError(409, "Telegram is al gekoppeld.");
     if (this.pending) return this.status();
 
+    this.lastError = null;
     const gateway = this.options.gateway(config);
     const pending: PendingLogin = { gateway, state: "qr", linkedBy };
     this.pending = pending;
@@ -281,18 +308,18 @@ export class TelegramService {
           pending.expiresAt = undefined;
           return;
         }
-        await this.completeLink(pending);
+        pending.loggedIn = true;
+        await this.completeLink(pending).catch(() => undefined);
       })
       .catch(async (error) => {
+        // Also after the password state: the login gave up (cancelled, timed out at Telegram, network)
         if (this.pending !== pending) return;
-        this.options.logger.warn(`Telegram login failed: ${describe(error)}`);
-        pending.failed = true;
-        await this.cancelPending();
+        await this.failPending(pending, error);
       })
       .finally(() => firstUpdate());
 
     await Promise.race([updated, delay(this.options.firstUrlTimeoutMs ?? 20_000)]);
-    if (pending.failed) throw new ServiceError(502, "Koppelen met Telegram is mislukt.");
+    if (pending.failed) throw new ServiceError(502, LINK_FAILED);
     return this.status();
   }
 
@@ -306,14 +333,12 @@ export class TelegramService {
       await pending.gateway.submitPassword(password);
     } catch (error) {
       if (error instanceof WrongPasswordError) throw new ServiceError(400, "Wachtwoord klopt niet.");
-      if (this.pending === pending) {
-        this.options.logger.warn(`Telegram login failed: ${describe(error)}`);
-        await this.cancelPending();
-      }
-      throw new ServiceError(502, "Koppelen met Telegram is mislukt.");
+      if (this.pending === pending) await this.failPending(pending, error);
+      throw new ServiceError(502, LINK_FAILED);
     } finally {
       pending.submitting = false;
     }
+    pending.loggedIn = true;
     if (this.pending !== pending) throw new ServiceError(409, "Het koppelen is afgebroken.");
     await this.completeLink(pending);
     return this.status();
@@ -323,10 +348,12 @@ export class TelegramService {
   async unlink(): Promise<void> {
     this.requireConfig();
     this.linkGeneration++;
+    this.lastError = null;
     await this.cancelPending();
     this.clearRetry();
     const active = this.active;
     this.active = null;
+    this.activeCiphertext = null;
     if (active) {
       await active.logout().catch((error) => this.options.logger.warn(`Could not log the Telegram session out: ${describe(error)}`));
       await active.cancel().catch(() => undefined);
@@ -337,7 +364,7 @@ export class TelegramService {
     this.options.logger.info("Telegram unlinked");
   }
 
-  /** Newest first. `linked` tells the card which empty state to show. */
+  /** Newest first. `linked`/`connected` tell the card which empty or warning state to show. */
   async listMessages(limit = MESSAGES_LIMIT): Promise<TelegramMessages> {
     const count = Math.min(Math.max(Math.trunc(limit) || MESSAGES_LIMIT, 1), MESSAGES_MAX);
     const [link, messages] = await Promise.all([
@@ -346,30 +373,55 @@ export class TelegramService {
     ]);
     return {
       linked: link !== null,
+      connected: link !== null && this.active !== null,
       messages: messages.map((message) => ({ id: String(message.telegramId), text: message.text ?? "", kind: message.kind, receivedAt: message.receivedAt.toISOString() })),
     };
   }
 
-  /** Store a bot message once (by Telegram id) and alert everyone when it announces a tegenhunt. Others are ignored. */
+  /**
+   * Store a bot message once (by Telegram id) and handle it: alert everyone on a tegenhunt, pass a happy hour on.
+   * Messages of anyone else are ignored. `handledAt` is set only once handling succeeded, so a failure is retried on
+   * the next delivery or catch-up; the alerts themselves are deduplicated per Telegram id.
+   */
   async handleMessage(message: TelegramIncomingMessage): Promise<void> {
     const config = this.options.config;
-    if (!config || !isBotSender(message.senderUsername, config.botUsername)) return;
-    const kind = classifyBotMessage(message.text);
-    const data = kind === "tegenhunt" ? { direction: parseCounterHuntDirection(message.text) } : {};
+    if (!config || !isBotMessage(message, config.botUsername)) return;
+    if (this.handling.has(message.id)) return;
+    this.handling.add(message.id);
     try {
-      await this.messages.create({ telegramId: message.id, text: message.text, kind, receivedAt: message.date, data });
-    } catch (error) {
-      if (isDuplicateKey(error)) return;
-      throw error;
+      const kind = classifyBotMessage(message.text);
+      const data = kind === "tegenhunt" ? { direction: parseCounterHuntDirection(message.text) } : {};
+      let stored = await this.messages.findOne({ telegramId: message.id }, { handledAt: 1 }).lean();
+      if (!stored) {
+        try {
+          await this.messages.create({ telegramId: message.id, text: message.text, kind, receivedAt: message.date, data, handledAt: null });
+          this.options.logger.info(`Message from @${config.botUsername} (${kind})`);
+        } catch (error) {
+          if (!isDuplicateKey(error)) throw error;
+          stored = await this.messages.findOne({ telegramId: message.id }, { handledAt: 1 }).lean();
+        }
+      }
+      if (stored?.handledAt) return;
+      await this.process({ id: message.id, text: message.text, date: message.date }, kind);
+      await this.messages.updateOne({ telegramId: message.id }, { $set: { handledAt: new Date() } });
+    } finally {
+      this.handling.delete(message.id);
     }
-    this.options.logger.info(`Message from @${config.botUsername} (${kind})`);
+  }
+
+  // --- Internals ----------------------------------------------------------------------------------------------------
+
+  /** What a bot message triggers. Throws when it could not be done (the message stays unhandled). */
+  private async process(message: { id: number; text: string; date: Date }, kind: BotMessageKind) {
     // Read late (catch-up after a restart): a tegenhunt older than its 30 minutes is only stored
     const age = (this.options.now?.() ?? new Date()).getTime() - message.date.getTime();
     if (kind === "tegenhunt" && age < COUNTER_HUNT_WINDOW_MS) await this.alertCounterHunt(message);
     if (kind === "happy-hour") await this.options.happyHour?.handleMessage({ telegramId: message.id, text: message.text, date: message.date });
   }
 
-  // --- Internals ----------------------------------------------------------------------------------------------------
+  private withError(status: TelegramAdminStatus): TelegramAdminStatus {
+    return this.lastError ? { ...status, lastError: this.lastError } : status;
+  }
 
   private requireConfig(): TelegramConfig {
     if (!this.options.config) throw new ServiceError(503, "Telegram is niet ingesteld op de server.");
@@ -378,6 +430,11 @@ export class TelegramService {
 
   private readLink() {
     return this.links.findOne({ key: TELEGRAM_LINK_KEY }).lean<TelegramLinkDoc>();
+  }
+
+  /** Delete the link, but only the one with this session (a newer link stays). */
+  private deleteLink(ciphertext: string | null) {
+    return this.links.deleteOne(ciphertext ? { key: TELEGRAM_LINK_KEY, sessionCiphertext: ciphertext } : { key: TELEGRAM_LINK_KEY });
   }
 
   private clearRetry() {
@@ -390,30 +447,56 @@ export class TelegramService {
     if (!pending) return;
     this.pending = null;
     clearTimeout(pending.timer);
+    // A login that Telegram already accepted leaves an active session behind unless it is logged out
+    if (pending.loggedIn) await pending.gateway.logout().catch(() => undefined);
     await pending.gateway.cancel().catch(() => undefined);
   }
 
-  /** Store the session of a finished login and keep its client as the listener. */
+  private async failPending(pending: PendingLogin, error: unknown) {
+    this.options.logger.warn(`Telegram login failed: ${describe(error)}`);
+    pending.failed = true;
+    this.lastError = LINK_FAILED;
+    await this.cancelPending();
+  }
+
+  /**
+   * Store the session of a finished login and keep its client as the listener. The pending login is claimed before
+   * the write; when an unlink or another link happened meanwhile, the write is rolled back and the session logged out.
+   */
   private async completeLink(pending: PendingLogin) {
     const config = this.requireConfig();
     const { gateway } = pending;
+    let account: TelegramAccount;
+    let ciphertext: { ciphertext: string; iv: string; tag: string };
     try {
-      const account = await gateway.me();
-      const encrypted = encryptSession(await gateway.exportSession(), config.sessionKey);
-      if (this.pending !== pending) {
-        // Cancelled while finishing: don't leave a session behind at Telegram
-        await gateway.logout().catch(() => undefined);
-        await gateway.cancel().catch(() => undefined);
-        return;
-      }
+      account = await gateway.me();
+      ciphertext = encryptSession(await gateway.exportSession(), config.sessionKey);
+    } catch (error) {
+      if (this.pending === pending) await this.failPending(pending, error);
+      throw new ServiceError(502, LINK_FAILED);
+    }
+    if (this.pending !== pending) {
+      // Cancelled while finishing (cancelPending logged it out)
+      throw new ServiceError(409, "Het koppelen is afgebroken.");
+    }
+    // Claim: from here on a cancel or unlink can't reach this login anymore, the generation check below catches it
+    clearTimeout(pending.timer);
+    this.pending = null;
+    const generation = ++this.linkGeneration;
+    const rollBack = async () => {
+      await this.deleteLink(ciphertext.ciphertext).catch(() => undefined);
+      await gateway.logout().catch(() => undefined);
+      await gateway.cancel().catch(() => undefined);
+    };
+    try {
       await this.links.updateOne(
         { key: TELEGRAM_LINK_KEY },
         {
           $set: {
             key: TELEGRAM_LINK_KEY,
-            sessionCiphertext: encrypted.ciphertext,
-            iv: encrypted.iv,
-            tag: encrypted.tag,
+            sessionCiphertext: ciphertext.ciphertext,
+            iv: ciphertext.iv,
+            tag: ciphertext.tag,
             account: { id: account.id, name: account.name, username: account.username ?? null, phoneMasked: account.phone ? maskPhone(account.phone) : null },
             linkedAt: new Date(),
             linkedBy: pending.linkedBy,
@@ -422,121 +505,154 @@ export class TelegramService {
         { upsert: true },
       );
     } catch (error) {
-      this.options.logger.error("Could not finish the Telegram link", error);
-      if (this.pending === pending) {
-        await gateway.logout().catch(() => undefined);
-        await this.cancelPending();
-      }
-      throw new ServiceError(502, "Koppelen met Telegram is mislukt.");
+      this.options.logger.error("Could not store the Telegram link", error);
+      this.lastError = LINK_FAILED;
+      await rollBack();
+      throw new ServiceError(502, LINK_FAILED);
     }
-    clearTimeout(pending.timer);
-    this.pending = null;
-    this.linkGeneration++;
+    if (generation !== this.linkGeneration || this.stopped) {
+      await rollBack();
+      throw new ServiceError(409, "Het koppelen is afgebroken.");
+    }
     this.clearRetry();
+    this.lastError = null;
     const previous = this.active;
-    this.active = gateway;
+    this.activate(gateway, ciphertext.ciphertext);
     await previous?.cancel().catch(() => undefined);
-    this.listen(gateway);
-    void this.catchUp(gateway);
     this.options.logger.info(`Telegram linked (${pending.linkedBy ?? "unknown admin"}), listening to @${config.botUsername}`);
   }
 
-  private listen(gateway: TelegramGateway) {
+  private activate(gateway: TelegramGateway, ciphertext: string) {
+    this.active = gateway;
+    this.activeCiphertext = ciphertext;
     gateway.onMessage((message) => {
       if (this.active !== gateway) return;
-      this.handleMessage(message).catch((error) => this.options.logger.error("Could not handle a Telegram message", error));
+      this.handleMessage(message).catch((error) => this.options.logger.error("Could not handle a Telegram message (retried at the next catch-up)", error));
     });
     gateway.onRevoked(() => {
       if (this.active !== gateway) return;
       void this.dropRevoked(gateway);
     });
+    void this.catchUp(gateway);
   }
 
-  /** Handle the latest messages of the bot chat (oldest first); known ones are skipped by their Telegram id. */
+  /**
+   * Handle the latest messages of the bot chat (oldest first; known ones are skipped by their Telegram id), then the
+   * stored messages whose handling failed before.
+   */
   private async catchUp(gateway: TelegramGateway) {
     try {
       const messages = await gateway.recentBotMessages(CATCH_UP_LIMIT);
       for (const message of [...messages].sort((a, b) => a.id - b.id)) {
         if (this.active !== gateway) return;
-        await this.handleMessage(message);
+        await this.handleMessage(message).catch((error) => this.options.logger.error("Could not handle a Telegram message", error));
       }
     } catch (error) {
       this.options.logger.warn(`Could not read the latest Telegram messages: ${describe(error)}`);
     }
+    await this.retryUnhandled().catch((error) => this.options.logger.error("Could not retry unhandled Telegram messages", error));
+  }
+
+  private async retryUnhandled() {
+    const unhandled = await this.messages.find({ handledAt: null }).sort({ telegramId: 1 }).lean();
+    for (const message of unhandled) {
+      if (this.handling.has(message.telegramId)) continue;
+      this.handling.add(message.telegramId);
+      try {
+        await this.process({ id: message.telegramId, text: message.text ?? "", date: message.receivedAt }, message.kind);
+        await this.messages.updateOne({ telegramId: message.telegramId }, { $set: { handledAt: new Date() } });
+      } catch (error) {
+        this.options.logger.error(`Could not handle Telegram message ${message.telegramId}`, error);
+      } finally {
+        this.handling.delete(message.telegramId);
+      }
+    }
   }
 
   private async dropRevoked(gateway: TelegramGateway) {
+    const ciphertext = this.activeCiphertext;
     this.active = null;
+    this.activeCiphertext = null;
     this.linkGeneration++;
+    this.lastError = REVOKED;
     await gateway.cancel().catch(() => undefined);
-    await this.links.deleteOne({ key: TELEGRAM_LINK_KEY }).catch((error) => this.options.logger.error("Could not delete the Telegram link", error));
+    await this.deleteLink(ciphertext).catch((error) => this.options.logger.error("Could not delete the Telegram link", error));
     this.options.logger.warn("The Telegram session was revoked, link removed; an admin has to link Telegram again");
   }
 
-  /** Connect with the stored session; network errors retry with backoff, a revoked session removes the link. */
+  private scheduleRetry(error: unknown) {
+    if (this.stopped) return;
+    const wait = this.retryDelay;
+    this.retryDelay = Math.min(wait * 2, this.options.retryMaxMs ?? 5 * 60_000);
+    this.lastError = NOT_CONNECTED;
+    this.options.logger.warn(`Could not connect to Telegram, retrying in ${Math.round(wait / 1000)} s: ${describe(error)}`);
+    this.clearRetry();
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      void this.connectStored();
+    }, wait);
+    this.retryTimer.unref?.();
+  }
+
+  /**
+   * Connect with the stored session. A revoked session removes the link; a session that can't be decrypted (the key
+   * changed) keeps it and reports the problem; any other failure (network, database) retries with backoff.
+   */
   private async connectStored(): Promise<void> {
     const config = this.options.config;
     if (!config || this.stopped) return;
-    const link = await this.readLink();
-    if (!link) return;
     const generation = this.linkGeneration;
-    let session: string;
+    let gateway: TelegramGateway | null = null;
     try {
-      session = decryptSession({ ciphertext: link.sessionCiphertext, iv: link.iv, tag: link.tag }, config.sessionKey);
-    } catch {
-      this.options.logger.warn("Could not decrypt the stored Telegram session (TELEGRAM_SESSION_KEY changed?), link removed; link Telegram again");
-      await this.links.deleteOne({ key: TELEGRAM_LINK_KEY });
-      return;
-    }
-    const gateway = this.options.gateway(config);
-    try {
+      const link = await this.readLink();
+      if (!link) return;
+      let session: string;
+      try {
+        session = decryptSession({ ciphertext: link.sessionCiphertext, iv: link.iv, tag: link.tag }, config.sessionKey);
+      } catch {
+        // Kept: with the old key back in place it works again
+        this.lastError = CANNOT_DECRYPT;
+        this.options.logger.error("Could not decrypt the stored Telegram session (TELEGRAM_SESSION_KEY changed?); restore the key or link Telegram again");
+        return;
+      }
+      gateway = this.options.gateway(config);
       await gateway.connect(session);
+      if (generation !== this.linkGeneration || this.stopped) {
+        await gateway.cancel().catch(() => undefined);
+        return;
+      }
+      this.retryDelay = this.options.retryInitialMs ?? 5_000;
+      this.lastError = null;
+      this.activate(gateway, link.sessionCiphertext);
+      this.options.logger.info(`Telegram connected as ${link.account.name}, listening to @${config.botUsername}`);
     } catch (error) {
-      await gateway.cancel().catch(() => undefined);
+      await gateway?.cancel().catch(() => undefined);
       if (generation !== this.linkGeneration || this.stopped) return;
       if (error instanceof SessionRevokedError) {
-        await this.links.deleteOne({ key: TELEGRAM_LINK_KEY });
+        const link = await this.readLink().catch(() => null);
+        await this.deleteLink(link?.sessionCiphertext ?? null).catch(() => undefined);
+        this.lastError = REVOKED;
         this.options.logger.warn("The stored Telegram session is no longer valid, link removed; an admin has to link Telegram again");
         return;
       }
-      const wait = this.retryDelay;
-      this.retryDelay = Math.min(wait * 2, this.options.retryMaxMs ?? 5 * 60_000);
-      this.options.logger.warn(`Could not connect to Telegram, retrying in ${Math.round(wait / 1000)} s: ${describe(error)}`);
-      this.retryTimer = setTimeout(() => {
-        this.retryTimer = null;
-        this.connectStored().catch((retryError) => this.options.logger.error("Telegram reconnect failed", retryError));
-      }, wait);
-      this.retryTimer.unref?.();
-      return;
+      this.scheduleRetry(error);
     }
-    if (generation !== this.linkGeneration || this.stopped) {
-      await gateway.cancel().catch(() => undefined);
-      return;
-    }
-    this.retryDelay = this.options.retryInitialMs ?? 5_000;
-    this.active = gateway;
-    this.listen(gateway);
-    void this.catchUp(gateway);
-    this.options.logger.info(`Telegram connected as ${link.account.name}, listening to @${config.botUsername}`);
   }
 
   /**
    * The counter-hunt notification for a tegenhunt message, like the former admin button: stored in the current
-   * database, then pushed. Once per Telegram message; retried while a demo switch is running.
+   * database, then pushed. Once per Telegram message; retried while a demo switch is running, then throws.
    */
-  private async alertCounterHunt(message: TelegramIncomingMessage) {
+  private async alertCounterHunt(message: { id: number; text: string; date: Date }) {
     const input = buildTelegramCounterHuntNotification({ telegramId: message.id, text: message.text, date: message.date });
     const result = await runTrackedRetrying(
       async () => {
         if (await AppNotification.exists({ type: "counter-hunt", "data.telegramId": message.id })) return null;
         return AppNotification.create(input);
       },
-      { waitMs: this.options.alertRetryMs },
+      { waitMs: this.options.alertRetryMs, attempts: this.options.alertAttempts },
     );
-    if (!result) {
-      this.options.logger.error(`Tegenhunt alert for Telegram message ${message.id} skipped: a demo switch kept running`);
-      return;
-    }
+    if (!result) throw new Error(`Tegenhunt alert for Telegram message ${message.id} not sent: a demo switch kept running`);
     const notification = result.value;
     if (!notification) return;
     this.options.logger.info(`Tegenhunt alert sent: ${input.title}`);

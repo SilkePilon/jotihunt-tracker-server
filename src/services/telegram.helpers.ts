@@ -12,17 +12,23 @@ export type CounterHuntView =
   | { active: true; direction: number | null; startedAt: string; endsAt: string; text?: string }
   | { active: false; last?: { direction: number | null; startedAt: string } };
 
-/** Keyword rules in order; the first match wins. */
-const KIND_RULES: [RegExp, BotMessageKind][] = [
-  [/tegen[- ]?hunt/i, "tegenhunt"],
-  [/goedgekeurd/i, "hunt-approved"],
-  [/afgekeurd/i, "hunt-rejected"],
-  [/opdracht|inzending/i, "assignment"],
-  [/happy[- ]?hour/i, "happy-hour"],
+/** Words of a tegenhunt start announcement (rules §6: start time, wind direction, 30 minutes) */
+const COUNTER_HUNT_START = /\b(?:gestart|start\w*|begint|begonnen|windrichting|richting|minuten)\b|\d{1,2}[:.]\d{2}/i;
+
+/**
+ * Keyword rules in order; the first match wins. "tegenhunt" also appears in other messages ("tegenhunts tellen niet",
+ * "jullie tegenhunt is goedgekeurd"), so it only counts after the other kinds and together with a start word.
+ */
+const KIND_RULES: [(text: string) => boolean, BotMessageKind][] = [
+  [(text) => /happy[- ]?hour/i.test(text), "happy-hour"],
+  [(text) => /goedgekeurd/i.test(text), "hunt-approved"],
+  [(text) => /afgekeurd/i.test(text), "hunt-rejected"],
+  [(text) => /tegen[- ]?hunt/i.test(text) && COUNTER_HUNT_START.test(text), "tegenhunt"],
+  [(text) => /opdracht|inzending/i.test(text), "assignment"],
 ];
 
 export function classifyBotMessage(text: string): BotMessageKind {
-  return KIND_RULES.find(([pattern]) => pattern.test(text))?.[1] ?? "other";
+  return KIND_RULES.find(([matches]) => matches(text))?.[1] ?? "other";
 }
 
 // --- Direction ---------------------------------------------------------------------------------------------------
@@ -50,11 +56,15 @@ const byLength = <T>(key: (point: (typeof POINTS)[number]) => string) => [...POI
 
 /** "noordoost" also as "noord-oost"/"noord oost"; "-en" for "uit het noordoosten". Not "Oosterbeek" or "noordelijk". */
 const namePattern = (name: string) => name.replace(/(noord|oost|zuid|west)(?=noord|oost|zuid|west)/g, "$1[- ]?");
-const NAME_REGEX = new RegExp(`\\b(${byLength<string>((point) => point.name).map(namePattern).join("|")})(?:en)?(?![a-z])`, "i");
-/** Abbreviations: uppercase anywhere ("zo"/"no"/"o" are ordinary Dutch words), any case right after "(wind)richting". */
+const NAME_ALTERNATION = byLength<string>((point) => point.name).map(namePattern).join("|");
 const SHORT_ALTERNATION = byLength<string>((point) => point.short).join("|");
-const SHORT_REGEX = new RegExp(`\\b(${SHORT_ALTERNATION})\\b`);
-const SHORT_AFTER_RICHTING_REGEX = new RegExp(`richting\\s*:?\\s*(${SHORT_ALTERNATION})\\b`, "i");
+/** A compass word: group 1 a name, group 2 an abbreviation */
+const COMPASS = `(?:\\b(${NAME_ALTERNATION})(?:en)?(?![a-z])|\\b(${SHORT_ALTERNATION})\\b)`;
+/** Right after "(wind)richting", "uit (het)" or "vanuit (het)": any case, abbreviations too */
+const CONTEXT_REGEX = new RegExp(`(?:richting\\s*:?\\s*|\\b(?:van)?uit\\s+(?:het\\s+)?)${COMPASS}`, "gi");
+/** Elsewhere: names in any case, abbreviations only in capitals ("zo"/"no"/"o" are ordinary Dutch words) */
+const NAME_REGEX = new RegExp(`\\b(${NAME_ALTERNATION})(?:en)?(?![a-z])`, "gi");
+const SHORT_REGEX = new RegExp(`\\b(${SHORT_ALTERNATION})\\b`, "g");
 const DEGREES_REGEX = /(\d{1,3}(?:[.,]\d+)?)\s*(?:°|graden\b|deg(?:rees)?\b)/i;
 
 const nearestDirection = (degrees: number): CounterHuntDirection => ((Math.round(degrees / 45) * 45) % 360) as CounterHuntDirection;
@@ -63,9 +73,17 @@ const pointDegrees = (match: string, key: "name" | "short") => {
   return POINTS.find((point) => point[key].toLowerCase() === normalized)?.degrees;
 };
 
+/** The one direction of these matches; null for none or when they disagree. */
+function agreed(directions: CounterHuntDirection[]): CounterHuntDirection | null {
+  const distinct = new Set(directions);
+  return distinct.size === 1 ? directions[0] : null;
+}
+
 /**
- * Wind direction of a tegenhunt message, as one of the 8 directions of the Tegenhunt card; null when none is found.
- * Degrees first, then Dutch names, then abbreviations; 16-point directions round to the nearest (ties clockwise).
+ * Wind direction of a tegenhunt message, as one of the 8 directions of the Tegenhunt card; null when none is found or
+ * the message names different ones. Degrees first; then the compass words right after "(wind)richting"/"(van)uit
+ * het" (so "vanuit Arnhem-Zuid, windrichting noordoost" is noordoost); only without those any compass word.
+ * 16-point directions round to the nearest (ties clockwise).
  */
 export function parseCounterHuntDirection(text: string): CounterHuntDirection | null {
   const degrees = DEGREES_REGEX.exec(text);
@@ -73,21 +91,26 @@ export function parseCounterHuntDirection(text: string): CounterHuntDirection | 
     const value = Number(degrees[1].replace(",", "."));
     if (value >= 0 && value <= 360) return nearestDirection(value);
   }
-  const name = NAME_REGEX.exec(text);
-  if (name) return nearestDirection(pointDegrees(name[1], "name")!);
-  const short = SHORT_AFTER_RICHTING_REGEX.exec(text) ?? SHORT_REGEX.exec(text);
-  if (short) return nearestDirection(pointDegrees(short[1], "short")!);
-  return null;
+  const inContext = [...text.matchAll(CONTEXT_REGEX)].map((match) => nearestDirection(match[1] ? pointDegrees(match[1], "name")! : pointDegrees(match[2], "short")!));
+  if (inContext.length > 0) return agreed(inContext);
+  const bare = [
+    ...[...text.matchAll(NAME_REGEX)].map((match) => nearestDirection(pointDegrees(match[1], "name")!)),
+    ...[...text.matchAll(SHORT_REGEX)].map((match) => nearestDirection(pointDegrees(match[1], "short")!)),
+  ];
+  return bare.length > 0 ? agreed(bare) : null;
 }
 
 // Keep the parser in sync with the card's choices
 if (POINTS.some((point) => !COUNTER_HUNT_DIRECTIONS.includes(nearestDirection(point.degrees)))) throw new Error("Unknown counter-hunt direction");
 
-/** Sender check: the configured bot username, case-insensitive, with or without "@". */
-export function isBotSender(senderUsername: string | null | undefined, botUsername: string): boolean {
-  if (!senderUsername) return false;
+/**
+ * A message of the bot itself: the configured username (case-insensitive, with or without "@"), sent by a bot, in the
+ * private chat with it (not e.g. a group the bot is in).
+ */
+export function isBotMessage(message: { senderUsername?: string | null; senderIsBot?: boolean; privateChat?: boolean }, botUsername: string): boolean {
+  if (!message.senderUsername || !message.senderIsBot || !message.privateChat) return false;
   const normalize = (username: string) => username.trim().replace(/^@/, "").toLowerCase();
-  return normalize(senderUsername) === normalize(botUsername);
+  return normalize(message.senderUsername) === normalize(botUsername);
 }
 
 // --- Session ------------------------------------------------------------------------------------------------------

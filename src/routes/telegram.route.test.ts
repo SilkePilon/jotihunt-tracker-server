@@ -80,16 +80,16 @@ describe("/admin/telegram", () => {
 
   test("link by QR with 2FA, then unlink", async () => {
     const admin = tokenOf(await createUser(true));
-    expect(await (await request("/admin/telegram", { token: admin })).json()).toEqual({ state: "unlinked" });
+    expect(await (await request("/admin/telegram", { token: admin })).json()).toEqual({ state: "unlinked", connected: false });
 
     const link = await request("/admin/telegram/link", { method: "POST", token: admin });
     expect(link.status).toBe(200);
     expect(await link.json()).toMatchObject({ state: "qr", url: "tg://login?token=abc" });
 
     gateways[0].qr.resolve("password");
-    let status: { state: string; hint?: string } = { state: "" };
+    let status: { state: string; hint?: string; connected?: boolean } = { state: "" };
     for (let i = 0; i < 100 && status.state !== "password"; i++) status = (await (await request("/admin/telegram", { token: admin })).json()) as typeof status;
-    expect(status).toEqual({ state: "password", hint: "naam van de hond" });
+    expect(status).toEqual({ state: "password", hint: "naam van de hond", connected: false });
 
     const empty = await request("/admin/telegram/password", { method: "POST", token: admin, json: {} });
     expect(empty.status).toBe(400);
@@ -101,13 +101,13 @@ describe("/admin/telegram", () => {
 
     const unlink = await request("/admin/telegram/link", { method: "DELETE", token: admin });
     expect(unlink.status).toBe(204);
-    expect(await (await request("/admin/telegram", { token: admin })).json()).toEqual({ state: "unlinked" });
+    expect(await (await request("/admin/telegram", { token: admin })).json()).toEqual({ state: "unlinked", connected: false });
   });
 
   test("without a Telegram service: unavailable", async () => {
     setTelegramService(null);
     const admin = tokenOf(await createUser(true));
-    expect(await (await request("/admin/telegram", { token: admin })).json()).toEqual({ state: "unavailable" });
+    expect(await (await request("/admin/telegram", { token: admin })).json()).toEqual({ state: "unavailable", connected: false });
     expect((await request("/admin/telegram/link", { method: "POST", token: admin })).status).toBe(503);
   });
 
@@ -121,10 +121,10 @@ describe("user routes", () => {
   test("/telegram/messages for any logged-in user", async () => {
     const user = tokenOf(await createUser());
     expect((await request("/telegram/messages")).status).toBe(401);
-    await service.handleMessage({ id: 1, senderUsername: "Jotihunt_bot", text: "Je hunt is afgekeurd", date: new Date("2026-10-17T19:14:00Z") });
+    await service.handleMessage({ id: 1, senderUsername: "Jotihunt_bot", senderIsBot: true, privateChat: true, text: "Je hunt is afgekeurd", date: new Date("2026-10-17T19:14:00Z") });
     const response = await request("/telegram/messages?limit=10", { token: user });
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ linked: false, messages: [{ id: "1", text: "Je hunt is afgekeurd", kind: "hunt-rejected", receivedAt: "2026-10-17T19:14:00.000Z" }] });
+    expect(await response.json()).toEqual({ linked: false, connected: false, messages: [{ id: "1", text: "Je hunt is afgekeurd", kind: "hunt-rejected", receivedAt: "2026-10-17T19:14:00.000Z" }] });
     expect((await request("/telegram/messages?limit=0", { token: user })).status).toBe(400);
   });
 
@@ -132,7 +132,7 @@ describe("user routes", () => {
     const user = tokenOf(await createUser());
     expect((await request("/counter-hunt")).status).toBe(401);
     expect(await (await request("/counter-hunt", { token: user })).json()).toEqual({ active: false });
-    await service.handleMessage({ id: 2, senderUsername: "Jotihunt_bot", text: "Tegenhunt uit het zuiden", date: new Date() });
+    await service.handleMessage({ id: 2, senderUsername: "Jotihunt_bot", senderIsBot: true, privateChat: true, text: "Tegenhunt gestart uit het zuiden", date: new Date() });
     expect(await AppNotification.countDocuments()).toBe(1);
     expect(await (await request("/counter-hunt", { token: user })).json()).toMatchObject({ active: true, direction: 180 });
   });

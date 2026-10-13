@@ -10,7 +10,7 @@ function requireService(): TelegramService {
 }
 
 export async function getStatus(_req: Request, res: Response) {
-  return respond(res, 200, async () => (await getTelegramService()?.status()) ?? { state: "unavailable" });
+  return respond(res, 200, async () => (await getTelegramService()?.status()) ?? { state: "unavailable", connected: false });
 }
 
 export async function startLink(req: Request, res: Response) {
@@ -27,5 +27,5 @@ export async function unlink(_req: Request, res: Response) {
 
 export async function listMessages(req: Request, res: Response) {
   const limit = typeof req.query.limit === "number" ? req.query.limit : Number(req.query.limit) || undefined;
-  return respond(res, 200, async () => (await getTelegramService()?.listMessages(limit)) ?? { linked: false, messages: [] });
+  return respond(res, 200, async () => (await getTelegramService()?.listMessages(limit)) ?? { linked: false, connected: false, messages: [] });
 }

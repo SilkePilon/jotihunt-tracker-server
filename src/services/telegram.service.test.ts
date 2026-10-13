@@ -46,7 +46,7 @@ const until = async (check: () => boolean | Promise<boolean>) => {
   }
   throw new Error("Timed out");
 };
-const botMessage = (id: number, text: string, sender = "Jotihunt_bot"): TelegramIncomingMessage => ({ id, senderUsername: sender, text, date: new Date("2026-10-17T19:14:00Z") });
+const botMessage = (id: number, text: string, sender = "Jotihunt_bot"): TelegramIncomingMessage => ({ id, senderUsername: sender, senderIsBot: true, privateChat: true, text, date: new Date("2026-10-17T19:14:00Z") });
 const storeLink = () => {
   const { ciphertext, iv, tag } = encryptSession(SESSION, KEY);
   return telegramLinkModel(realDb).create({ key: "telegram", sessionCiphertext: ciphertext, iv, tag, account: { id: 42, name: "Silke" }, linkedAt: new Date() });
@@ -88,16 +88,16 @@ describe("telegramConfigFromEnv", () => {
 describe("feature off", () => {
   test("status unavailable, linking refused, messages still answer", async () => {
     const off = createService(null);
-    expect(await off.status()).toEqual({ state: "unavailable" });
+    expect(await off.status()).toEqual({ state: "unavailable", connected: false });
     await expect(off.startLink("Admin")).rejects.toMatchObject({ status: 503 });
-    expect(await off.listMessages()).toEqual({ linked: false, messages: [] });
+    expect(await off.listMessages()).toEqual({ linked: false, connected: false, messages: [] });
   });
 });
 
 describe("linking", () => {
   test("qr → linked stores the encrypted session and listens", async () => {
     const status = await service.startLink("Admin");
-    expect(status).toEqual({ state: "qr", url: "tg://login?token=abc", expiresAt: "2026-10-17T20:00:30.000Z" });
+    expect(status).toEqual({ state: "qr", url: "tg://login?token=abc", expiresAt: "2026-10-17T20:00:30.000Z", connected: false });
     // A second press returns the running login
     expect((await service.startLink("Admin")).state).toBe("qr");
     expect(gateways).toHaveLength(1);
@@ -122,7 +122,7 @@ describe("linking", () => {
     await service.startLink("Admin");
     gateways[0].qr.resolve("password");
     await until(async () => (await service.status()).state === "password");
-    expect(await service.status()).toEqual({ state: "password", hint: "naam van de hond" });
+    expect(await service.status()).toEqual({ state: "password", hint: "naam van de hond", connected: false });
 
     const wrong = await service.submitPassword("fout").catch((error) => error);
     expect(wrong).toBeInstanceOf(ServiceError);
@@ -211,7 +211,7 @@ describe("bot messages", () => {
   test("only the bot's messages are stored, newest first, with their kind", async () => {
     await service.handleMessage(botMessage(1, "Je hunt is goedgekeurd"));
     await service.handleMessage({ ...botMessage(2, "Hoi"), senderUsername: "iemand" });
-    await service.handleMessage({ ...botMessage(3, "Nieuwe opdracht"), senderUsername: "jotihunt_BOT", date: new Date("2026-10-17T19:20:00Z") });
+    await service.handleMessage({ ...botMessage(3, "Nieuwe opdracht"), senderUsername: "jotihunt_BOT", senderIsBot: true, privateChat: true, date: new Date("2026-10-17T19:20:00Z") });
     await service.handleMessage({ id: 4, text: "geen afzender", date: new Date() });
     const { linked, messages } = await service.listMessages();
     expect(linked).toBe(false);
@@ -237,11 +237,11 @@ describe("bot messages", () => {
   });
 
   test("a tegenhunt without a recognised direction", async () => {
-    await service.handleMessage(botMessage(11, "Tegenhunt! Succes."));
+    await service.handleMessage(botMessage(11, "Tegenhunt gestart! Succes."));
     expect(await AppNotification.findOne().lean()).toMatchObject({
       title: "Tegenhunt!",
       body: "Richting niet herkend, lees het bericht van de Jotihunt-bot.",
-      data: { direction: null, text: "Tegenhunt! Succes.", telegramId: 11 },
+      data: { direction: null, text: "Tegenhunt gestart! Succes.", telegramId: 11 },
     });
   });
 
@@ -263,10 +263,10 @@ describe("catch-up", () => {
     await storeLink();
     prepare = (gateway) => {
       gateway.history = [
-        { id: 33, senderUsername: "Jotihunt_bot", text: "Tegenhunt, windrichting west", date: minutesAgo(5) },
-        { id: 32, senderUsername: "iemand", text: "Tegenhunt uit het noorden", date: minutesAgo(10) },
-        { id: 31, senderUsername: "Jotihunt_bot", text: "Tegenhunt, windrichting oost", date: minutesAgo(40) },
-        { id: 30, senderUsername: "Jotihunt_bot", text: "Je hunt is goedgekeurd", date: minutesAgo(50) },
+        { id: 33, senderUsername: "Jotihunt_bot", senderIsBot: true, privateChat: true, text: "Tegenhunt, windrichting west", date: minutesAgo(5) },
+        { id: 32, senderUsername: "iemand", senderIsBot: true, privateChat: true, text: "Tegenhunt uit het noorden", date: minutesAgo(10) },
+        { id: 31, senderUsername: "Jotihunt_bot", senderIsBot: true, privateChat: true, text: "Tegenhunt, windrichting oost", date: minutesAgo(40) },
+        { id: 30, senderUsername: "Jotihunt_bot", senderIsBot: true, privateChat: true, text: "Je hunt is goedgekeurd", date: minutesAgo(50) },
       ];
     };
     const restarted = createService();
@@ -289,7 +289,7 @@ describe("catch-up", () => {
 
   test("after linking the bot chat is read too", async () => {
     prepare = (gateway) => {
-      gateway.history = [{ id: 40, senderUsername: "Jotihunt_bot", text: "Nieuwe opdracht", date: minutesAgo(1) }];
+      gateway.history = [{ id: 40, senderUsername: "Jotihunt_bot", senderIsBot: true, privateChat: true, text: "Nieuwe opdracht", date: minutesAgo(1) }];
     };
     await service.startLink("Admin");
     gateways[0].qr.resolve("linked");
@@ -312,3 +312,144 @@ describe("catch-up", () => {
   });
 });
 
+
+describe("review fixes", () => {
+  const recent = (id: number, text: string): TelegramIncomingMessage => ({ ...botMessage(id, text), date: new Date(Date.now() - 60_000) });
+  const linkNow = async () => {
+    await service.startLink("Admin");
+    gateways[0].qr.resolve("linked");
+    await until(async () => (await service.status()).state === "linked");
+  };
+
+  test("only the bot's private chat counts", async () => {
+    await service.handleMessage({ ...botMessage(1, "Nieuwe opdracht"), privateChat: false });
+    await service.handleMessage({ ...botMessage(2, "Nieuwe opdracht"), senderIsBot: false });
+    expect((await service.listMessages()).messages).toEqual([]);
+  });
+
+  test("a message whose handling failed is retried on the next delivery and at catch-up", async () => {
+    let failures = 1;
+    const handled: number[] = [];
+    const withHappyHour = new TelegramService({
+      config: CONFIG,
+      connection: realDb,
+      gateway: () => new FakeGateway(),
+      logger,
+      happyHour: {
+        handleMessage: async (message) => {
+          if (failures-- > 0) throw new Error("database down");
+          handled.push(message.telegramId);
+        },
+      },
+    });
+    await expect(withHappyHour.handleMessage(botMessage(60, "Happy hour van 21:00 tot 22:00"))).rejects.toThrow("database down");
+    expect(await telegramMessageModel(realDb).findOne({ telegramId: 60 }).lean()).toMatchObject({ handledAt: null });
+    await withHappyHour.handleMessage(botMessage(60, "Happy hour van 21:00 tot 22:00"));
+    await withHappyHour.handleMessage(botMessage(60, "Happy hour van 21:00 tot 22:00"));
+    expect(handled).toEqual([60]);
+    expect((await telegramMessageModel(realDb).findOne({ telegramId: 60 }).lean())?.handledAt).toBeInstanceOf(Date);
+  });
+
+  test("catch-up retries stored messages that were not handled (tegenhunt within its 30 minutes)", async () => {
+    await telegramMessageModel(realDb).create([
+      { telegramId: 70, text: "Tegenhunt gestart, windrichting oost", kind: "tegenhunt", receivedAt: new Date(Date.now() - 60_000), handledAt: null },
+      { telegramId: 71, text: "Tegenhunt gestart, windrichting west", kind: "tegenhunt", receivedAt: new Date(Date.now() - 40 * 60_000), handledAt: null },
+    ]);
+    await storeLink();
+    const restarted = createService();
+    await restarted.start();
+    await until(async () => (await telegramMessageModel(realDb).countDocuments({ handledAt: null })) === 0);
+    const notifications = await AppNotification.find().lean();
+    expect(notifications.map((notification) => notification.data.telegramId)).toEqual([70]);
+    await restarted.stop();
+  });
+
+  test("status reports the connection; a failing connect retries whatever failed", async () => {
+    await storeLink();
+    let failures = 2;
+    const failing = new TelegramService({
+      config: CONFIG,
+      connection: realDb,
+      gateway: () => {
+        if (failures-- > 0) throw new Error("mongo or network down");
+        const gateway = new FakeGateway();
+        gateways.push(gateway);
+        return gateway;
+      },
+      logger,
+      retryInitialMs: 30,
+    });
+    await failing.start();
+    expect(await failing.status()).toMatchObject({ state: "linked", connected: false, lastError: "Geen verbinding met Telegram, wordt opnieuw geprobeerd." });
+    expect(await failing.listMessages()).toMatchObject({ linked: true, connected: false });
+    await until(async () => (await failing.status()).connected);
+    const status = await failing.status();
+    expect(status.lastError).toBeUndefined();
+    expect((await failing.listMessages()).connected).toBe(true);
+    await failing.stop();
+  });
+
+  test("a session that can't be decrypted keeps the link and says why", async () => {
+    const { ciphertext, iv, tag } = encryptSession(SESSION, randomBytes(32).toString("base64"));
+    await telegramLinkModel(realDb).create({ key: "telegram", sessionCiphertext: ciphertext, iv, tag, account: { id: 42, name: "Silke" }, linkedAt: new Date() });
+    const restarted = createService();
+    await restarted.start();
+    expect(await restarted.status()).toMatchObject({ state: "linked", connected: false, lastError: "Sessie kan niet worden ontsleuteld (TELEGRAM_SESSION_KEY gewijzigd?)" });
+    expect(await telegramLinkModel(realDb).countDocuments()).toBe(1);
+    await restarted.stop();
+  });
+
+  test("a login that fails after the password state ends as unlinked with an error", async () => {
+    await service.startLink("Admin");
+    gateways[0].qr.resolve("password");
+    await until(async () => (await service.status()).state === "password");
+    gateways[0].submitPassword = () => Promise.reject(new Error("AUTH_TOKEN_EXPIRED"));
+    await expect(service.submitPassword("geheim")).rejects.toMatchObject({ status: 502 });
+    expect(await service.status()).toEqual({ state: "unlinked", connected: false, lastError: "Koppelen met Telegram is mislukt." });
+    expect(gateways[0].cancelled).toBe(true);
+  });
+
+  test("unlink while a finished login is still being stored: cancelled and logged out, no link", async () => {
+    let releaseMe!: () => void;
+    prepare = (gateway) => {
+      const me = gateway.me.bind(gateway);
+      gateway.me = () => new Promise((resolve) => (releaseMe = () => resolve(me())));
+    };
+    await service.startLink("Admin");
+    gateways[0].qr.resolve("linked");
+    await until(async () => releaseMe !== undefined);
+    await service.unlink();
+    releaseMe();
+    await until(async () => gateways[0].cancelled);
+    expect(gateways[0].loggedOut).toBe(true);
+    expect(await telegramLinkModel(realDb).countDocuments()).toBe(0);
+    expect((await service.status()).state).toBe("unlinked");
+  });
+
+  test("unlink during the link write: the write is rolled back", async () => {
+    const links = telegramLinkModel(realDb);
+    const original = links.updateOne;
+    links.updateOne = (async (...args: Parameters<typeof original>) => {
+      const result = await original.apply(links, args);
+      links.updateOne = original;
+      await service.unlink();
+      return result;
+    }) as typeof original;
+    try {
+      await service.startLink("Admin");
+      gateways[0].qr.resolve("linked");
+      await until(async () => gateways[0].loggedOut);
+      await until(async () => (await links.countDocuments()) === 0);
+      expect((await service.status()).state).toBe("unlinked");
+    } finally {
+      links.updateOne = original;
+    }
+  });
+
+  test("tegenhunt and happy hour texts that are not a tegenhunt don't alert", async () => {
+    await linkNow();
+    await service.handleMessage(recent(80, "Happy hour van 21:00 tot 22:00! Hunts tellen dubbel, tegenhunts niet."));
+    await service.handleMessage(recent(81, "Jullie tegenhunt is goedgekeurd"));
+    expect(await AppNotification.countDocuments({ type: "counter-hunt" })).toBe(0);
+  });
+});

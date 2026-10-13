@@ -13,6 +13,8 @@ export interface TelegramMessageDoc {
   receivedAt: Date;
   /** Parsed details, e.g. `{ direction }` of a tegenhunt */
   data?: Record<string, unknown>;
+  /** When its alerts were done; null: stored but not handled yet (retried at the next catch-up) */
+  handledAt?: Date | null;
 }
 
 const TelegramMessageSchema = new mongoose.Schema<TelegramMessageDoc>(
@@ -22,6 +24,7 @@ const TelegramMessageSchema = new mongoose.Schema<TelegramMessageDoc>(
     kind: { type: String, enum: BOT_MESSAGE_KINDS, required: true },
     receivedAt: { type: Date, required: true },
     data: { type: mongoose.Schema.Types.Mixed, default: {} },
+    handledAt: { type: Date, default: null },
   },
   { collection: "telegrammessages", versionKey: false },
 );
