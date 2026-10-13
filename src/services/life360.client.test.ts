@@ -142,13 +142,13 @@ describe("data", () => {
     expect(await failure(client.members("tok", "c1"))).toBeInstanceOf(Life360UpstreamError);
   });
 
-  test("deviceLocations (v5): providers query, circleid and CloudEvents headers, Bearer + Android UA; parsed items", async () => {
+  test("deviceLocations (v5): only the life360 provider (phones), circleid and CloudEvents headers, Bearer + Android UA; parsed items", async () => {
     const { client, requests } = fakeTransport({ json: { data: { items: [rawDeviceLocation("m1"), { owners: [] }] } } });
     expect(await client.deviceLocations("tok", "c/1")).toEqual([
       { userId: "m1", location: { lat: 52.1, lon: 5.2, accuracyM: 20, at: DEVICE_FIX_ISO, driving: false, speedKmh: 0, battery: 77, charging: false } },
     ]);
     const [request] = requests;
-    expect(request).toMatchObject({ method: "GET", url: "https://api-cloudfront.life360.com/v5/circles/devices/locations?providers[]=life360&providers[]=jiobit&providers[]=tile" });
+    expect(request).toMatchObject({ method: "GET", url: "https://api-cloudfront.life360.com/v5/circles/devices/locations?providers[]=life360" });
     expect(request.headers).toMatchObject({
       accept: "application/json",
       "cache-control": "no-cache",

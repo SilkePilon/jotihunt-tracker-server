@@ -183,9 +183,15 @@ function isoTime(value: unknown): string | null {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
+/**
+ * One v5 item, or null. Only phones: an item with another `type` (a Tile or Jiobit tracker the member owns) is dropped, so
+ * a tracker left at home never stands in for the member. An item without `type` is kept: the field is not documented, and
+ * the life360 provider (the only one requested) is phones.
+ */
 function parseDevice(value: unknown): Life360DeviceLocation | null {
   const raw = record(value);
   if (!raw) return null;
+  if (raw.type !== undefined && raw.type !== null && raw.type !== "phone") return null;
   const owners = Array.isArray(raw.owners) ? raw.owners : [];
   const userId = text(record(owners[0])?.userId);
   const lat = number(raw.latitude);
@@ -238,16 +244,16 @@ export function latestByUser(devices: Life360DeviceLocation[]): Map<string, Life
 /**
  * The members of the v3 roster with their position: the v5 position when there is one; else the v3 position; else the
  * last known position (`previous`) while the member still shares (Life360 sometimes answers no position for minutes).
- * A v3 position older than the last known one is skipped, so a member never jumps back in time. Not sharing: null.
+ * A v5 or v3 position older than the last known one is skipped, so a member never jumps back in time. Not sharing: null.
  */
 export function mergeLocations(roster: ParsedLife360Member[], devices: Map<string, Life360Location>, previous: Map<string, Life360Location | null>): Life360Member[] {
   return roster.map(({ member, sharing }) => {
     if (!sharing) return { ...member, location: null };
-    const v5 = devices.get(member.id);
-    if (v5) return { ...member, location: v5 };
     const known = previous.get(member.id) ?? null;
-    const v3 = member.location;
-    if (v3 && (!known || Date.parse(v3.at) >= Date.parse(known.at))) return member;
+    const notOlder = (location: Life360Location | null | undefined): location is Life360Location => !!location && (!known || Date.parse(location.at) >= Date.parse(known.at));
+    const v5 = devices.get(member.id);
+    if (notOlder(v5)) return { ...member, location: v5 };
+    if (notOlder(member.location)) return member;
     return { ...member, location: known };
   });
 }

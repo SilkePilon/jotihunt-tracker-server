@@ -56,7 +56,11 @@ export const BACKOFF_MAX_MS = 5 * 60_000;
 export const ROSTER_INTERVAL_MS = 5 * 60_000;
 /** After v5 answered 404/400 (endpoint gone?): v3 positions only, v5 tried again after this */
 export const V5_RETRY_MS = 60 * 60_000;
-/** A members call without if-none-match at least this often: some accounts get endless 304s (ha-life360 #98) */
+/**
+ * A members call without if-none-match at least this often: some accounts get endless 304s (ha-life360 #98). Equal to
+ * ROSTER_INTERVAL_MS, so in practice every scheduled roster call is a full call; if-none-match only goes out on an early
+ * roster call (v5 failing, so v3 positions every poll).
+ */
 export const FULL_POLL_MS = 5 * 60_000;
 export const AVATAR_CACHE_MS = 60 * 60_000;
 /** A failed avatar fetch is not retried for this long */
@@ -79,6 +83,8 @@ interface PendingCode {
   resendAt: Date;
   /** The login is dropped after this (PENDING_CODE_MS after the code was sent) */
   expiresAt: Date;
+  /** Set once the expiry was logged, so reading the status after it doesn't log it again */
+  expiryLogged?: boolean;
 }
 
 interface ChoosingCircle {
@@ -419,13 +425,20 @@ export class Life360Service {
     return this.options.now?.() ?? new Date();
   }
 
-  /** The pending login, dropped once expired */
+  /**
+   * The pending login, or null once its code expired. An expired login is NOT cleared here (status() runs on every GET):
+   * it stays in this.pending so a later cancel still only clears that login and never deletes a working link. Sending a
+   * new code, a successful login and unlink/cancel clear it.
+   */
   private currentPending(): PendingCode | null {
-    if (this.pending && this.now() >= this.pending.expiresAt) {
-      this.pending = null;
+    const pending = this.pending;
+    if (!pending) return null;
+    if (this.now() < pending.expiresAt) return pending;
+    if (!pending.expiryLogged) {
+      pending.expiryLogged = true;
       this.options.logger.info("Life360 login code expired");
     }
-    return this.pending;
+    return null;
   }
 
   private requireConfig(): Life360Config {
@@ -522,8 +535,9 @@ export class Life360Service {
   }
 
   /**
-   * One v3 members call (if-none-match, a full call every 5 min): the roster, its avatars and the v3 positions merged with
-   * the last known ones. False when the link changed meanwhile (the answer is dropped).
+   * One v3 members call: the roster, its avatars and the v3 positions merged with the last known ones. A full call when
+   * FULL_POLL_MS passed since the last one (so every 5-min roster refresh), else with if-none-match (only when v5 failed and
+   * v3 is polled every time). False when the link changed meanwhile (the answer is dropped).
    */
   private async fetchRoster(token: string, circleId: string, started: Date, generation: number): Promise<boolean> {
     const full = !this.lastFullPollAt || started.getTime() - this.lastFullPollAt.getTime() >= FULL_POLL_MS;

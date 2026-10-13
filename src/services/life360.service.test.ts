@@ -351,6 +351,16 @@ describe("v5 positions", () => {
     ]);
   });
 
+  test("a phone fix is carried over: an older v5 item at the next poll does not replace it", async () => {
+    await link();
+    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"))];
+    client.deviceAnswers = [[rawDeviceLocation("m1", { latitude: 52.5, lastObserved: at(DEVICE_FIX_ISO, 30) })], [rawDeviceLocation("m1", { latitude: 51.9, lastObserved: at(DEVICE_FIX_ISO, -600) })]];
+    await service.pollOnce();
+    advance(30_000);
+    await service.pollOnce();
+    expect(locations()).toEqual([["m1", [52.5, at(DEVICE_FIX_ISO, 30)]]]);
+  });
+
   test("sharing turned off (seen at the next roster call): no position, even when v5 still has one", async () => {
     await link();
     client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon")), membersAnswer(rawMember("m1", "Silke", "Pilon", { shareLocation: "0" }))];
@@ -541,6 +551,8 @@ describe("restart and unlink", () => {
     advance(60_000);
     await service.sendCode("ander@example.nl");
     advance(10 * 60_000 + 1);
+    // An admin page reading the status after the expiry must not turn the cancel into a delete
+    expect(service.status()).toMatchObject({ state: "linked", email: EMAIL });
     expect(await service.unlink()).toMatchObject({ state: "linked", email: EMAIL, circleName: "Jotihunt" });
     expect(await life360LinkModel(realDb).countDocuments()).toBe(1);
     expect(service.status()).toMatchObject({ state: "linked", email: EMAIL });

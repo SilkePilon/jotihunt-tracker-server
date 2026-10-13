@@ -118,6 +118,16 @@ describe("parseDeviceLocations (v5)", () => {
     expect(JSON.stringify(list)).not.toContain("android");
   });
 
+  test("only phones: a tile or other tracker is skipped; an item without type is kept", () => {
+    const list = parseDeviceLocations([
+      rawDeviceLocation("tile", { type: "tile", provider: "tile" }),
+      rawDeviceLocation("jiobit", { type: "jiobit" }),
+      rawDeviceLocation("phone"),
+      rawDeviceLocation("untyped", { type: undefined }),
+    ]);
+    expect(list.map((entry) => entry.userId)).toEqual(["phone", "untyped"]);
+  });
+
   test("latestByUser: with several devices the most recent lastObserved wins", () => {
     const byUser = latestByUser(
       parseDeviceLocations([
@@ -165,6 +175,14 @@ describe("mergeLocations", () => {
     expect(mergeLocations(roster, new Map(), new Map([["v3", newer]]))[1].location).toEqual(newer);
     const older = fix(9, "2026-10-15T11:00:00.000Z");
     expect(mergeLocations(roster, new Map(), new Map([["v3", older]]))[1].location!.lat).toBe(52.0907);
+  });
+
+  test("a v5 position older than the last known one does not replace it (an older phone fix or a tracker)", () => {
+    const known = fix(7, DEVICE_FIX_ISO);
+    const olderV5 = new Map([["v5", fix(8, "2026-10-15T11:00:00.000Z")]]);
+    expect(mergeLocations(roster, olderV5, new Map([["v5", known]]))[0].location).toEqual(known);
+    const sameAge = new Map([["v5", fix(8, DEVICE_FIX_ISO)]]);
+    expect(mergeLocations(roster, sameAge, new Map([["v5", known]]))[0].location!.lat).toBe(8);
   });
 });
 

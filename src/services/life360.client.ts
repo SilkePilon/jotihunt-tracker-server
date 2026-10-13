@@ -337,11 +337,12 @@ export class Life360Client implements Life360Api {
     return { notModified: false, etag: nonEmpty(response.headers["l360-etag"]), members: list };
   }
 
+  /** Positions of the circle's phones: only the life360 provider (no Tile/Jiobit trackers; parseDevice also drops non-phones) */
   async deviceLocations(token: string, circleId: string): Promise<Life360DeviceLocation[]> {
     const response = await this.call(
       {
         method: "GET",
-        url: `${this.baseUrl}/v5/circles/devices/locations?providers[]=life360&providers[]=jiobit&providers[]=tile`,
+        url: `${this.baseUrl}/v5/circles/devices/locations?providers[]=life360`,
         headers: { ...dataHeaders(token), ...deviceLocationHeaders(circleId) },
       },
       "data",
