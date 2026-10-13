@@ -7,6 +7,8 @@ import { getDemoStateStore, initDemoMode } from "./demo/database-switch";
 import { installDemoWorld } from "./demo/demo-world";
 import { huntOcr } from "./services/hunt-ocr.instance";
 import { isTraccarConfigured, usesLegacyTraccarEnv } from "./services/traccar-http";
+import { setTelegramService, telegramConfigFromEnv, TelegramService } from "./services/telegram.service";
+import { createMtcuteGateway } from "./services/telegram.gateway";
 
 // A forgotten promise rejection is logged and the server keeps running; after an uncaught exception the process state
 // is unknown, so log it and exit (docker restarts the server in a second or two)
@@ -47,6 +49,21 @@ await initDemoMode(db, { logger: { info: (message) => logger.info(message), warn
 
 // Global settings live in the real database (also in demo mode); cached in memory from here on
 await initPredictionSetting(getDemoStateStore());
+
+// Telegram (tegenhunts and other @Jotihunt_bot messages). The link and the messages live in the real database like the
+// settings; connecting runs in the background (retried with backoff) so a Telegram outage never delays the start
+const telegramConfig = telegramConfigFromEnv(process.env, (message) => logger.warn(message));
+if (!process.env.TELEGRAM_API_ID?.trim() || !process.env.TELEGRAM_API_HASH?.trim()) {
+  logger.warn("TELEGRAM_API_ID/TELEGRAM_API_HASH not set, tegenhunts are not read from Telegram");
+}
+const telegram = new TelegramService({
+  config: telegramConfig,
+  connection: getDemoStateStore().connection,
+  gateway: createMtcuteGateway,
+  logger: { info: (message) => logger.info(message), warn: (message) => logger.warn(message), error: (message, error) => logger.error(message, error) },
+});
+setTelegramService(telegram);
+telegram.start().catch((error) => logger.error("Could not start the Telegram listener", error));
 
 // Index maintenance of the real database runs in initDemoMode (and again whenever demo mode is switched off)
 

@@ -26,6 +26,8 @@ import pushRoute from "./routes/push.route";
 import demoRoute from "./routes/demo.route";
 import appRoute from "./routes/app.route";
 import settingsRoute from "./routes/settings.route";
+import telegramRoute from "./routes/telegram.route";
+import counterHuntRoute from "./routes/counter-hunt.route";
 
 export const app = express();
 if (process.env.TRUST_PROXY) app.set("trust proxy", parseTrustProxy(process.env.TRUST_PROXY));
@@ -81,6 +83,9 @@ app.use("/predictions", predictionsRoute);
 app.use("/visits", visitsRoute);
 app.use("/notifications", notificationsRoute);
 app.use("/push", pushRoute);
+// Messages of @Jotihunt_bot and the tegenhunt state; the Telegram link itself is in the real database
+app.use("/telegram", telegramRoute);
+app.use("/counter-hunt", counterHuntRoute);
 // After the demo gate: verifyToken reads the users of the default connection. The setting itself is global (real database).
 app.use("/settings", settingsRoute);
 

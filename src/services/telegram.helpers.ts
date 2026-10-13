@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { COUNTER_HUNT_DIRECTIONS, type CounterHuntDirection } from "./notifier.helpers";
+import { buildCounterHuntNotification, COUNTER_HUNT_DIRECTIONS, type CounterHuntDirection, type NotificationInput } from "./notifier.helpers";
 
 /** What a @Jotihunt_bot message is about (decides the marker in the client's card; only tegenhunts alert). */
 export const BOT_MESSAGE_KINDS = ["tegenhunt", "hunt-approved", "hunt-rejected", "assignment", "happy-hour", "other"] as const;
@@ -145,4 +145,24 @@ export function counterHuntView(latest: { data?: Record<string, unknown> | null;
   const view: CounterHuntView = { active: true, direction, startedAt: startedAt.toISOString(), endsAt: endsAt.toISOString() };
   if (direction === null && typeof data.text === "string") view.text = data.text;
   return view;
+}
+
+/**
+ * The alert for a tegenhunt message from the bot: the card's usual notification when the direction was recognised,
+ * otherwise a generic one that points to the bot's message (its text is in `data.text`).
+ */
+export function buildTelegramCounterHuntNotification(message: { telegramId: number; text: string; date: Date }): NotificationInput {
+  const direction = parseCounterHuntDirection(message.text);
+  const extra = { telegramId: message.telegramId, startedAt: message.date.toISOString() };
+  if (direction !== null) {
+    const notification = buildCounterHuntNotification(direction, "Telegram");
+    return { ...notification, data: { ...notification.data, ...extra } };
+  }
+  return {
+    type: "counter-hunt",
+    title: "Tegenhunt!",
+    body: "Richting niet herkend, lees het bericht van de Jotihunt-bot.",
+    urgent: true,
+    data: { direction: null, text: message.text, ...extra },
+  };
 }

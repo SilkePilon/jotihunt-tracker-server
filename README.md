@@ -108,6 +108,10 @@ GEMINI_API_KEY= # Optioneel, leest huntcode en tijd van de huntfoto en voorspelt
 GEMINI_MODEL=gemini-3.8-flash
 GEMINI_PREDICTION_MODEL=gemini-pro-latest
 GEMINI_CHAT_MODEL=gemini-3.8-flash
+TELEGRAM_API_ID= # Optioneel, leest de berichten van @Jotihunt_bot en meldt tegenhunts (zie configuratie)
+TELEGRAM_API_HASH=
+TELEGRAM_SESSION_KEY= # openssl rand -base64 32
+TELEGRAM_BOT_USERNAME= # Optioneel, standaard Jotihunt_bot
 
 # Client
 JWT_SECRET=verander-dit-naar-een-veilige-random-string-van-minimaal-32-tekens
@@ -179,6 +183,14 @@ Het lezen gebeurt op de achtergrond, één foto tegelijk (bij netwerkfouten of d
 **Vossenvoorspelling:** Gemini krijgt per vossengebied het spoor van markers (hints, spots, hunts) en de coördinaten van de groepen, en voorspelt daaruit een pin, de ronde en een korte uitleg. Dat kost ongeveer één Gemini Pro-aanroep per actief gebied per 10 minuten (of eerder bij nieuwe gegevens), altijd na elkaar (nooit tegelijk). Zonder `GEMINI_API_KEY` staat de vossenvoorspelling uit. Een admin kan de voorspelling ook helemaal uit- en aanzetten via Instellingen > Admin tools > "AI-voorspelling" (globaal, bewaard in de `settings` collectie; uit betekent geen Gemini/ORS-aanroepen en geen voorspellingen of bezoeken in de app).
 
 **Privacy:** de huntfoto's, het markerspoor en de coördinaten van de groepen worden naar Google gestuurd. Met een gratis (free tier) key mag Google de verstuurde gegevens gebruiken om hun producten te verbeteren; gebruik een betaalde key als je dat niet wilt. De key komt nooit in de logs of in antwoorden van de server.
+
+#### `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_SESSION_KEY` en `TELEGRAM_BOT_USERNAME` (optioneel)
+De organisatie meldt een tegenhunt met een Telegram-bericht van @Jotihunt_bot aan het geregistreerde account van de groep. Met deze instellingen leest de server die berichten zelf: bij een tegenhunt krijgt iedereen automatisch een melding (met richting als die in het bericht staat), en alle berichten van de bot staan in de kaart "Jotihunt-berichten".
+1. Maak eenmalig een app aan op [my.telegram.org](https://my.telegram.org) (API development tools) en vul `TELEGRAM_API_ID` en `TELEGRAM_API_HASH` in.
+2. Zet `TELEGRAM_SESSION_KEY` op 32 willekeurige bytes in base64 (`openssl rand -base64 32`). Hiermee wordt de Telegram-sessie versleuteld opgeslagen; verander je de key, dan moet een admin opnieuw koppelen.
+3. Een admin koppelt het account in de kaart "Jotihunt-berichten" door de QR-code te scannen in Telegram (Instellingen > Apparaten > Desktop-apparaat koppelen), eventueel met het cloud-wachtwoord.
+
+De server kan alle chats van dat account lezen, maar verwerkt en bewaart alleen berichten van `TELEGRAM_BOT_USERNAME` (standaard `Jotihunt_bot`). Er draait één luisteraar per serverproces, dus draai de server met één replica. Zonder API id/hash staat dit uit.
 
 #### `JWT_SECRET`
 Genereer een willekeurige, veilige string van minimaal 32 tekens. Deze wordt gebruikt om JWT tokens te ondertekenen voor de authenticatie.

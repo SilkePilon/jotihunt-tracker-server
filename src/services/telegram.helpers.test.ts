@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import {
+  buildTelegramCounterHuntNotification,
   classifyBotMessage,
   COUNTER_HUNT_WINDOW_MS,
   counterHuntView,
@@ -118,5 +119,27 @@ describe("counterHuntView", () => {
   });
   test("ended after 30 minutes", () => {
     expect(counterHuntView({ data: { direction: 90, startedAt: ago(30) }, createdAt: ago(30) }, now)).toEqual({ active: false, last: { direction: 90, startedAt: ago(30).toISOString() } });
+  });
+});
+
+describe("buildTelegramCounterHuntNotification", () => {
+  const date = new Date("2026-10-17T19:14:00Z");
+  test("with a direction: the usual counter-hunt alert plus the message id and start", () => {
+    expect(buildTelegramCounterHuntNotification({ telegramId: 7, text: "Tegenhunt, windrichting noordoost", date })).toEqual({
+      type: "counter-hunt",
+      title: "Tegenhunt! Richting NO ↗",
+      body: "Zoek de sticker binnen 500 m van het clubhuis, richting noordoost.",
+      urgent: true,
+      data: { direction: 45, from: "Telegram", telegramId: 7, startedAt: date.toISOString() },
+    });
+  });
+  test("without a direction: points to the bot's message", () => {
+    expect(buildTelegramCounterHuntNotification({ telegramId: 8, text: "Tegenhunt gestart!", date })).toEqual({
+      type: "counter-hunt",
+      title: "Tegenhunt!",
+      body: "Richting niet herkend, lees het bericht van de Jotihunt-bot.",
+      urgent: true,
+      data: { direction: null, text: "Tegenhunt gestart!", telegramId: 8, startedAt: date.toISOString() },
+    });
   });
 });

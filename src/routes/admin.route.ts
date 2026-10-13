@@ -1,9 +1,9 @@
 import express from "express";
 import * as adminController from "../controllers/admin.controller";
 import * as notificationsController from "../controllers/notifications.controller";
+import * as telegramController from "../controllers/telegram.controller";
 import * as trackerController from "../controllers/tracker.controller";
 import { VEHICLES } from "../services/tracker-onboarding.helpers";
-import { COUNTER_HUNT_DIRECTIONS } from "../services/notifier.helpers";
 import verifyToken, { isAdmin } from "../middleware/auth.middleware";
 import { body, param } from "express-validator";
 import { User } from "../models/user.model";
@@ -66,10 +66,14 @@ router.post(
   [verifyToken, isAdmin, validate([body("message").isString().trim().isLength({ min: 1, max: 200 }).withMessage("Bericht moet 1 tot 200 tekens zijn.")])],
   notificationsController.broadcast,
 );
+// Linking the group's Telegram account (tegenhunts and other @Jotihunt_bot messages come in through it)
+router.get("/telegram", [verifyToken, isAdmin], telegramController.getStatus);
+router.post("/telegram/link", [verifyToken, isAdmin], telegramController.startLink);
+router.delete("/telegram/link", [verifyToken, isAdmin], telegramController.unlink);
 router.post(
-  "/counter-hunt",
-  [verifyToken, isAdmin, validate([body("direction").isIn(COUNTER_HUNT_DIRECTIONS.map(String)).withMessage("Richting moet 0, 45, 90, ..., 315 zijn.").toInt()])],
-  notificationsController.counterHunt,
+  "/telegram/password",
+  [verifyToken, isAdmin, validate([body("password").isString().withMessage("Wachtwoord mag niet leeg zijn.").bail().notEmpty().withMessage("Wachtwoord mag niet leeg zijn.")])],
+  telegramController.submitPassword,
 );
 router.delete("/users/:id", [verifyToken, isAdmin, validate(deleteValidator)], adminController.deleteUser);
 router.put("/users/:id", [verifyToken, isAdmin, validate(updateValidator)], adminController.updateUser);

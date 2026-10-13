@@ -4,7 +4,7 @@ import { AppNotification } from "../models/notification.model";
 import { PushSubscription } from "../models/push-subscription.model";
 import { User } from "../models/user.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
-import { broadcast, counterHunt, getPreferences, listNotifications, putPreferences, subscribe, unsubscribe } from "./notifications.controller";
+import { broadcast, getCounterHunt, getPreferences, listNotifications, putPreferences, subscribe, unsubscribe } from "./notifications.controller";
 
 function fakeRes() {
   const res = { statusCode: 200, body: undefined as unknown, status(code: number) { res.statusCode = code; return res; }, json(body: unknown) { res.body = body; return res; }, end() { return res; } };
@@ -70,9 +70,14 @@ test("broadcast stores an urgent notification", async () => {
   expect(await AppNotification.findOne({ type: "broadcast" }).lean()).toMatchObject({ title: "Bericht van HQ", body: "Terug naar HQ", urgent: true });
 });
 
-test("counterHunt stores an urgent counter-hunt notification", async () => {
-  const admin = await User.create({ email: "h@t.nl", password: "x", name: "HQ", admin: true });
-  const res = await call(counterHunt, { user: admin, body: { direction: 90 } });
-  expect(res.statusCode).toBe(201);
-  expect(await AppNotification.findOne({ type: "counter-hunt" }).lean()).toMatchObject({ title: "Tegenhunt! Richting O →", urgent: true, data: { direction: 90, from: "HQ" } });
+describe("getCounterHunt", () => {
+  test("nothing yet", async () => {
+    expect((await call(getCounterHunt, {})).body).toEqual({ active: false });
+  });
+  test("the latest counter-hunt notification, active for 30 minutes from its start", async () => {
+    const startedAt = new Date(Date.now() - 10 * 60_000).toISOString();
+    await AppNotification.create({ type: "counter-hunt", title: "oud", data: { direction: 90 }, createdAt: new Date(Date.now() - 60 * 60_000) });
+    await AppNotification.create({ type: "counter-hunt", title: "Tegenhunt!", data: { direction: null, text: "Tegenhunt!", startedAt } });
+    expect((await call(getCounterHunt, {})).body).toMatchObject({ active: true, direction: null, startedAt, text: "Tegenhunt!" });
+  });
 });

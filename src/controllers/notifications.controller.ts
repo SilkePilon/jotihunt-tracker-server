@@ -2,7 +2,8 @@ import { Request, Response } from "express";
 import { AppNotification, toNotificationView } from "../models/notification.model";
 import { PushSubscription } from "../models/push-subscription.model";
 import { User } from "../models/user.model";
-import { buildBroadcastNotification, buildCounterHuntNotification, type CounterHuntDirection } from "../services/notifier.helpers";
+import { buildBroadcastNotification } from "../services/notifier.helpers";
+import { counterHuntView } from "../services/telegram.helpers";
 import { currentGeneration, runTracked } from "../demo/demo-mode";
 import { sendToAll, vapidPublicKey } from "../services/push.service";
 
@@ -65,9 +66,8 @@ export async function broadcast(req: Request, res: Response) {
   return res.status(201).json(toNotificationView(notification));
 }
 
-export async function counterHunt(req: Request, res: Response) {
-  const notification = await AppNotification.create(buildCounterHuntNotification(Number(req.body.direction) as CounterHuntDirection, req.user!.name));
-  const generation = currentGeneration();
-  void runTracked(() => sendToAll(notification), { generation });
-  return res.status(201).json(toNotificationView(notification));
+/** The latest tegenhunt: active for 30 minutes from its start, otherwise the last one (notifications live 48 hours). */
+export async function getCounterHunt(_req: Request, res: Response) {
+  const latest = await AppNotification.findOne({ type: "counter-hunt" }).sort({ createdAt: -1 }).lean();
+  return res.status(200).json(counterHuntView(latest ? { data: latest.data as Record<string, unknown> | null, createdAt: latest.createdAt } : null, new Date()));
 }
