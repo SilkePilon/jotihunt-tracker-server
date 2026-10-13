@@ -78,7 +78,7 @@ describe("runNotifier", () => {
 
   test("deadline warning once", async () => {
     await run();
-    const user = await User.create({ email: "s@t.nl", password: "x", name: "Sam" });
+    const user = await User.create({ name: "Sam" });
     await HuntReport.create({ area: "bravo", photo: "p.jpg", reportedBy: user._id, reportedByName: "Sam", huntTime: new Date(now.getTime() - 21 * MIN), createdAt: new Date(now.getTime() - 21 * MIN) });
     await HuntReport.create({ area: "alpha", photo: "q.jpg", reportedBy: user._id, reportedByName: "Sam", huntTime: new Date(now.getTime() - 21 * MIN), createdAt: new Date(now.getTime() - 21 * MIN), submittedAt: now });
     const created = await run();
@@ -88,7 +88,7 @@ describe("runNotifier", () => {
 
   test("a failed insert releases the deadline claim so the next run warns", async () => {
     await run();
-    const user = await User.create({ email: "s@t.nl", password: "x", name: "Sam" });
+    const user = await User.create({ name: "Sam" });
     const report = await HuntReport.create({ area: "bravo", photo: "p.jpg", reportedBy: user._id, reportedByName: "Sam", huntTime: new Date(now.getTime() - 21 * MIN), createdAt: new Date(now.getTime() - 21 * MIN) });
     const spy = spyOn(AppNotification, "insertMany").mockRejectedValueOnce(new Error("boom"));
     try {

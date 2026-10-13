@@ -33,7 +33,7 @@ afterAll(async () => {
 });
 
 async function subscribe(name: string, endpoint: string, disabledTypes: string[] = []) {
-  const user = await User.create({ email: `${name}@t.nl`, password: "x", name, notificationPrefs: { disabledTypes, promptedVersion: 0 } });
+  const user = await User.create({ name, notificationPrefs: { disabledTypes, promptedVersion: 0 } });
   await PushSubscription.create({ user: user._id, endpoint, keys: { p256dh: "p", auth: "a" } });
 }
 

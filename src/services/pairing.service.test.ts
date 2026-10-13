@@ -25,8 +25,7 @@ beforeAll(connectTestDb);
 beforeEach(clearTestDb);
 afterAll(disconnectTestDb);
 
-let counter = 0;
-const createUser = () => User.create({ email: `p${++counter}@test.nl`, name: "Hunter", password: "x", requiresPasswordChange: false });
+const createUser = () => User.create({ name: "Hunter" });
 
 describe("pairing codes", () => {
   test("generate: 8 chars from the unambiguous alphabet", () => {

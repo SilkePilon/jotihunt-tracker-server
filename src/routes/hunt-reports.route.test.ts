@@ -4,8 +4,8 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import jwt from "jsonwebtoken";
 import { User } from "../models/user.model";
+import { tokenFor, withSession } from "../test/auth";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 
 process.env.JWT_SECRET ??= "test-secret-test-secret-test-secret";
@@ -39,8 +39,8 @@ afterAll(async () => {
 });
 
 async function token() {
-  const user = await User.create({ email: `hunter${Date.now()}${Math.random()}@test.nl`, name: "Hunter", password: "x", requiresPasswordChange: false });
-  return jwt.sign({ _id: user._id }, process.env.JWT_SECRET!, { expiresIn: "1h" });
+  const user = await withSession(await User.create({ name: "Hunter" }));
+  return tokenFor(user);
 }
 
 function upload(auth: string, files: { photo?: Buffer; thumb?: Buffer }, uploadId?: string) {

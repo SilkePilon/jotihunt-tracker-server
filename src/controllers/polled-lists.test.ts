@@ -68,7 +68,7 @@ afterAll(disconnectTestDb);
 
 describe("polled list endpoints", () => {
   test("send exactly the JSON the uncached endpoints sent", async () => {
-    const user = await User.create({ email: "merida@test.nl", password: "x", name: "merida" });
+    const user = await User.create({ name: "merida" });
     await createHuntReport({ area: "alpha", huntCode: "ABC", huntTime: new Date("2026-10-17T12:00:00Z"), photo: { buffer: Buffer.from([1]), mimetype: "image/jpeg" }, location: [5.9, 52.2] }, user);
     await Marker.create({ area: "bravo", time: new Date("2026-10-17T13:00:00Z"), type: MarkerType.Hint, location: { type: "Point", coordinates: [5.8, 52.1] } });
     await Article.create([
@@ -97,7 +97,7 @@ describe("polled list endpoints", () => {
 
 describe("getPhoto", () => {
   test("sends the file with nosniff and the cache header; 404 for an unknown report", async () => {
-    const user = await User.create({ email: "merida@test.nl", password: "x", name: "merida" });
+    const user = await User.create({ name: "merida" });
     const report = await createHuntReport({ area: "alpha", photo: { buffer: Buffer.from([1]), mimetype: "image/jpeg" } }, user);
     const res = await call(getPhoto, { params: { id: report._id } });
     expect(res.sentFile).toBeString();

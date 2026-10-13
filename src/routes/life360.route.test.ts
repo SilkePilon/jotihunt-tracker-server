@@ -2,12 +2,12 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { randomBytes } from "node:crypto";
-import jwt from "jsonwebtoken";
 import mongoose, { type Connection } from "mongoose";
 import { life360LinkModel } from "../models/life360-link.model";
 import { User } from "../models/user.model";
 import { Life360CodeInvalidError } from "../services/life360.client";
 import { Life360Service, setLife360Service } from "../services/life360.service";
+import { tokenFor, withSession } from "../test/auth";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { FakeLife360Client } from "../test/life360-client";
 import { FIX_ISO, rawMember } from "../test/life360-fixtures";
@@ -48,9 +48,8 @@ afterAll(async () => {
   await disconnectTestDb();
 });
 
-let counter = 0;
-const createUser = (admin = false) => User.create({ email: `l360-${++counter}@test.nl`, name: admin ? "Admin" : "Hunter", password: "x", admin, requiresPasswordChange: false });
-const tokenOf = (user: { _id: unknown }) => jwt.sign({ _id: user._id }, process.env.JWT_SECRET!, { expiresIn: "1h" });
+const createUser = async (admin = false) => withSession(await User.create({ name: admin ? "Admin" : "Hunter", admin }));
+const tokenOf = (user: { _id: unknown }) => tokenFor(user);
 
 function request(path: string, init: RequestInit & { token?: string; json?: unknown } = {}) {
   const headers = new Headers(init.headers);

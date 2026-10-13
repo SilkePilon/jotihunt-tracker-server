@@ -11,7 +11,7 @@ import { addNote, claimCell, getBoard, getBoardJson, invalidateBoardCache, relea
 const slotTime = new Date("2026-10-17T12:00:00.000Z");
 
 async function makeUser(name: string, admin = false) {
-  return User.create({ email: `${name}@test.nl`, password: "x", name, admin });
+  return User.create({ name, admin });
 }
 
 async function makeCell(area = "alpha", status = HintCellStatus.Open) {

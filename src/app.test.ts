@@ -2,9 +2,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import jwt from "jsonwebtoken";
+import mongoose from "mongoose";
 import { Article } from "./models/article.model";
-import { hashPassword, User } from "./models/user.model";
+import { User } from "./models/user.model";
+import { sessions } from "./auth/models";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "./test/db";
+import { tokenFor, withSession } from "./test/auth";
 
 process.env.JWT_SECRET ??= "test-secret-test-secret-test-secret";
 const { app, isQuietRequest } = await import("./app");
@@ -25,18 +28,9 @@ afterAll(async () => {
 });
 
 const sign = (payload: object, options: jwt.SignOptions = { expiresIn: "36h" }) => jwt.sign(payload, process.env.JWT_SECRET!, options);
-const tokenFor = (user: { _id: unknown }, iat?: number) => sign(iat === undefined ? { _id: user._id } : { _id: user._id, iat });
-const nowSeconds = () => Math.floor(Date.now() / 1000);
 
-let emailCounter = 0;
-async function createUser(fields: { admin?: boolean; password?: string; email?: string; name?: string; requiresPasswordChange?: boolean } = {}) {
-  return User.create({
-    email: fields.email ?? `user${++emailCounter}@test.nl`,
-    name: fields.name ?? "Test",
-    password: await hashPassword(fields.password ?? "geheim"),
-    admin: fields.admin ?? false,
-    requiresPasswordChange: fields.requiresPasswordChange ?? false,
-  });
+async function createUser(fields: { admin?: boolean; name?: string } = {}) {
+  return withSession(await User.create({ name: fields.name ?? "Test", admin: fields.admin ?? false }));
 }
 
 function request(path: string, init: RequestInit & { token?: string; json?: unknown } = {}) {
@@ -52,14 +46,30 @@ describe("auth middleware", () => {
     expect((await request("/markers", { token: tokenFor(user) })).status).toBe(200);
   });
 
-  test("missing, invalid, expired or wrongly shaped tokens get 401", async () => {
+  test("missing, invalid, expired, old-style or wrongly shaped tokens get 401", async () => {
     const user = await createUser();
+    const sid = String((await sessions().findOne({ user: user._id }).lean())!._id);
     expect((await request("/markers")).status).toBe(401);
     expect((await request("/markers", { token: "nonsense" })).status).toBe(401);
-    expect((await request("/markers", { token: sign({ _id: user._id }, { expiresIn: -10 }) })).status).toBe(401);
-    expect((await request("/markers", { token: sign({ _id: "not-an-object-id" }) })).status).toBe(401);
-    expect((await request("/markers", { token: sign({ _id: { $ne: null } }) })).status).toBe(401);
-    expect((await request("/markers", { token: sign({ _id: "aaaaaaaaaaaaaaaaaaaaaaaa" }) })).status).toBe(401);
+    expect((await request("/markers", { token: sign({ sid }, { expiresIn: -10 }) })).status).toBe(401);
+    // Password-era token: only an _id, no session
+    expect((await request("/markers", { token: sign({ _id: String(user._id) }) })).status).toBe(401);
+    expect((await request("/markers", { token: sign({ sid: "not-an-object-id" }) })).status).toBe(401);
+    expect((await request("/markers", { token: sign({ sid: { $ne: null } }) })).status).toBe(401);
+    expect((await request("/markers", { token: sign({ sid: String(new mongoose.Types.ObjectId()) }) })).status).toBe(401);
+  });
+
+  test("a revoked or expired session gets 401; a deleted user too", async () => {
+    const user = await createUser();
+    const token = tokenFor(user);
+    await sessions().updateMany({ user: user._id }, { $set: { expiresAt: new Date(Date.now() - 1000) } });
+    expect((await request("/markers", { token })).status).toBe(401);
+    const other = await createUser();
+    await sessions().deleteMany({ user: other._id });
+    expect((await request("/markers", { token: tokenFor(other) })).status).toBe(401);
+    const gone = await createUser();
+    await User.deleteOne({ _id: gone._id });
+    expect((await request("/markers", { token: tokenFor(gone) })).status).toBe(401);
   });
 
   test("a database error is a 503, not a 401 (clients sign out on 401)", async () => {
@@ -83,227 +93,6 @@ describe("auth middleware", () => {
     } finally {
       spy.mockRestore();
     }
-  });
-
-  test("tokens issued before the last password change get 401; users without the field keep working", async () => {
-    const user = await createUser();
-    const old = tokenFor(user, nowSeconds() - 60);
-    expect((await request("/markers", { token: old })).status).toBe(200);
-    await User.updateOne({ _id: user._id }, { passwordChangedAt: new Date((nowSeconds() - 30) * 1000) });
-    expect((await request("/markers", { token: old })).status).toBe(401);
-    expect((await request("/markers", { token: tokenFor(user) })).status).toBe(200);
-  });
-});
-
-describe("passwords", () => {
-  test("update-password signs out all sessions (older and newer) and returns a fresh token that works", async () => {
-    const user = await createUser({ password: "oud" });
-    const older = tokenFor(user, nowSeconds() - 120);
-    const current = tokenFor(user, nowSeconds() - 60);
-    const newer = tokenFor(user, nowSeconds() - 30);
-    // Issued in the same second as the change, before it
-    const sameSecond = tokenFor(user);
-    const res = await request("/auth/update-password", {
-      method: "POST",
-      token: current,
-      json: { oldPassword: "oud", newPassword: "nieuw-wachtwoord", confirmPassword: "nieuw-wachtwoord" },
-    });
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { accessToken: string };
-    expect(typeof body.accessToken).toBe("string");
-    expect((await request("/markers", { token: body.accessToken })).status).toBe(200);
-    for (const token of [older, current, newer, sameSecond]) {
-      expect((await request("/markers", { token })).status).toBe(401);
-    }
-
-    const stored = await User.findById(user._id);
-    expect(stored!.password).toStartWith("$argon2id$v=19$m=19456,t=2,");
-    expect(await Bun.password.verify("nieuw-wachtwoord", stored!.password)).toBe(true);
-    // A login right after the change (same second) gets a working token too
-    const login = await request("/auth/login", { method: "POST", json: { email: user.email, password: "nieuw-wachtwoord" } });
-    const { accessToken } = (await login.json()) as { accessToken: string };
-    expect((await request("/markers", { token: accessToken })).status).toBe(200);
-  });
-
-  test("login works with an old (default settings) hash and replaces it with the cheaper one", async () => {
-    const user = await createUser();
-    await User.updateOne({ _id: user._id }, { password: await Bun.password.hash("oud-wachtwoord") });
-    const res = await request("/auth/login", { method: "POST", json: { email: user.email, password: "oud-wachtwoord" } });
-    expect(res.status).toBe(200);
-    const stored = await User.findById(user._id);
-    expect(stored!.password).toStartWith("$argon2id$v=19$m=19456,t=2,");
-    expect(await Bun.password.verify("oud-wachtwoord", stored!.password)).toBe(true);
-    expect(stored!.passwordChangedAt).toBeUndefined();
-    // The token from the login still works after the rehash
-    const { accessToken } = (await res.json()) as { accessToken: string };
-    expect((await request("/markers", { token: accessToken })).status).toBe(200);
-  });
-
-  test("an admin password reset signs the user out", async () => {
-    const admin = await createUser({ admin: true });
-    const user = await createUser();
-    const userToken = tokenFor(user, nowSeconds() - 60);
-    const res = await request(`/admin/users/${user._id}`, { method: "PUT", token: tokenFor(admin), json: { password: "reset-wachtwoord" } });
-    expect(res.status).toBe(200);
-    expect((await request("/markers", { token: userToken })).status).toBe(401);
-    const stored = await User.findById(user._id);
-    expect(stored!.requiresPasswordChange).toBe(true);
-    expect(stored!.password).toStartWith("$argon2id$v=19$m=19456,t=2,");
-  });
-
-  test("an admin resetting their own password keeps their session", async () => {
-    const admin = await createUser({ admin: true });
-    const token = tokenFor(admin, nowSeconds() - 60);
-    expect((await request(`/admin/users/${admin._id}`, { method: "PUT", token, json: { password: "reset-wachtwoord" } })).status).toBe(200);
-    expect((await request("/markers", { token })).status).toBe(200);
-  });
-});
-
-describe("minimum password length (8) on set and change, not on login", () => {
-  const TOO_SHORT = "Wachtwoord moet minstens 8 tekens zijn.";
-  const messages = async (res: Response) => JSON.stringify(await res.json());
-
-  test("update-password: 7 characters is a 400 and keeps the old password, 8 is fine", async () => {
-    const user = await createUser({ password: "oud-wachtwoord" });
-    const short = await request("/auth/update-password", {
-      method: "POST",
-      token: tokenFor(user),
-      json: { oldPassword: "oud-wachtwoord", newPassword: "1234567", confirmPassword: "1234567" },
-    });
-    expect(short.status).toBe(400);
-    expect(await messages(short)).toContain(TOO_SHORT);
-    expect(await Bun.password.verify("oud-wachtwoord", (await User.findById(user._id))!.password)).toBe(true);
-
-    const ok = await request("/auth/update-password", {
-      method: "POST",
-      token: tokenFor(user),
-      json: { oldPassword: "oud-wachtwoord", newPassword: "12345678", confirmPassword: "12345678" },
-    });
-    expect(ok.status).toBe(200);
-  });
-
-  test("admin create: 7 characters is a 400, 8 is a 201", async () => {
-    const admin = await createUser({ admin: true });
-    const short = await request("/admin/users", { method: "POST", token: tokenFor(admin), json: { name: "Kort", email: "kort@test.nl", password: "1234567" } });
-    expect(short.status).toBe(400);
-    expect(await messages(short)).toContain(TOO_SHORT);
-    expect(await User.exists({ email: "kort@test.nl" })).toBeNull();
-    const ok = await request("/admin/users", { method: "POST", token: tokenFor(admin), json: { name: "Lang", email: "lang@test.nl", password: "12345678" } });
-    expect(ok.status).toBe(201);
-  });
-
-  test("admin update: 7 characters is a 400, 8 is fine, empty or missing leaves the password alone", async () => {
-    const admin = await createUser({ admin: true });
-    const user = await createUser({ password: "bestaand-wachtwoord" });
-    const put = (json: object) => request(`/admin/users/${user._id}`, { method: "PUT", token: tokenFor(admin), json });
-
-    const short = await put({ password: "1234567" });
-    expect(short.status).toBe(400);
-    expect(await messages(short)).toContain(TOO_SHORT);
-    expect((await put({ name: "Andere naam", password: "" })).status).toBe(200);
-    expect((await put({ name: "Nog een naam" })).status).toBe(200);
-    const stored = await User.findById(user._id);
-    expect(await Bun.password.verify("bestaand-wachtwoord", stored!.password)).toBe(true);
-    expect(stored!.requiresPasswordChange).toBe(false);
-
-    expect((await put({ password: "12345678" })).status).toBe(200);
-    expect(await Bun.password.verify("12345678", (await User.findById(user._id))!.password)).toBe(true);
-  });
-
-  test("an existing short password still logs in (no lock-out)", async () => {
-    const user = await createUser({ password: "kort" });
-    const res = await request("/auth/login", { method: "POST", json: { email: user.email, password: "kort" } });
-    expect(res.status).toBe(200);
-  });
-});
-
-describe("required password change", () => {
-  const REQUIRED = { message: "Wijzig eerst je wachtwoord.", code: "PASSWORD_CHANGE_REQUIRED" };
-
-  test("every authenticated route answers 403 PASSWORD_CHANGE_REQUIRED", async () => {
-    const user = await createUser({ admin: true, requiresPasswordChange: true });
-    const token = tokenFor(user);
-    const calls: [string, RequestInit & { json?: unknown }][] = [
-      ["/markers", {}],
-      ["/tracker/me", {}],
-      ["/hints/board", {}],
-      ["/hunt-reports", {}],
-      ["/assignments", {}],
-      ["/assignments/members", {}],
-      ["/articles/read", {}],
-      ["/notifications", {}],
-      ["/admin/users", {}],
-      ["/demo", {}],
-      ["/settings/prediction", {}],
-      ["/auth/tutorial", { method: "POST", json: { version: 1 } }],
-      ["/tracker/pair", { method: "POST" }],
-      ["/auth/refresh", { method: "POST" }],
-      ["/auth/devices", {}],
-      ["/push/subscribe", { method: "POST", json: { endpoint: "https://push.example.nl/x", keys: { p256dh: "a", auth: "b" } } }],
-    ];
-    for (const [path, init] of calls) {
-      const res = await request(path, { ...init, token });
-      expect([path, res.status]).toEqual([path, 403]);
-      expect(await res.json()).toEqual(REQUIRED);
-    }
-  });
-
-  test("an invalid or revoked token is still a 401 (sign out), not a 403", async () => {
-    const user = await createUser({ requiresPasswordChange: true });
-    expect((await request("/markers", { token: "nonsense" })).status).toBe(401);
-    const old = tokenFor(user, nowSeconds() - 60);
-    await User.updateOne({ _id: user._id }, { passwordChangedAt: new Date((nowSeconds() - 30) * 1000) });
-    expect((await request("/markers", { token: old })).status).toBe(401);
-  });
-
-  test("the change screen can change the password and log out (push unsubscribe); then everything works", async () => {
-    const user = await createUser({ password: "tijdelijk", requiresPasswordChange: true });
-    const token = tokenFor(user, nowSeconds() - 60);
-    const unsubscribe = await request("/push/subscribe", { method: "DELETE", token, json: { endpoint: "https://push.example.nl/x" } });
-    expect(unsubscribe.status).toBe(204);
-
-    const res = await request("/auth/update-password", {
-      method: "POST",
-      token,
-      json: { oldPassword: "tijdelijk", newPassword: "eigen-wachtwoord", confirmPassword: "eigen-wachtwoord" },
-    });
-    expect(res.status).toBe(200);
-    const { accessToken } = (await res.json()) as { accessToken: string };
-    expect((await User.findById(user._id))!.requiresPasswordChange).toBe(false);
-    expect((await request("/markers", { token: accessToken })).status).toBe(200);
-  });
-
-  test("a wrong old password on the change screen is a 400 from update-password, flag stays", async () => {
-    const user = await createUser({ password: "tijdelijk", requiresPasswordChange: true });
-    const res = await request("/auth/update-password", {
-      method: "POST",
-      token: tokenFor(user),
-      json: { oldPassword: "fout", newPassword: "eigen-wachtwoord", confirmPassword: "eigen-wachtwoord" },
-    });
-    expect(res.status).toBe(400);
-    expect((await User.findById(user._id))!.requiresPasswordChange).toBe(true);
-  });
-
-  test("login still works and reports the flag", async () => {
-    const user = await createUser({ password: "tijdelijk", requiresPasswordChange: true });
-    const res = await request("/auth/login", { method: "POST", json: { email: user.email, password: "tijdelijk" } });
-    expect(res.status).toBe(200);
-    expect(((await res.json()) as { user: { requiresPasswordChange: boolean } }).user.requiresPasswordChange).toBe(true);
-  });
-
-  test("a user created by an admin must change their password", async () => {
-    const admin = await createUser({ admin: true });
-    const res = await request("/admin/users", { method: "POST", token: tokenFor(admin), json: { name: "Nieuw", email: "nieuw@test.nl", password: "tijdelijk" } });
-    expect(res.status).toBe(201);
-    expect((await User.findOne({ email: "nieuw@test.nl" }))!.requiresPasswordChange).toBe(true);
-  });
-
-  test("an admin resetting their own password chose it themselves: no forced change", async () => {
-    const admin = await createUser({ admin: true });
-    const token = tokenFor(admin, nowSeconds() - 60);
-    expect((await request(`/admin/users/${admin._id}`, { method: "PUT", token, json: { password: "reset-wachtwoord" } })).status).toBe(200);
-    expect((await User.findById(admin._id))!.requiresPasswordChange).toBe(false);
-    expect((await request("/markers", { token })).status).toBe(200);
   });
 });
 
@@ -342,16 +131,6 @@ describe("admin user management", () => {
     }
   });
 
-  test("a duplicate e-mail that slips past the validator is a 400, not a 500", async () => {
-    const admin = await createUser({ admin: true });
-    const results = await Promise.all(
-      [1, 2, 3, 4].map(() => request("/admin/users", { method: "POST", token: tokenFor(admin), json: { name: "N", email: "dubbel@test.nl", password: "tijdelijk" } })),
-    );
-    const statuses = results.map((res) => res.status).sort();
-    expect(statuses[0]).toBe(201);
-    expect(statuses.slice(1).every((status) => status === 400)).toBe(true);
-    expect(await User.countDocuments({ email: "dubbel@test.nl" })).toBe(1);
-  });
 });
 
 describe("hints page: assignments, read state and presence", () => {
@@ -440,11 +219,11 @@ describe("hints page: assignments, read state and presence", () => {
   test("an admin's user answers never carry the read articles", async () => {
     const admin = await createUser({ admin: true });
     const token = tokenFor(admin);
-    const created = await request("/admin/users", { method: "POST", token, json: { name: "Nieuw", email: "lezer@test.nl", password: "tijdelijk" } });
-    expect(created.status).toBe(201);
-    expect(JSON.stringify(await created.json())).not.toContain("readArticles");
     const user = await createUser();
     await User.updateOne({ _id: user._id }, { $set: { readArticles: [3] } });
+    const list = await request("/admin/users", { token });
+    expect(list.status).toBe(200);
+    expect(JSON.stringify(await list.json())).not.toContain("readArticles");
     const updated = await request(`/admin/users/${user._id}`, { method: "PUT", token, json: { name: "Anders" } });
     expect(updated.status).toBe(200);
     expect(JSON.stringify(await updated.json())).not.toContain("readArticles");

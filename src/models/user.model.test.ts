@@ -7,7 +7,7 @@ beforeEach(clearTestDb);
 afterAll(disconnectTestDb);
 
 async function createUser() {
-  return User.create({ email: "tour@example.com", password: "x", name: "Tour" });
+  return User.create({ name: "Tour" });
 }
 
 describe("tutorialVersion", () => {
@@ -30,8 +30,8 @@ describe("tutorialVersion", () => {
   });
 
   test("users stored before the field existed read as 0", async () => {
-    await User.collection.insertOne({ email: "old@example.com", password: "x", name: "Old", admin: false, requiresPasswordChange: false });
-    const user = await User.findOne({ email: "old@example.com" });
+    await User.collection.insertOne({ name: "Old", admin: false });
+    const user = await User.findOne({ name: "Old" });
     expect(user!.tutorialVersion).toBe(0);
   });
 });

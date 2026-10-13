@@ -114,7 +114,7 @@ describe("switching between the real and the demo database", () => {
   });
 
   test("real data survives an on/off cycle, users are copied and demo data is gone after off", async () => {
-    const user = await User.create({ email: "hq@example.com", password: "hash", name: "HQ", admin: true });
+    const user = await User.create({ name: "HQ", admin: true });
     await Area.create({ name: "Alpha", status: "green", updatedAt: new Date() });
     let generatedAt: Date | null = null;
     setDemoWorldGenerator(async (now) => {
@@ -128,8 +128,7 @@ describe("switching between the real and the demo database", () => {
     expect(isDemoMode()).toBe(true);
     expect(mongoose.connection.name).toBe(demoName);
     const copied = await User.findById(user._id).lean();
-    expect(copied?.email).toBe("hq@example.com");
-    expect(copied?.password).toBe("hash");
+    expect(copied?.name).toBe("HQ");
     expect((await Area.find().lean()).map((area) => area.name)).toEqual(["Demo"]);
     expect(photoFilePath("x.jpg")).toContain(`${"/demo/"}x.jpg`);
 

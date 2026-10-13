@@ -113,7 +113,7 @@ describe("every marker write clears the cached markers", () => {
 
 describe("hunt report writes clear the cached hunt reports", () => {
   test("upload and status change", async () => {
-    const user = await User.create({ email: "hq@test.nl", password: "x", name: "hq", admin: true });
+    const user = await User.create({ name: "hq", admin: true });
     const photo = { buffer: Buffer.from([0xff, 0xd8, 0xff]), mimetype: "image/jpeg" };
     let id = "";
     expect(

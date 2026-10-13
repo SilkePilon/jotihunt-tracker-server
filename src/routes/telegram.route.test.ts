@@ -2,13 +2,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { randomBytes } from "node:crypto";
-import jwt from "jsonwebtoken";
 import mongoose, { type Connection } from "mongoose";
 import { AppNotification } from "../models/notification.model";
 import { telegramLinkModel } from "../models/telegram-link.model";
 import { telegramMessageModel } from "../models/telegram-message.model";
 import { User } from "../models/user.model";
 import { setTelegramService, TelegramService } from "../services/telegram.service";
+import { tokenFor, withSession } from "../test/auth";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { FakeGateway } from "../test/telegram-gateway";
 
@@ -57,9 +57,8 @@ afterAll(async () => {
   await disconnectTestDb();
 });
 
-let counter = 0;
-const createUser = (admin = false) => User.create({ email: `tg${++counter}@test.nl`, name: admin ? "Admin" : "Hunter", password: "x", admin, requiresPasswordChange: false });
-const tokenOf = (user: { _id: unknown }) => jwt.sign({ _id: user._id }, process.env.JWT_SECRET!, { expiresIn: "1h" });
+const createUser = async (admin = false) => withSession(await User.create({ name: admin ? "Admin" : "Hunter", admin }));
+const tokenOf = (user: { _id: unknown }) => tokenFor(user);
 
 function request(path: string, init: RequestInit & { token?: string; json?: unknown } = {}) {
   const headers = new Headers(init.headers);

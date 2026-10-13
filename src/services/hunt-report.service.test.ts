@@ -39,7 +39,7 @@ function input(overrides: Partial<NewHuntReport> = {}): NewHuntReport {
 }
 
 async function makeUser(name: string, admin = false) {
-  return User.create({ email: `${name}@test.nl`, password: "x", name, admin });
+  return User.create({ name, admin });
 }
 
 async function expectReportError(promise: Promise<unknown>, status: number) {

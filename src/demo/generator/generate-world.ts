@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import mongoose from "mongoose";
@@ -76,17 +75,12 @@ function jitter(position: LngLat, radiusM: number, rng: ReturnType<typeof create
 }
 
 async function createDemoUsers() {
-  // Random, never shown or logged: demo users can't log in. One hash shared by all of them (argon2 is slow).
-  const password = await Bun.password.hash(randomBytes(24).toString("base64url"));
   const docs = DEMO_HUNTERS.map((hunter, index) => ({
-    email: `${hunter.name.toLowerCase()}@demo.jotihunt.local`,
-    password,
     name: hunter.name,
     admin: false,
-    requiresPasswordChange: false,
     tracker: { deviceId: DEMO_DEVICE_ID_BASE + index, uniqueId: `demo-${hunter.name.toLowerCase()}`, vehicle: hunter.vehicle },
   }));
-  await User.deleteMany({ email: { $in: docs.map((doc) => doc.email) } });
+  await User.deleteMany({ name: { $in: docs.map((doc) => doc.name) }, admin: false });
   return User.insertMany(docs);
 }
 
@@ -143,7 +137,7 @@ async function applyCellPlans(plans: CellPlan[], routes: Map<DemoArea, FoxRoute>
 /**
  * Fill the (fresh) demo database: teams copied from the real database, areas, fox routes, the
  * real 2025 articles re-timed with their hint cells, markers, 8 demo hunters, hunt reports with sticker photos and
- * the simulated trackers. Deterministic for the same teams and `now` (apart from passwords and photo file names).
+ * the simulated trackers. Deterministic for the same teams and `now` (apart from photo file names).
  */
 export async function generateDemoWorld(now: Date, options: WorldOptions): Promise<void> {
   const log = options.log ?? (() => undefined);

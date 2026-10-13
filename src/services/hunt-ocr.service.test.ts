@@ -57,7 +57,7 @@ async function stored(id: string) {
 beforeAll(connectTestDb);
 beforeEach(async () => {
   await clearTestDb();
-  user = await User.create({ email: "merida@test.nl", password: "x", name: "merida" });
+  user = await User.create({ name: "merida" });
 });
 afterAll(disconnectTestDb);
 

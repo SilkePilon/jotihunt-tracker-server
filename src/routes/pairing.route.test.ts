@@ -3,6 +3,7 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import jwt from "jsonwebtoken";
 import { User } from "../models/user.model";
+import { tokenFor, withSession } from "../test/auth";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 
 process.env.JWT_SECRET ??= "test-secret-test-secret-test-secret";
@@ -23,9 +24,8 @@ afterAll(async () => {
   await disconnectTestDb();
 });
 
-let counter = 0;
-const createUser = () => User.create({ email: `pair${++counter}@test.nl`, name: "Hunter", password: "x", requiresPasswordChange: false });
-const webToken = (user: { _id: unknown }) => jwt.sign({ _id: user._id }, process.env.JWT_SECRET!, { expiresIn: "36h" });
+const createUser = async () => withSession(await User.create({ name: "Hunter" }));
+const webToken = (user: { _id: unknown }) => tokenFor(user);
 
 function request(path: string, init: RequestInit & { token?: string; json?: unknown } = {}) {
   const headers = new Headers(init.headers);
@@ -120,11 +120,9 @@ describe("device tokens", () => {
     expect((await request("/auth/devices/nope", { method: "DELETE", token: webToken(user) })).status).toBe(404);
   });
 
-  test("a password change also signs out paired phones", async () => {
+  test("a device token without a registered device is a 401", async () => {
     const user = await createUser();
-    const { response } = await pair(user);
-    const { accessToken } = (await response.json()) as { accessToken: string };
-    await User.updateOne({ _id: user._id }, { $set: { passwordChangedAt: new Date(Date.now() + 2000) } });
-    expect((await request("/tracker/me", { token: accessToken })).status).toBe(401);
+    const token = jwt.sign({ _id: String(user._id), did: "gone", kind: "device" }, process.env.JWT_SECRET!, { expiresIn: "1h" });
+    expect((await request("/tracker/me", { token })).status).toBe(401);
   });
 });

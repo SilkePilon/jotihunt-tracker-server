@@ -5,7 +5,7 @@ import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { ServiceError } from "../http/service-error";
 import { getReadState, markArticleRead } from "./article-read.service";
 
-const makeUser = (name: string) => User.create({ email: `${name}@test.nl`, password: "x", name });
+const makeUser = (name: string) => User.create({ name });
 const makeArticle = (id: number) => Article.create({ id, title: `Nieuws ${id}`, type: "news", publishAt: new Date("2026-10-17T12:00:00Z"), content: "x" });
 
 beforeAll(connectTestDb);

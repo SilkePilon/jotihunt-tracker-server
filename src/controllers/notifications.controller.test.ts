@@ -40,7 +40,7 @@ describe("listNotifications", () => {
 
 describe("preferences", () => {
   test("defaults, update and promptedVersion never goes down", async () => {
-    const user = await User.create({ email: "a@t.nl", password: "x", name: "A" });
+    const user = await User.create({ name: "A" });
     expect((await call(getPreferences, { user })).body).toEqual({ disabledTypes: [], promptedVersion: 0 });
     await call(putPreferences, { user, body: { disabledTypes: ["hint"], promptedVersion: 2 } });
     const res = await call(putPreferences, { user, body: { promptedVersion: 1 } });
@@ -50,8 +50,8 @@ describe("preferences", () => {
 
 describe("push subscriptions", () => {
   test("subscribe upserts by endpoint and moves it to the current user", async () => {
-    const a = await User.create({ email: "a@t.nl", password: "x", name: "A" });
-    const b = await User.create({ email: "b@t.nl", password: "x", name: "B" });
+    const a = await User.create({ name: "A" });
+    const b = await User.create({ name: "B" });
     const body = { endpoint: "https://push/1", keys: { p256dh: "p", auth: "a" } };
     await call(subscribe, { user: a, body, get: () => "UA" } as unknown as Partial<Request>);
     await call(subscribe, { user: b, body, get: () => "UA" } as unknown as Partial<Request>);
@@ -64,7 +64,7 @@ describe("push subscriptions", () => {
 });
 
 test("broadcast stores an urgent notification", async () => {
-  const admin = await User.create({ email: "h@t.nl", password: "x", name: "HQ", admin: true });
+  const admin = await User.create({ name: "HQ", admin: true });
   const res = await call(broadcast, { user: admin, body: { message: "Terug naar HQ" } });
   expect(res.statusCode).toBe(201);
   expect(await AppNotification.findOne({ type: "broadcast" }).lean()).toMatchObject({ title: "Bericht van HQ", body: "Terug naar HQ", urgent: true });

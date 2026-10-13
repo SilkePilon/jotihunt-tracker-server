@@ -71,7 +71,7 @@ beforeAll(async () => {
   await withRealDb(async (db) => {
     await db.dropDatabase();
     await db.collection("teams").insertMany(seedTeams());
-    await db.collection("users").insertOne({ email: "hq@test.nl", password: "x", name: "HQ", admin: true, requiresPasswordChange: false });
+    await db.collection("users").insertOne({ name: "HQ", admin: true });
   });
   installDemoWorld();
   await initDemoMode(realUri);
@@ -140,7 +140,7 @@ describe("demo world generator (full run)", () => {
     expect(await User.countDocuments()).toBe(9);
     const hunters = await User.find({ "tracker.deviceId": { $gte: 900001 } }).lean();
     expect(hunters.map((user) => user.name).sort()).toEqual(DEMO_HUNTERS.map((hunter) => hunter.name).sort());
-    expect(hunters.every((user) => !user.admin && !user.requiresPasswordChange && user.password.startsWith("$argon2"))).toBe(true);
+    expect(hunters.every((user) => !user.admin)).toBe(true);
 
     // Hunt reports with photos
     const reports = await listHuntReports(now);

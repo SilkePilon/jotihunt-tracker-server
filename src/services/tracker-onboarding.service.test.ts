@@ -70,7 +70,7 @@ function fakeTraccar() {
 }
 
 async function makeUser() {
-  return User.create({ email: "hunter@local.test", password: "x", name: "Hunter Een" });
+  return User.create({ name: "Hunter Een" });
 }
 
 /** `clientUrl: null` simulates an unset TRACCAR_CLIENT_URL. */
@@ -315,6 +315,5 @@ describe("User.tracker", () => {
   test("is left out when not set", async () => {
     const user = await makeUser();
     expect(user.toJSON().tracker).toBeUndefined();
-    expect(user.toJSON().password).toBeUndefined();
   });
 });

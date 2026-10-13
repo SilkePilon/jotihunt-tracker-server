@@ -6,7 +6,7 @@ import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { ServiceError } from "../http/service-error";
 import { addAssignmentNote, listAssignments, listMembers, setAssignmentOwner, setAssignmentStatus } from "./assignment.service";
 
-const makeUser = (name: string) => User.create({ email: `${name}@test.nl`, password: "x", name });
+const makeUser = (name: string) => User.create({ name });
 const makeArticle = (id = 7, type = "assignment") => Article.create({ id, title: "Doedelzak", type, publishAt: new Date("2026-10-17T12:00:00Z"), content: "<div>bouw</div>" });
 
 async function expectError(promise: Promise<unknown>, status: number) {
