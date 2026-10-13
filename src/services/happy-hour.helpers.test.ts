@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildHappyHourNotification, happyHourView, overlaps, parseHappyHourWindow } from "./happy-hour.helpers";
+import { buildHappyHourNotification, happyHourView, isHappyHourEnd, overlaps, parseHappyHourWindow } from "./happy-hour.helpers";
 
 // 20:45 in Amsterdam (CEST, UTC+2)
 const received = new Date("2026-10-17T18:45:00Z");
@@ -40,11 +40,31 @@ describe("parseHappyHourWindow", () => {
     // Less than an hour before: today (already running)
     expect(parseHappyHourWindow("om 22:45", late)).toEqual(window("2026-10-17T20:45:00Z", "2026-10-17T21:45:00Z"));
   });
+  test("a range is resolved as a whole: running now stays today", () => {
+    // 21:30 in Amsterdam
+    const during = new Date("2026-10-17T19:30:00Z");
+    expect(parseHappyHourWindow("van 20:00 tot 22:00", during)).toEqual(window("2026-10-17T18:00:00Z", "2026-10-17T20:00:00Z"));
+    expect(parseHappyHourWindow("20:00 - 22:00", during)).toEqual(window("2026-10-17T18:00:00Z", "2026-10-17T20:00:00Z"));
+    // Sent after midnight about a window that started before it
+    expect(parseHappyHourWindow("van 23:30 tot 00:30", new Date("2026-10-17T22:10:00Z"))).toEqual(window("2026-10-17T21:30:00Z", "2026-10-17T22:30:00Z"));
+    // Ended long ago: tomorrow's
+    expect(parseHappyHourWindow("van 18:00 tot 19:00", during)).toEqual(window("2026-10-18T16:00:00Z", "2026-10-18T17:00:00Z"));
+  });
   test("winter time", () => {
     expect(parseHappyHourWindow("van 21:00 tot 22:00", new Date("2026-12-01T19:00:00Z"))).toEqual(window("2026-12-01T20:00:00Z", "2026-12-01T21:00:00Z"));
   });
   test("numbers that are no time are ignored", () => {
     expect(parseHappyHourWindow("Happy hour! 2x punten, om 25:00", received).parsed).toBe(false);
+  });
+});
+
+describe("isHappyHourEnd", () => {
+  test("end words", () => {
+    expect(isHappyHourEnd("Happy hour is voorbij")).toBe(true);
+    expect(isHappyHourEnd("De happy hour is afgelopen!")).toBe(true);
+    expect(isHappyHourEnd("Einde van de happy hour")).toBe(true);
+    expect(isHappyHourEnd("Happy hour gestopt")).toBe(true);
+    expect(isHappyHourEnd("Happy hour is begonnen!")).toBe(false);
   });
 });
 

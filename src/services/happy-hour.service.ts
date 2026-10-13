@@ -2,7 +2,7 @@ import { HappyHour } from "../models/happy-hour.model";
 import { AppNotification } from "../models/notification.model";
 import { runTracked, runTrackedRetrying } from "../demo/demo-mode";
 import { sendToAll } from "./push.service";
-import { buildHappyHourNotification, happyHourView, parseHappyHourWindow, type HappyHourView } from "./happy-hour.helpers";
+import { buildHappyHourNotification, happyHourView, isHappyHourEnd, parseHappyHourWindow, type HappyHourView, type HappyHourWindow } from "./happy-hour.helpers";
 
 export interface HappyHourLogger {
   info(message: string): void;
@@ -14,8 +14,9 @@ export interface HappyHourServiceOptions {
   logger: HappyHourLogger;
   /** Tests only */
   now?: () => Date;
-  /** Wait between tries while a demo switch is running */
+  /** Wait between tries while a demo switch is running, and how often to try */
   retryWaitMs?: number;
+  attempts?: number;
 }
 
 /** An end alert later than this (server was down at the end) is skipped: everyone has noticed by then. */
@@ -46,46 +47,31 @@ export class HappyHourService {
   }
 
   /**
-   * A happy-hour message (once per Telegram id). A message overlapping a known window updates that window without a
-   * new announcement; a window that has already ended (read late, e.g. after a restart) is stored without alerts.
+   * A happy-hour message (once per Telegram id). A message with times overlapping a known window updates that window
+   * without a new announcement. A message without times ("Happy hour is begonnen!") or about the end ("… is
+   * voorbij") never changes a window, it is only recorded on it; without any window a start without times is the
+   * coming hour, an end message is ignored. A window that has already ended (read late) is stored without alerts.
+   * Throws when it could not be handled (the caller retries the message later).
    */
   async handleMessage(message: { telegramId: number; text: string; date: Date }): Promise<void> {
     const window = parseHappyHourWindow(message.text, message.date);
+    const isEnd = isHappyHourEnd(message.text);
     const result = await runTrackedRetrying(
       async () => {
         const now = this.now();
-        if (await HappyHour.exists({ telegramIds: message.telegramId })) return null;
-        const ended = window.endsAt.getTime() <= now.getTime();
-        const existing = await HappyHour.findOne({ startsAt: { $lt: window.endsAt }, endsAt: { $gt: window.startsAt } }).sort({ startsAt: 1 });
-        if (existing) {
-          // A running window keeps its start ("verlengd tot 22:30" sent during it starts "now")
-          const startsAt = existing.startsAt.getTime() <= now.getTime() ? existing.startsAt : window.startsAt;
-          existing.set({ startsAt, endsAt: window.endsAt, text: message.text, parsed: window.parsed, telegramIds: [...existing.telegramIds, message.telegramId] });
-          // Extended past a sent end alert: the new end alerts again
-          if (existing.endNotifiedAt && !ended) existing.endNotifiedAt = null;
-          await existing.save();
-          return { hour: existing.toObject() as HappyHourDoc, notification: null };
-        }
-        const startsNow = window.startsAt.getTime() <= now.getTime();
-        const hour = await HappyHour.create({
-          ...window,
-          text: message.text,
-          telegramIds: [message.telegramId],
-          announcedAt: now,
-          // Starting now: the announcement is the start alert
-          startNotifiedAt: ended || startsNow ? now : null,
-          endNotifiedAt: ended ? now : null,
-        });
-        if (ended) return { hour: hour.toObject() as HappyHourDoc, notification: null };
-        const notification = await AppNotification.create(buildHappyHourNotification("announce", hour, now));
+        const known = await HappyHour.findOne({ telegramIds: message.telegramId });
+        // Known and announced (or merged): done. Known but not announced: a previous try failed halfway.
+        if (known?.announcedAt) return null;
+        const hour = known ?? (await this.storeWindow(message, window, isEnd, now));
+        if (!hour || hour.announcedAt) return hour ? { hour: hour.toObject() as HappyHourDoc, notification: null } : null;
+        const ended = hour.endsAt.getTime() <= now.getTime();
+        const notification = ended ? null : await AppNotification.create(buildHappyHourNotification("announce", hour, now));
+        await HappyHour.updateOne({ _id: hour._id }, { $set: { announcedAt: now } });
         return { hour: hour.toObject() as HappyHourDoc, notification };
       },
-      { waitMs: this.options.retryWaitMs },
+      { waitMs: this.options.retryWaitMs, attempts: this.options.attempts },
     );
-    if (!result) {
-      this.options.logger.error(`Happy hour from Telegram message ${message.telegramId} skipped: a demo switch kept running`);
-      return;
-    }
+    if (!result) throw new Error(`Happy hour from Telegram message ${message.telegramId} not handled: a demo switch kept running`);
     if (!result.value) return;
     const { hour, notification } = result.value;
     if (notification) {
@@ -93,6 +79,43 @@ export class HappyHourService {
       void runTracked(() => sendToAll(notification), { generation: result.generation });
     }
     this.schedule(hour);
+  }
+
+  /**
+   * Store the message's window: merged into an overlapping one (returned with announcedAt set, so no new alert), a
+   * new one (announcedAt null: still to announce), or nothing (an end message without a window).
+   */
+  private async storeWindow(message: { telegramId: number; text: string }, window: HappyHourWindow, isEnd: boolean, now: Date) {
+    const record = (hour: { _id: unknown }) => HappyHour.findOneAndUpdate({ _id: hour._id }, { $addToSet: { telegramIds: message.telegramId } }, { returnDocument: "after" });
+    if (isEnd || !window.parsed) {
+      // The window this message is about: one running at the message, else the latest that has not ended
+      const current =
+        (await HappyHour.findOne({ startsAt: { $lte: window.startsAt }, endsAt: { $gt: window.startsAt } }).sort({ startsAt: -1 })) ??
+        (await HappyHour.findOne({ endsAt: { $gt: window.startsAt } }).sort({ startsAt: 1 }));
+      if (current) return record(current);
+      if (isEnd) return null;
+    } else {
+      const existing = await HappyHour.findOne({ startsAt: { $lt: window.endsAt }, endsAt: { $gt: window.startsAt } }).sort({ startsAt: 1 });
+      if (existing) {
+        const ended = window.endsAt.getTime() <= now.getTime();
+        // A running window keeps its start ("verlengd tot 22:30" sent during it starts "now")
+        const startsAt = existing.startsAt.getTime() <= now.getTime() ? existing.startsAt : window.startsAt;
+        existing.set({ startsAt, endsAt: window.endsAt, text: message.text, parsed: true, telegramIds: [...existing.telegramIds, message.telegramId] });
+        // Extended past a sent end alert: the new end alerts again
+        if (existing.endNotifiedAt && !ended) existing.endNotifiedAt = null;
+        return existing.save();
+      }
+    }
+    const ended = window.endsAt.getTime() <= now.getTime();
+    return HappyHour.create({
+      ...window,
+      text: message.text,
+      telegramIds: [message.telegramId],
+      announcedAt: null,
+      // Starting now: the announcement is the start alert
+      startNotifiedAt: ended || window.startsAt.getTime() <= now.getTime() ? now : null,
+      endNotifiedAt: ended ? now : null,
+    });
   }
 
   /** Re-arm the start/end timers from the current database (startup, after a demo switch). */
@@ -146,7 +169,7 @@ export class HappyHourService {
         if (phase === "end" && now.getTime() - hour.endsAt.getTime() > LATE_END_MS) return null;
         return AppNotification.create(buildHappyHourNotification(phase, hour, now));
       },
-      { waitMs: this.options.retryWaitMs },
+      { waitMs: this.options.retryWaitMs, attempts: this.options.attempts },
     );
     if (early.hour) return this.schedule(early.hour);
     const notification = result?.value;

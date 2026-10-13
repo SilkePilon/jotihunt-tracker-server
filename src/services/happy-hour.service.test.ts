@@ -94,4 +94,32 @@ describe("HappyHourService", () => {
     await until(async () => (await HappyHour.findOne().lean())?.endNotifiedAt != null);
     expect(await AppNotification.countDocuments()).toBe(1);
   });
+
+  test("a message without times never changes a known window, only records its id", async () => {
+    await service.handleMessage(message(1, "Happy hour van 21:00 tot 22:00"));
+    // Before the start (so no start alert fires during the test)
+    setNow(new Date("2026-10-17T18:50:00Z"));
+    await service.handleMessage(message(2, "Happy hour is begonnen!", new Date("2026-10-17T18:50:00Z")));
+    await service.handleMessage(message(3, "Happy hour is voorbij", new Date("2026-10-17T18:55:00Z")));
+    const hours = await HappyHour.find().lean();
+    expect(hours).toHaveLength(1);
+    expect(hours[0]).toMatchObject({ telegramIds: [1, 2, 3], text: "Happy hour van 21:00 tot 22:00" });
+    expect(hours[0].startsAt.toISOString()).toBe(START.toISOString());
+    expect(hours[0].endsAt.toISOString()).toBe(END.toISOString());
+    expect(await AppNotification.countDocuments()).toBe(1);
+  });
+
+  test("an end message never creates a window; a start without times does (the coming hour)", async () => {
+    await service.handleMessage(message(1, "Happy hour is afgelopen"));
+    expect(await HappyHour.countDocuments()).toBe(0);
+    expect(await AppNotification.countDocuments()).toBe(0);
+    await service.handleMessage(message(2, "Happy hour is begonnen!"));
+    expect(await HappyHour.findOne().lean()).toMatchObject({ parsed: false, telegramIds: [2] });
+    expect(await AppNotification.findOne().lean()).toMatchObject({ body: "Vanaf nu tot 21:45. Tegenhunts tellen niet mee." });
+  });
+
+  test("a failing write is reported to the caller (so the message is retried)", async () => {
+    const failing = new HappyHourService({ logger: { info() {}, warn() {}, error() {} }, now, retryWaitMs: 1, attempts: 0 });
+    await expect(failing.handleMessage(message(1, "Happy hour van 21:00 tot 22:00"))).rejects.toThrow();
+  });
 });

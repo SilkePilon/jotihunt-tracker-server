@@ -72,9 +72,15 @@ function resolve(time: Time, receivedAt: Date): Date {
 }
 
 function windowOf(startsAt: Date, endsAt: Date, parsed: boolean): HappyHourWindow {
-  // An end before the start is on the next day ("van 23:30 tot 00:30")
+  // An end before the start is on the next day ("tot 00:30" sent at 23:50 with a start "now")
   while (endsAt.getTime() <= startsAt.getTime()) endsAt = new Date(endsAt.getTime() + DAY_MS);
   return { startsAt, endsAt, parsed };
+}
+
+/** A start time on the (Amsterdam) day of `end`, or the day before when that is not before the end. */
+function startBefore(time: Time, end: Date): Date {
+  const sameDay = amsterdamTime(end, time.hours, time.minutes);
+  return sameDay.getTime() < end.getTime() ? sameDay : amsterdamTime(end, time.hours, time.minutes, -1);
 }
 
 /**
@@ -86,7 +92,11 @@ export function parseHappyHourWindow(text: string, receivedAt: Date): HappyHourW
     const match = pattern.exec(text);
     const start = match && toTime(match[1], match[2]);
     const end = match && toTime(match[3], match[4]);
-    if (start && end) return windowOf(resolve(start, receivedAt), resolve(end, receivedAt), true);
+    // As a whole: the end decides the day (still to come, or tomorrow), the start is the last one before it
+    if (start && end) {
+      const endsAt = resolve(end, receivedAt);
+      return windowOf(startBefore(start, endsAt), endsAt, true);
+    }
   }
   const until = UNTIL_PATTERN.exec(text);
   const end = until && toTime(until[1], until[2]);
@@ -98,6 +108,11 @@ export function parseHappyHourWindow(text: string, receivedAt: Date): HappyHourW
     return windowOf(startsAt, new Date(startsAt.getTime() + HAPPY_HOUR_DEFAULT_MS), true);
   }
   return windowOf(receivedAt, new Date(receivedAt.getTime() + HAPPY_HOUR_DEFAULT_MS), false);
+}
+
+/** A message about the end of a happy hour ("Happy hour is voorbij"): never starts or changes a window. */
+export function isHappyHourEnd(text: string): boolean {
+  return /\b(?:voorbij|afgelopen|einde|gestopt|beëindigd)\b/i.test(text);
 }
 
 /** Two windows share time (touching ends don't count). */
