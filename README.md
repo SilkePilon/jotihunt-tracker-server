@@ -190,7 +190,7 @@ De organisatie meldt een tegenhunt met een Telegram-bericht van @Jotihunt_bot aa
 2. Zet `TELEGRAM_SESSION_KEY` op 32 willekeurige bytes in base64 (`openssl rand -base64 32`). Hiermee wordt de Telegram-sessie versleuteld opgeslagen; verander je de key, dan moet een admin opnieuw koppelen.
 3. Een admin koppelt het account in de kaart "Jotihunt-berichten" door de QR-code te scannen in Telegram (Instellingen > Apparaten > Desktop-apparaat koppelen), eventueel met het cloud-wachtwoord.
 
-De server kan alle chats van dat account lezen, maar verwerkt en bewaart alleen berichten van `TELEGRAM_BOT_USERNAME` (standaard `Jotihunt_bot`). Er draait één luisteraar per serverproces, dus draai de server met één replica. Zonder API id/hash staat dit uit.
+De server kan alle chats van dat account lezen, maar verwerkt en bewaart alleen berichten van `TELEGRAM_BOT_USERNAME` (standaard `Jotihunt_bot`). Een happy hour van de bot (hunts tellen dubbel) geeft een melding bij het bericht, bij de start (als die later is) en stil bij het einde; `GET /happy-hour` geeft het lopende of komende happy hour. Er draait één luisteraar per serverproces, dus draai de server met één replica. Zonder API id/hash staat dit uit.
 
 #### `JWT_SECRET`
 Genereer een willekeurige, veilige string van minimaal 32 tekens. Deze wordt gebruikt om JWT tokens te ondertekenen voor de authenticatie.

@@ -1,6 +1,6 @@
 import { effectiveHuntTime } from "./hunt-report.helpers";
 
-export const NOTIFICATION_TYPES = ["fox-status", "hint", "article", "hunt-deadline", "broadcast", "counter-hunt"] as const;
+export const NOTIFICATION_TYPES = ["fox-status", "hint", "article", "hunt-deadline", "broadcast", "counter-hunt", "happy-hour"] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 /** Types a user can switch off; broadcasts from HQ always come through. */
 export const OPTIONAL_NOTIFICATION_TYPES = NOTIFICATION_TYPES.filter((type) => type !== "broadcast");

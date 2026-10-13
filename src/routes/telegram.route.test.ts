@@ -137,3 +137,15 @@ describe("user routes", () => {
     expect(await (await request("/counter-hunt", { token: user })).json()).toMatchObject({ active: true, direction: 180 });
   });
 });
+
+test("/happy-hour for any logged-in user", async () => {
+  const user = tokenOf(await createUser());
+  expect((await request("/happy-hour")).status).toBe(401);
+  expect(await (await request("/happy-hour", { token: user })).json()).toEqual({ state: "none" });
+  const { HappyHour } = await import("../models/happy-hour.model");
+  const startsAt = new Date(Date.now() - 60_000);
+  const endsAt = new Date(Date.now() + 30 * 60_000);
+  await HappyHour.create({ startsAt, endsAt, text: "Happy hour!", telegramIds: [1] });
+  expect(await (await request("/happy-hour", { token: user })).json()).toEqual({ state: "active", startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), text: "Happy hour!" });
+});
+

@@ -3,12 +3,13 @@ import { debug, logger } from "./logger";
 import { app } from "./app";
 import { scheduleCrons } from "./crons/schedule";
 import { initPredictionSetting } from "./settings/prediction-setting";
-import { getDemoStateStore, initDemoMode } from "./demo/database-switch";
+import { getDemoStateStore, initDemoMode, onDemoSwitch } from "./demo/database-switch";
 import { installDemoWorld } from "./demo/demo-world";
 import { huntOcr } from "./services/hunt-ocr.instance";
 import { isTraccarConfigured, usesLegacyTraccarEnv } from "./services/traccar-http";
 import { setTelegramService, telegramConfigFromEnv, TelegramService } from "./services/telegram.service";
 import { createMtcuteGateway } from "./services/telegram.gateway";
+import { HappyHourService } from "./services/happy-hour.service";
 
 // A forgotten promise rejection is logged and the server keeps running; after an uncaught exception the process state
 // is unknown, so log it and exit (docker restarts the server in a second or two)
@@ -52,6 +53,12 @@ await initPredictionSetting(getDemoStateStore());
 
 // Telegram (tegenhunts and other @Jotihunt_bot messages). The link and the messages live in the real database like the
 // settings; connecting runs in the background (retried with backoff) so a Telegram outage never delays the start
+// Happy hours (from the bot's messages) are game data in the current database: their start/end timers are rebuilt
+// from it now and after every demo switch
+const serviceLogger = { info: (message: string) => logger.info(message), warn: (message: string) => logger.warn(message), error: (message: string, error?: unknown) => logger.error(message, error) };
+const happyHour = new HappyHourService({ logger: serviceLogger });
+await happyHour.rebuild().catch((error) => logger.error("Could not schedule the happy hour alerts", error));
+onDemoSwitch(() => happyHour.rebuild());
 const telegramConfig = telegramConfigFromEnv(process.env, (message) => logger.warn(message));
 if (!process.env.TELEGRAM_API_ID?.trim() || !process.env.TELEGRAM_API_HASH?.trim()) {
   logger.warn("TELEGRAM_API_ID/TELEGRAM_API_HASH not set, tegenhunts are not read from Telegram");
@@ -60,7 +67,8 @@ const telegram = new TelegramService({
   config: telegramConfig,
   connection: getDemoStateStore().connection,
   gateway: createMtcuteGateway,
-  logger: { info: (message) => logger.info(message), warn: (message) => logger.warn(message), error: (message, error) => logger.error(message, error) },
+  logger: serviceLogger,
+  happyHour,
 });
 setTelegramService(telegram);
 telegram.start().catch((error) => logger.error("Could not start the Telegram listener", error));
