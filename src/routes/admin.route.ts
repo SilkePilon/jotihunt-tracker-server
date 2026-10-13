@@ -1,5 +1,7 @@
 import express from "express";
 import * as adminController from "../controllers/admin.controller";
+import * as adminAuthController from "../auth/admin-auth.controller";
+import { INVITE_EXPIRY_KEYS, INVITE_MAX_USES } from "../auth/invites";
 import * as life360Controller from "../controllers/life360.controller";
 import * as notificationsController from "../controllers/notifications.controller";
 import * as telegramController from "../controllers/telegram.controller";
@@ -28,6 +30,22 @@ const updateValidator = [
 const router = express.Router();
 
 router.get("/users", [verifyToken, isAdmin], adminController.getUsers);
+router.get("/invites", [verifyToken, isAdmin], adminAuthController.getInvites);
+router.post(
+  "/invites",
+  [
+    verifyToken,
+    isAdmin,
+    validate([
+      body("expiry").isIn(INVITE_EXPIRY_KEYS).withMessage("Ongeldige verlooptijd."),
+      body("maxUses")
+        .custom((value) => value === null || (INVITE_MAX_USES as readonly number[]).includes(value))
+        .withMessage("Ongeldig aantal keer."),
+    ]),
+  ],
+  adminAuthController.postInvite,
+);
+router.delete("/invites/:id", [verifyToken, isAdmin], adminAuthController.deleteInvite);
 router.post(
   "/broadcast",
   [verifyToken, isAdmin, validate([body("message").isString().trim().isLength({ min: 1, max: 200 }).withMessage("Bericht moet 1 tot 200 tekens zijn.")])],
