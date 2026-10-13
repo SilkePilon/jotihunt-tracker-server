@@ -49,6 +49,7 @@ export async function getAvatar(req: Request, res: Response) {
     const image = await service.avatar(String(req.params.memberId));
     res.setHeader("Content-Type", image.contentType);
     res.setHeader("Cache-Control", "private, max-age=3600");
+    res.setHeader("X-Content-Type-Options", "nosniff");
     return res.status(200).send(image.body);
   } catch (error) {
     if (error instanceof ServiceError) return res.status(error.status).json({ message: error.message });

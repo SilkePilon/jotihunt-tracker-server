@@ -33,6 +33,9 @@ function createService(config: Life360Config | null = { sessionKey: KEY }, extra
   return new Life360Service({ config, connection: realDb, client, logger, autoPoll: false, now: () => clock, ...extra });
 }
 const advance = (ms: number) => (clock = new Date(clock.getTime() + ms));
+const M1_AVATAR = "https://www.life360.com/img/user_images/m1.jpg";
+const M2_AVATAR = "https://www.life360.com/img/user_images/m2.jpg";
+const JPEG_IMAGE = { contentType: "image/jpeg", body: Buffer.from([0xff, 0xd8, 0xff]) };
 const membersAnswer = (...members: unknown[]) => ({ notModified: false as const, etag: "etag-1", members });
 const until = async (check: () => boolean) => {
   for (let i = 0; i < 200; i++) {
@@ -383,5 +386,65 @@ describe("refresh and avatars", () => {
     expect(await service.avatar("m1")).toEqual(jpeg);
     await expect(service.avatar("m2")).rejects.toMatchObject({ status: 404 });
     expect(client.avatarCalls).toBe(1);
+  });
+
+  test("paused: avatars only from the cache (whatever its age), Life360 is not called", async () => {
+    await link();
+    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"), rawMember("m2", "Anna", "")), new Life360RateLimitedError(null)];
+    await service.pollOnce();
+    client.avatars.set(M1_AVATAR, JPEG_IMAGE);
+    client.avatars.set(M2_AVATAR, JPEG_IMAGE);
+    await service.avatar("m1");
+    advance(30_000);
+    await service.pollOnce();
+    expect(service.status().state).toBe("paused");
+
+    advance(2 * 60 * 60_000);
+    expect(await service.avatar("m1")).toEqual(JPEG_IMAGE);
+    await expect(service.avatar("m2")).rejects.toMatchObject({ status: 404 });
+    expect(client.avatarCalls).toBe(1);
+  });
+
+  test("a failed avatar is remembered for 5 minutes (404 or 502 without asking Life360 again)", async () => {
+    await link();
+    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"), rawMember("m2", "Anna", ""))];
+    await service.pollOnce();
+    client.avatarErrors.set(M1_AVATAR, new Life360UpstreamError("Avatar is not an image (text/html)", 301));
+    await expect(service.avatar("m1")).rejects.toMatchObject({ status: 502 });
+    await expect(service.avatar("m2")).rejects.toMatchObject({ status: 404 });
+    expect(client.avatarCalls).toBe(2);
+    client.avatarErrors.clear();
+    client.avatars.set(M1_AVATAR, JPEG_IMAGE);
+    client.avatars.set(M2_AVATAR, JPEG_IMAGE);
+    advance(4 * 60_000);
+    await expect(service.avatar("m1")).rejects.toMatchObject({ status: 502 });
+    await expect(service.avatar("m2")).rejects.toMatchObject({ status: 404 });
+    expect(client.avatarCalls).toBe(2);
+    advance(60_000);
+    expect(await service.avatar("m1")).toEqual(JPEG_IMAGE);
+    expect(await service.avatar("m2")).toEqual(JPEG_IMAGE);
+    expect(client.avatarCalls).toBe(4);
+  });
+
+  test("concurrent requests for one avatar share one Life360 call", async () => {
+    await link();
+    client.memberAnswers = [membersAnswer(rawMember("m1", "Silke", "Pilon"))];
+    await service.pollOnce();
+    client.avatars.set(M1_AVATAR, JPEG_IMAGE);
+    let release!: () => void;
+    client.avatarHold = new Promise<void>((resolve) => (release = resolve));
+    const all = Promise.all([service.avatar("m1"), service.avatar("m1"), service.avatar("m1")]);
+    await until(() => client.avatarCalls > 0);
+    release();
+    expect(await all).toEqual([JPEG_IMAGE, JPEG_IMAGE, JPEG_IMAGE]);
+    expect(client.avatarCalls).toBe(1);
+    // A failure is shared too
+    client.avatarHold = null;
+    advance(60 * 60_000);
+    client.avatarErrors.set(M1_AVATAR, new Life360UpstreamError("boom"));
+    client.avatars.delete(M1_AVATAR);
+    const stale = await Promise.all([service.avatar("m1"), service.avatar("m1")]);
+    expect(stale).toEqual([JPEG_IMAGE, JPEG_IMAGE]);
+    expect(client.avatarCalls).toBe(2);
   });
 });

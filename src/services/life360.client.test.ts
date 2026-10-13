@@ -158,17 +158,77 @@ describe("data", () => {
 });
 
 describe("avatar", () => {
-  test("only https URLs on life360.com are fetched; the image comes back with its type", async () => {
-    const { client, requests } = fakeTransport({ headers: { "content-type": "image/jpeg" }, body: Buffer.from([0xff, 0xd8, 0xff]) }, { headers: { "content-type": "text/html" }, body: "<html>" });
-    expect(await failure(client.avatar("https://evil.example/x.jpg", "tok"))).toBeInstanceOf(Life360NotFoundError);
-    expect(await failure(client.avatar("http://www.life360.com/x.jpg", "tok"))).toBeInstanceOf(Life360NotFoundError);
-    expect(await failure(client.avatar("not a url", "tok"))).toBeInstanceOf(Life360NotFoundError);
+  const JPEG = Buffer.from([0xff, 0xd8, 0xff]);
+  const S3 = "https://life360-img.s3.amazonaws.com/user_images/m1.jpg";
+
+  test("only https URLs on allow-listed hosts are fetched; the image comes back with its type, without a token", async () => {
+    const { client, requests } = fakeTransport({ headers: { "content-type": "image/jpeg" }, body: JPEG }, { headers: { "content-type": "text/html" }, body: "<html>" });
+    expect(await failure(client.avatar("https://evil.example/x.jpg"))).toBeInstanceOf(Life360NotFoundError);
+    expect(await failure(client.avatar("http://www.life360.com/x.jpg"))).toBeInstanceOf(Life360NotFoundError);
+    expect(await failure(client.avatar("https://life360.com.evil.example/x.jpg"))).toBeInstanceOf(Life360NotFoundError);
+    expect(await failure(client.avatar("not a url"))).toBeInstanceOf(Life360NotFoundError);
     expect(requests).toHaveLength(0);
-    const image = await client.avatar("https://www.life360.com/img/user_images/m1.jpg", "tok");
+    const image = await client.avatar("https://www.life360.com/img/user_images/m1.jpg");
     expect(image.contentType).toBe("image/jpeg");
     expect([...image.body]).toEqual([0xff, 0xd8, 0xff]);
     expect(requests[0].headers.accept).toBe("image/*");
-    expect(await failure(client.avatar("https://www.life360.com/img/user_images/m2.jpg", "tok"))).toBeInstanceOf(Life360UpstreamError);
+    expect(Object.keys(requests[0].headers).map((name) => name.toLowerCase())).not.toContain("authorization");
+    expect(await failure(client.avatar("https://www.life360.com/img/user_images/m2.jpg"))).toBeInstanceOf(Life360UpstreamError);
+  });
+
+  test("follows the 301 of www.life360.com to life360-img.s3.amazonaws.com (real API, 2026-10-13), no token on either hop", async () => {
+    const { client, requests } = fakeTransport(
+      { status: 301, headers: { "content-type": "text/html", location: S3 }, body: "<html>Moved</html>" },
+      { headers: { "content-type": "image/png" }, body: JPEG },
+    );
+    const image = await client.avatar("https://www.life360.com/img/user_images/m1.jpg");
+    expect(image.contentType).toBe("image/png");
+    expect(requests.map((request) => request.url)).toEqual(["https://www.life360.com/img/user_images/m1.jpg", S3]);
+    for (const request of requests) expect(Object.keys(request.headers).map((name) => name.toLowerCase())).not.toContain("authorization");
+  });
+
+  test("relative redirects resolve against the current URL; at most 2 redirects", async () => {
+    const twice = fakeTransport(
+      { status: 302, headers: { location: "/img/a.jpg" } },
+      { status: 307, headers: { location: S3 } },
+      { headers: { "content-type": "image/webp" }, body: JPEG },
+    );
+    expect((await twice.client.avatar("https://www.life360.com/x.jpg")).contentType).toBe("image/webp");
+    expect(twice.requests.map((request) => request.url)).toEqual(["https://www.life360.com/x.jpg", "https://www.life360.com/img/a.jpg", S3]);
+
+    const thrice = fakeTransport(
+      { status: 301, headers: { location: "https://www.life360.com/a.jpg" } },
+      { status: 301, headers: { location: "https://www.life360.com/b.jpg" } },
+      { status: 301, headers: { location: S3 } },
+      { headers: { "content-type": "image/jpeg" }, body: JPEG },
+    );
+    expect(await failure(thrice.client.avatar("https://www.life360.com/x.jpg"))).toBeInstanceOf(Life360UpstreamError);
+    expect(thrice.requests).toHaveLength(3);
+  });
+
+  test("a redirect off the allow-list (other host, other bucket, http, no Location) is a failure and is not followed", async () => {
+    for (const location of ["https://evil.example/x.jpg", "https://other-bucket.s3.amazonaws.com/x.jpg", "http://life360-img.s3.amazonaws.com/x.jpg", undefined]) {
+      const { client, requests } = fakeTransport({ status: 301, headers: location ? { location } : {} }, { headers: { "content-type": "image/jpeg" }, body: JPEG });
+      expect(await failure(client.avatar("https://www.life360.com/x.jpg"))).toBeInstanceOf(Life360UpstreamError);
+      expect(requests).toHaveLength(1);
+    }
+  });
+
+  test("only jpeg, png, webp and gif are accepted (no svg)", async () => {
+    for (const type of ["image/jpeg", "image/png; charset=binary", "image/webp", "IMAGE/GIF"]) {
+      const { client } = fakeTransport({ headers: { "content-type": type }, body: JPEG });
+      expect((await client.avatar(S3)).contentType).toBe(type.split(";")[0].toLowerCase());
+    }
+    for (const type of ["image/svg+xml", "image/x-icon", "application/octet-stream", ""]) {
+      const { client } = fakeTransport({ headers: type ? { "content-type": type } : {}, body: JPEG });
+      expect(await failure(client.avatar(S3))).toBeInstanceOf(Life360UpstreamError);
+    }
+  });
+
+  test("404 is NotFound; a network error is a NetworkError", async () => {
+    const { client } = fakeTransport({ status: 404 }, new Error("ECONNRESET"));
+    expect(await failure(client.avatar(S3))).toBeInstanceOf(Life360NotFoundError);
+    expect(await failure(client.avatar(S3))).toBeInstanceOf(Life360NetworkError);
   });
 });
 

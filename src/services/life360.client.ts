@@ -229,6 +229,23 @@ function dataHeaders(token: string): Record<string, string> {
   return { accept: "application/json", "cache-control": "no-cache", authorization: `Bearer ${token}`, "user-agent": ANDROID_USER_AGENT };
 }
 
+const AVATAR_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const MAX_AVATAR_REDIRECTS = 2;
+
+/** The URL when it is https on life360.com, a subdomain of it, or Life360's image bucket; otherwise null. */
+function avatarUrl(url: string): URL | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  const host = parsed.hostname.toLowerCase();
+  const allowed = host === "life360.com" || host.endsWith(".life360.com") || host === "life360-img.s3.amazonaws.com";
+  return parsed.protocol === "https:" && allowed ? parsed : null;
+}
+
 // --- Client ---------------------------------------------------------------------------------------------------------
 
 export type Life360MembersResult = { notModified: true } | { notModified: false; etag: string | null; members: unknown[] };
@@ -243,7 +260,8 @@ export interface Life360Api {
   circles(token: string): Promise<Life360Circle[]>;
   members(token: string, circleId: string, etag?: string): Promise<Life360MembersResult>;
   requestLocation(token: string, circleId: string, memberId: string): Promise<void>;
-  avatar(url: string, token: string): Promise<{ contentType: string; body: Buffer }>;
+  /** Public URLs: no token */
+  avatar(url: string): Promise<{ contentType: string; body: Buffer }>;
 }
 
 export class Life360Client implements Life360Api {
@@ -318,20 +336,38 @@ export class Life360Client implements Life360Api {
     );
   }
 
-  /** Only https URLs on life360.com (the avatar URLs Life360 itself sends), so the token never goes elsewhere. */
-  async avatar(url: string, token: string): Promise<{ contentType: string; body: Buffer }> {
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      throw new Life360NotFoundError("Invalid avatar URL");
+  /**
+   * The image behind a member's avatar URL. No token is sent: the URLs are public, and www.life360.com answers with a 301
+   * to life360-img.s3.amazonaws.com (verified 2026-10-13), where a token has no business. Up to 2 redirects are followed,
+   * and every hop must be https on an allow-listed host; only jpeg/png/webp/gif come back.
+   */
+  async avatar(url: string): Promise<{ contentType: string; body: Buffer }> {
+    let current = avatarUrl(url);
+    if (!current) throw new Life360NotFoundError("Avatar URL not allowed");
+    for (let hop = 0; ; hop++) {
+      let response: Life360HttpResponse;
+      try {
+        response = await this.transport({ method: "GET", url: current.toString(), headers: { accept: "image/*", "user-agent": ANDROID_USER_AGENT } });
+      } catch (error) {
+        throw new Life360NetworkError(`Life360 avatar not reachable: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (REDIRECT_STATUSES.has(response.status)) {
+        if (hop >= MAX_AVATAR_REDIRECTS) throw new Life360UpstreamError("Avatar redirected too often", response.status);
+        let next: URL | null = null;
+        try {
+          next = response.headers.location ? avatarUrl(new URL(response.headers.location, current).toString()) : null;
+        } catch {
+          next = null;
+        }
+        if (!next) throw new Life360UpstreamError("Avatar redirected to a host that is not allowed", response.status);
+        current = next;
+        continue;
+      }
+      if (response.status === 404) throw new Life360NotFoundError("No avatar at Life360");
+      const contentType = (response.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
+      if (response.status !== 200 || !AVATAR_TYPES.has(contentType)) throw new Life360UpstreamError(`Avatar is not an image (${response.status}, ${contentType || "no type"})`, response.status);
+      return { contentType, body: response.body };
     }
-    const host = parsed.hostname.toLowerCase();
-    if (parsed.protocol !== "https:" || (host !== "life360.com" && !host.endsWith(".life360.com"))) throw new Life360NotFoundError("Avatar not on life360.com");
-    const response = await this.call({ method: "GET", url: parsed.toString(), headers: { ...dataHeaders(token), accept: "image/*" } }, "data");
-    const contentType = (response.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
-    if (response.status !== 200 || !contentType.startsWith("image/")) throw new Life360UpstreamError(`Avatar is not an image (${contentType || "no type"})`, response.status);
-    return { contentType, body: response.body };
   }
 
   private async call(request: Life360HttpRequest, step: Step): Promise<Life360HttpResponse> {

@@ -25,6 +25,10 @@ export class FakeLife360Client implements Life360Api {
   /** Avatar images by Life360 URL; unknown URLs: NotFound */
   avatars = new Map<string, { contentType: string; body: Buffer }>();
   avatarCalls = 0;
+  /** Errors by Life360 URL (instead of an image) */
+  avatarErrors = new Map<string, Error>();
+  /** When set, avatar() waits for it before answering */
+  avatarHold: Promise<void> | null = null;
 
   async sendCode(email: string, deviceId: string) {
     this.calls.push(`send ${email} ${deviceId}`);
@@ -68,6 +72,9 @@ export class FakeLife360Client implements Life360Api {
 
   async avatar(url: string) {
     this.avatarCalls++;
+    if (this.avatarHold) await this.avatarHold;
+    const error = this.avatarErrors.get(url);
+    if (error) throw error;
     const image = this.avatars.get(url);
     if (!image) throw new Life360NotFoundError();
     return image;

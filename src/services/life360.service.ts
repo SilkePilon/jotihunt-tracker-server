@@ -50,12 +50,16 @@ export const BACKOFF_MAX_MS = 5 * 60_000;
 /** A members call without if-none-match at least this often: some accounts get endless 304s (ha-life360 #98) */
 export const FULL_POLL_MS = 5 * 60_000;
 export const AVATAR_CACHE_MS = 60 * 60_000;
+/** A failed avatar fetch is not retried for this long */
+export const AVATAR_FAILURE_MS = 5 * 60_000;
 
 const NOT_CONFIGURED = "Life360 is niet ingesteld op de server.";
 const UNREACHABLE = "Life360 is nu niet bereikbaar, probeer het later opnieuw.";
 const SEND_WAIT = "Even wachten, je kunt zo weer een code sturen.";
 const LIMITED = "Life360 laat even geen verzoeken toe, probeer het over een paar minuten opnieuw.";
 const BUSY = "Even geduld, Life360 is nog bezig.";
+const NO_AVATAR = "Geen foto.";
+const AVATAR_UNAVAILABLE = "Foto niet beschikbaar.";
 
 const describeError = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -109,6 +113,10 @@ export class Life360Service {
   private memberList: Life360Member[] = [];
   private avatarSources = new Map<string, string>();
   private readonly avatarCache = new Map<string, CachedAvatar>();
+  /** Failed fetches by member id (not retried until `until`) */
+  private readonly avatarFailures = new Map<string, { source: string; status: 404 | 502; until: number }>();
+  /** The running fetch by member id, shared by concurrent requests */
+  private readonly avatarFetches = new Map<string, { source: string; promise: Promise<CachedAvatar | 404 | 502> }>();
   private etag: string | null = null;
   private lastPollAt: Date | null = null;
   private lastFullPollAt: Date | null = null;
@@ -301,27 +309,32 @@ export class Life360Service {
 
   /**
    * The avatar of a member, fetched from Life360 by the server (cached 1 h) so browsers never contact Life360. While logged
-   * out the token is dead: only the cache (whatever its age) is served.
+   * out or paused only the cache (whatever its age) is served. A failed fetch is remembered for 5 min, and concurrent
+   * requests for one member share one fetch.
    */
   async avatar(memberId: string): Promise<{ contentType: string; body: Buffer }> {
     const source = this.avatarSources.get(memberId);
-    const token = this.link?.token;
-    if (!source || !token) throw new ServiceError(404, "Geen foto.");
+    if (!source || !this.link) throw new ServiceError(404, NO_AVATAR);
     const now = this.now().getTime();
     const cached = this.avatarCache.get(memberId);
     const usable = cached && cached.source === source ? cached : null;
-    if (usable && (this.phase === "loggedOut" || now - usable.fetchedAt < AVATAR_CACHE_MS)) return { contentType: usable.contentType, body: usable.body };
-    if (this.phase === "loggedOut") throw new ServiceError(404, "Geen foto.");
-    try {
-      const image = await this.options.client.avatar(source, token);
-      this.avatarCache.set(memberId, { source, contentType: image.contentType, body: image.body, fetchedAt: now });
-      return { contentType: image.contentType, body: image.body };
-    } catch (error) {
-      if (usable) return { contentType: usable.contentType, body: usable.body };
-      if (error instanceof Life360NotFoundError) throw new ServiceError(404, "Geen foto.");
-      this.options.logger.warn(`Life360 avatar not fetched: ${describeError(error)}`);
-      throw new ServiceError(502, "Foto niet beschikbaar.");
+    const image = (entry: CachedAvatar) => ({ contentType: entry.contentType, body: entry.body });
+    if (usable && (this.phase !== "linked" || now - usable.fetchedAt < AVATAR_CACHE_MS)) return image(usable);
+    if (this.phase !== "linked") throw new ServiceError(404, NO_AVATAR);
+    const failed = this.avatarFailures.get(memberId);
+    if (failed && failed.source === source && now < failed.until) {
+      if (usable) return image(usable);
+      throw new ServiceError(failed.status, failed.status === 404 ? NO_AVATAR : AVATAR_UNAVAILABLE);
     }
+    let fetching = this.avatarFetches.get(memberId);
+    if (!fetching || fetching.source !== source) {
+      fetching = { source, promise: this.fetchAvatar(memberId, source) };
+      this.avatarFetches.set(memberId, fetching);
+    }
+    const fetched = await fetching.promise;
+    if (typeof fetched !== "number") return image(fetched);
+    if (usable) return image(usable);
+    throw new ServiceError(fetched, fetched === 404 ? NO_AVATAR : AVATAR_UNAVAILABLE);
   }
 
   /** One members call and its consequences; never throws. Called by the timer (and by tests). */
@@ -339,6 +352,7 @@ export class Life360Service {
         this.memberList = parsed.map((entry) => entry.member);
         this.avatarSources = new Map(parsed.flatMap((entry) => (entry.avatarSource ? [[entry.member.id, entry.avatarSource] as const] : [])));
         for (const id of [...this.avatarCache.keys()]) if (!this.avatarSources.has(id)) this.avatarCache.delete(id);
+        for (const id of [...this.avatarFailures.keys()]) if (!this.avatarSources.has(id)) this.avatarFailures.delete(id);
         this.etag = result.etag;
         if (full) this.lastFullPollAt = started;
       }
@@ -455,6 +469,8 @@ export class Life360Service {
     this.memberList = [];
     this.avatarSources = new Map();
     this.avatarCache.clear();
+    this.avatarFailures.clear();
+    this.avatarFetches.clear();
     this.etag = null;
     this.lastFullPollAt = null;
   }
@@ -498,6 +514,27 @@ export class Life360Service {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.scheduledAt = null;
+  }
+
+  /** One Life360 fetch of an avatar; caches the image or remembers the failure (5 min) and answers its status. Never throws. */
+  private async fetchAvatar(memberId: string, source: string): Promise<CachedAvatar | 404 | 502> {
+    const generation = this.generation;
+    try {
+      const fetched = await this.options.client.avatar(source);
+      const entry = { source, contentType: fetched.contentType, body: fetched.body, fetchedAt: this.now().getTime() };
+      if (generation === this.generation) {
+        this.avatarCache.set(memberId, entry);
+        this.avatarFailures.delete(memberId);
+      }
+      return entry;
+    } catch (error) {
+      const status: 404 | 502 = error instanceof Life360NotFoundError ? 404 : 502;
+      if (status === 502) this.options.logger.warn(`Life360 avatar not fetched: ${describeError(error)}`);
+      if (generation === this.generation) this.avatarFailures.set(memberId, { source, status, until: this.now().getTime() + AVATAR_FAILURE_MS });
+      return status;
+    } finally {
+      if (this.avatarFetches.get(memberId)?.source === source) this.avatarFetches.delete(memberId);
+    }
   }
 
   private async requestLocations(token: string, circleId: string, memberIds: string[], generation: number) {

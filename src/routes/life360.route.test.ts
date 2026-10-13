@@ -173,6 +173,7 @@ describe("/life360", () => {
     expect(avatar.status).toBe(200);
     expect(avatar.headers.get("content-type")).toBe("image/jpeg");
     expect(avatar.headers.get("cache-control")).toBe("private, max-age=3600");
+    expect(avatar.headers.get("x-content-type-options")).toBe("nosniff");
     expect([...new Uint8Array(await avatar.arrayBuffer())]).toEqual([0xff, 0xd8, 0xff]);
     // m2 has a Life360 avatar URL but Life360 has no image for it (fake: NotFound)
     expect((await request("/life360/avatar/m2", { token: user })).status).toBe(404);
