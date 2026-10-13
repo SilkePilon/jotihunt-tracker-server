@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import mongoose, { HydratedDocument, InferSchemaType } from "mongoose";
 import { VEHICLES } from "../services/tracker-onboarding.helpers";
 
@@ -22,38 +23,32 @@ const DeviceSchema = new mongoose.Schema(
   { _id: false },
 );
 
-const UserSchema = new mongoose.Schema({
-  email: {
-    type: String,
-    required: true,
-    unique: true,
-  },
-  password: {
-    type: String,
-    required: true,
-  },
-  name: {
-    type: String,
-    required: true,
-  },
-  admin: {
-    type: Boolean,
-    default: false,
-    required: true,
-  },
-  requiresPasswordChange: {
-    type: Boolean,
-    default: true,
-    required: true,
-  },
-  /**
-   * Last password change (whole seconds, like a JWT's iat). Tokens issued before it are rejected; users stored
-   * before this field existed have none, so their tokens stay valid.
-   */
-  passwordChangedAt: {
-    type: Date,
-    required: false,
-  },
+/** A WebAuthn credential (passkey) of the user */
+const PasskeySchema = new mongoose.Schema({
+  /** base64url credential id */
+  credentialId: { type: String, required: true },
+  publicKey: { type: Buffer, required: true },
+  counter: { type: Number, required: true, default: 0 },
+  transports: { type: [String], default: [] },
+  /** "Chrome op Android"; renamable later */
+  name: { type: String, required: true },
+  createdAt: { type: Date, required: true },
+  lastUsedAt: { type: Date, default: null },
+});
+
+/** Random WebAuthn user handle (never the Mongo id), base64url of 32 bytes */
+export function newWebauthnUserId(): string {
+  return randomBytes(32).toString("base64url");
+}
+
+export const UserSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  admin: { type: Boolean, default: false, required: true },
+  webauthnUserId: { type: String, required: true, default: newWebauthnUserId },
+  passkeys: { type: [PasskeySchema], default: [] },
+  /** The invite the account was made with (null: CLI or from before invites) */
+  invite: { type: mongoose.Schema.Types.ObjectId, default: null },
+  lastActiveAt: { type: Date, default: null },
   /** Highest onboarding tour version this user has seen (client TOUR_VERSION); 0 = never. */
   tutorialVersion: {
     type: Number,
@@ -82,10 +77,15 @@ const UserSchema = new mongoose.Schema({
   },
 });
 
-// Exclude the password and the read state (only served by GET /articles/read) from JSON responses
+// A passkey belongs to one account. Partial: users without passkeys have no entry in the index.
+UserSchema.index({ "passkeys.credentialId": 1 }, { unique: true, partialFilterExpression: { "passkeys.credentialId": { $exists: true } } });
+
+// Never send key material, the WebAuthn handle or the read state (only served by GET /articles/read) to clients
 UserSchema.set("toJSON", {
   transform: (_doc, ret: Record<string, unknown>) => {
-    delete ret.password;
+    ret.passkeyCount = Array.isArray(ret.passkeys) ? ret.passkeys.length : 0;
+    delete ret.passkeys;
+    delete ret.webauthnUserId;
     delete ret.readArticles;
     return ret;
   },
@@ -100,24 +100,4 @@ export async function setTutorialVersion(user: UserType, version: number): Promi
   const updated = await User.findOneAndUpdate({ _id: user._id }, { $max: { tutorialVersion: version } }, { returnDocument: "after" });
   user.tutorialVersion = updated?.tutorialVersion ?? Math.max(user.tutorialVersion ?? 0, version);
   return user.tutorialVersion;
-}
-
-/**
- * Argon2id with 19 MiB memory and 2 iterations (OWASP minimum). Bun's default (64 MiB) used 2.4 GB of RAM with 50
- * logins at once. Hashes made with other settings still verify (the settings are stored in the hash).
- */
-const PASSWORD_HASH_OPTIONS = { algorithm: "argon2id", memoryCost: 19456, timeCost: 2 } as const;
-
-export function hashPassword(password: string): Promise<string> {
-  return Bun.password.hash(password, PASSWORD_HASH_OPTIONS);
-}
-
-/** True for a hash made with other settings (e.g. Bun's default), which login replaces by a cheaper one. */
-export function needsRehash(hash: string): boolean {
-  return !hash.startsWith(`$argon2id$v=19$m=${PASSWORD_HASH_OPTIONS.memoryCost},t=${PASSWORD_HASH_OPTIONS.timeCost},`);
-}
-
-/** Now, rounded down to whole seconds: tokens issued in this second or later stay valid. */
-export function passwordChangeTime(at = new Date()): Date {
-  return new Date(Math.floor(at.getTime() / 1000) * 1000);
 }
