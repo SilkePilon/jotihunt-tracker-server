@@ -49,7 +49,7 @@ const until = async (check: () => boolean | Promise<boolean>) => {
 const botMessage = (id: number, text: string, sender = "Jotihunt_bot"): TelegramIncomingMessage => ({ id, senderUsername: sender, senderIsBot: true, privateChat: true, text, date: new Date("2026-10-17T19:14:00Z") });
 const storeLink = () => {
   const { ciphertext, iv, tag } = encryptSession(SESSION, KEY);
-  return telegramLinkModel(realDb).create({ key: "telegram", sessionCiphertext: ciphertext, iv, tag, account: { id: 42, name: "Silke" }, linkedAt: new Date() });
+  return telegramLinkModel(realDb).create({ key: "telegram", sessionCiphertext: ciphertext, iv, tag, account: { id: 42, name: "Silke" }, linkedAt: new Date(Date.now() - 2 * 60 * 60_000) });
 };
 
 beforeAll(async () => {
@@ -156,11 +156,27 @@ describe("linking", () => {
     await service.startLink("Admin");
     gateways[0].qr.resolve("linked");
     await until(async () => (await service.status()).state === "linked");
+    await service.handleMessage({ ...botMessage(7, "Je hunt is goedgekeurd"), date: new Date() });
     await service.unlink();
     expect(gateways[0].loggedOut).toBe(true);
     expect(gateways[0].cancelled).toBe(true);
     expect(await telegramLinkModel(realDb).countDocuments()).toBe(0);
     expect((await service.status()).state).toBe("unlinked");
+    // The old account's messages go with the link
+    expect((await service.listMessages()).messages).toEqual([]);
+  });
+
+  test("after linking, bot messages from before the link are not read back", async () => {
+    prepare = (gateway) => {
+      gateway.history = [
+        { id: 51, senderUsername: "Jotihunt_bot", senderIsBot: true, privateChat: true, text: "Oud bericht", date: new Date(Date.now() - 10 * 60_000) },
+        { id: 52, senderUsername: "Jotihunt_bot", senderIsBot: true, privateChat: true, text: "Nieuw bericht", date: new Date(Date.now() + 60_000) },
+      ];
+    };
+    await service.startLink("Admin");
+    gateways[0].qr.resolve("linked");
+    await until(async () => (await service.listMessages()).messages.length > 0);
+    expect((await service.listMessages()).messages.map((message) => message.text)).toEqual(["Nieuw bericht"]);
   });
 });
 
@@ -289,7 +305,7 @@ describe("catch-up", () => {
 
   test("after linking the bot chat is read too", async () => {
     prepare = (gateway) => {
-      gateway.history = [{ id: 40, senderUsername: "Jotihunt_bot", senderIsBot: true, privateChat: true, text: "Nieuwe opdracht", date: minutesAgo(1) }];
+      gateway.history = [{ id: 40, senderUsername: "Jotihunt_bot", senderIsBot: true, privateChat: true, text: "Nieuwe opdracht", date: new Date(Date.now() + 60_000) }];
     };
     await service.startLink("Admin");
     gateways[0].qr.resolve("linked");

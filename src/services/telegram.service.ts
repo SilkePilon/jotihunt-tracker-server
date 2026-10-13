@@ -344,7 +344,7 @@ export class TelegramService {
     return this.status();
   }
 
-  /** Cancel a pending login, or log the linked session out and delete the link. Stored messages stay. */
+  /** Cancel a pending login, or log the linked session out and delete the link and its bot messages. */
   async unlink(): Promise<void> {
     this.requireConfig();
     this.linkGeneration++;
@@ -361,6 +361,8 @@ export class TelegramService {
       this.options.logger.warn("Telegram unlinked while not connected; the session may still be listed in Telegram (Settings > Devices)");
     }
     await this.links.deleteOne({ key: TELEGRAM_LINK_KEY });
+    // The messages belong to the unlinked account: the card starts empty, also for a new link
+    await this.messages.deleteMany({});
     this.options.logger.info("Telegram unlinked");
   }
 
@@ -542,7 +544,9 @@ export class TelegramService {
    */
   private async catchUp(gateway: TelegramGateway) {
     try {
-      const messages = await gateway.recentBotMessages(CATCH_UP_LIMIT);
+      // Only what came in since the link: the bot chat's older history stays out of the card
+      const linkedAt = (await this.readLink())?.linkedAt.getTime() ?? 0;
+      const messages = (await gateway.recentBotMessages(CATCH_UP_LIMIT)).filter((message) => message.date.getTime() >= linkedAt);
       for (const message of [...messages].sort((a, b) => a.id - b.id)) {
         if (this.active !== gateway) return;
         await this.handleMessage(message).catch((error) => this.options.logger.error("Could not handle a Telegram message", error));
