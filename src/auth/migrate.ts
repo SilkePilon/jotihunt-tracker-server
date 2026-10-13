@@ -1,5 +1,5 @@
 import type mongoose from "mongoose";
-import { newWebauthnUserId } from "../models/user.model";
+import { newWebauthnUserId, UserSchema } from "../models/user.model";
 
 /** One-off switch to passkeys: strip password data, give every user a WebAuthn handle, drop the e-mail index. */
 export async function migratePasswordless(connection: mongoose.Connection): Promise<{ cleaned: number; handles: number }> {
@@ -18,4 +18,16 @@ export async function migratePasswordless(connection: mongoose.Connection): Prom
     handles += result.modifiedCount;
   }
   return { cleaned: cleaned.modifiedCount, handles };
+}
+
+/**
+ * Run at every server start (idempotent), so starting a new server before `migrate-passwordless` cannot leave the
+ * unique e-mail index (every second signup failing) or users without a WebAuthn handle. Then build the User indexes
+ * with createIndexes (not syncIndexes): it adds the partial passkey index and never drops an index it doesn't know.
+ */
+export async function ensurePasswordless(connection: mongoose.Connection): Promise<{ cleaned: number; handles: number }> {
+  const result = await migratePasswordless(connection);
+  const UserModel = connection.models.User ?? connection.model("User", UserSchema);
+  await UserModel.createIndexes();
+  return result;
 }

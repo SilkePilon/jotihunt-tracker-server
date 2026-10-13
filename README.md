@@ -114,6 +114,12 @@ TELEGRAM_SESSION_KEY= # openssl rand -base64 32
 TELEGRAM_BOT_USERNAME= # Optioneel, standaard Jotihunt_bot
 LIFE360_SESSION_KEY= # Optioneel, Life360-laag (openssl rand -base64 32, zie configuratie)
 
+# Inloggen (passkeys)
+WEBAUTHN_RP_ID=jotihunt.jouwscoutinggroep.nl # Hostnaam van de website, zonder https:// en poort (lokaal: localhost)
+WEBAUTHN_ORIGINS=https://jotihunt.jouwscoutinggroep.nl # Alle adressen waarop de website geopend wordt, met komma's gescheiden
+WEBAUTHN_RP_NAME=Jotihunt Tracker # Optioneel, naam in de passkey-dialoog van de browser
+PUBLIC_APP_URL=https://jotihunt.jouwscoutinggroep.nl # Adres van de website, voor uitnodigings- en herstel-links
+
 # Client
 JWT_SECRET=verander-dit-naar-een-veilige-random-string-van-minimaal-32-tekens
 API_BASE_URL=https://api.jotihunt.jouwscoutinggroep.nl
@@ -124,7 +130,7 @@ GROUP_CAR_ID=2
 GROUP_MOTORCYCLE_ID=4
 GROUP_BIKE_ID=5
 DISCORD_URL=https://discord.gg/jouw-discord-server # Optioneel
-GROUP_NAME=Jouw Scoutinggroep # Optioneel
+GROUP_NAME=Jouw Scoutinggroep # Optioneel, ook de groepsnaam op de uitnodigingspagina
 LOGO_URL=https://jouwscoutinggroep.nl/logo.png # Optioneel
 TEAMS_AREA_EDITING=false # Sta toe dat gebruikers de teams-gebieden kunnen aanpassen in de client
 TRUST_PROXY= # Optioneel, zet bijvoorbeeld op 1 achter een reverse proxy, zodat de limieten per IP-adres (inloggen en app koppelen) het echte clientadres zien
@@ -204,6 +210,13 @@ De server vraagt één keer per 30 seconden de leden van de kring op en bewaart 
 #### `JWT_SECRET`
 Genereer een willekeurige, veilige string van minimaal 32 tekens. Deze wordt gebruikt om JWT tokens te ondertekenen voor de authenticatie.
 
+#### `WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGINS`, `WEBAUTHN_RP_NAME` en `PUBLIC_APP_URL`
+Er zijn geen wachtwoorden: iedereen logt in met een passkey (vingerafdruk, gezicht of pincode van het apparaat). Zonder `WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGINS` en `PUBLIC_APP_URL` start de server niet.
+- `WEBAUTHN_RP_ID`: de hostnaam van de website, zonder `https://`, pad of poort, bijvoorbeeld `jotihunt.jouwscoutinggroep.nl` (lokaal `localhost`). Passkeys horen bij deze naam: verander je hem, dan werken de bestaande passkeys niet meer en moet iedereen via een herstel-link een nieuwe passkey maken.
+- `WEBAUTHN_ORIGINS`: elk adres waarop de website geopend wordt (schema + host + eventueel poort), met komma's gescheiden, bijvoorbeeld `https://jotihunt.jouwscoutinggroep.nl,http://localhost:5173`.
+- `WEBAUTHN_RP_NAME` (optioneel): de naam die de browser in de passkey-dialoog toont, standaard `Jotihunt Tracker`.
+- `PUBLIC_APP_URL`: het adres van de website, gebruikt in uitnodigings- en herstel-links, bijvoorbeeld `https://jotihunt.jouwscoutinggroep.nl`.
+
 #### `MAPBOX_TOKEN`
 1. Maak een account aan op [Mapbox](https://www.mapbox.com/).
 2. Volg de instructies [hier](https://docs.mapbox.com/help/dive-deeper/access-tokens/) om een token te genereren.
@@ -218,6 +231,8 @@ Belangrijk: deze URL moet **publiek toegankelijk** zijn.
 Dit is de API ID van jouw eigen team op de Jotihunt website. Deze kun je pas invullen nadat je bent aangemeld.
 1. Ga naar `https://jotihunt.nl/api/2.0/subscriptions` en zoek jouw team op in de lijst.
 2. Noteer de `id` waarde van jouw team en vul deze in bij `HOME_TEAM_API_ID` in de `.env` file.
+
+De server gebruikt `HOME_TEAM_API_ID` ook om de eigen groep (naam en logo) op de uitnodigingspagina te tonen; `GROUP_NAME` is de naam die daar staat zolang de teams nog niet zijn opgehaald.
 
 #### `GROUP_WALKING_ID`, `GROUP_CAR_ID`, `GROUP_MOTORCYCLE_ID`, `GROUP_BIKE_ID`
 Deze waarden komen overeen met de groeps-ID's die door Traccar worden gebruikt om verschillende soorten voertuigen te onderscheiden.
@@ -235,15 +250,18 @@ In 2024 waren de deelgebieden niet voorafgaand aan de hunt bekend.
 Door deze instelling op `true` te zetten, kunnen gebruikers in de client de gebieden van teams zelf aanpassen en opslaan.
 
 ### Eerste gebruiker aanmaken
-Als je voor het eerst wilt inloggen, zul je een beheerder account moeten aanmaken.
-Dit kan alleen direct vanuit de docker container. Zoek de naam van de draaiende server container op met:
+Accounts hebben geen wachtwoord. Het eerste (beheerder)account maak je vanuit de docker container; je krijgt dan een eenmalige inloglink waarmee je op je telefoon of computer een passkey aanmaakt. Daarna nodig je de rest uit met uitnodigingslinks.
+Zoek de naam van de draaiende server container op met:
 ```bash
 docker ps
 ```
 Vervolgens voer je het volgende commando uit (vervang `jotihunt-server-1` door de naam van jouw container):
 ```bash
-docker exec -it jotihunt-server-1 bun run create-user --email mail@jouwscoutinggroep.nl --password wachtwoord --name Naam --admin true
+docker exec -it jotihunt-server-1 bun run login-link -- --new Naam --admin
 ```
+Open de link die het commando toont en maak een passkey aan. Kwijtgeraakt of geen toegang meer tot een bestaand account? Maak dan een nieuwe inloglink met `bun run login-link -- --user Naam` (of `--id <gebruikers-id>` als meerdere accounts zo heten).
+
+Bij het starten ruimt de server zelf de oude wachtwoordgegevens op (zelfde stappen als `bun run migrate-passwordless`, dat script bestaat nog): wachtwoorden en e-mailadressen worden verwijderd, ieder account krijgt een WebAuthn-handle en de oude unieke e-mailindex wordt verwijderd. Dit is veilig om bij elke start opnieuw te doen; het aantal aangepaste accounts staat in de log.
 
 ### Ophalen teams uit API
 De kaart is in eerste instantie nog leeg. Om de teams op te halen, ga je met een beheerderaccount naar `Instellingen` > `Admin tools` en druk je op de knop `Herlaad teams uit API`.
