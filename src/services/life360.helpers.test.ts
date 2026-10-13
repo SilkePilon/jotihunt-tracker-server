@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { FIX_ISO, FIX_TIME, rawMember } from "../test/life360-fixtures";
-import { ACCURACY_TO_METRES, life360Time, LIVE_WINDOW_MS, liveCount, memberName, parseMembers, SPEED_TO_KMH, type Life360Member } from "./life360.helpers";
+import { ACCURACY_TO_METRES, life360ConfigFromEnv, life360Time, LIVE_WINDOW_MS, liveCount, memberName, parseMembers, SPEED_TO_KMH, type Life360Member } from "./life360.helpers";
 
 describe("parseMembers", () => {
   test("a sharing member: numbers from strings, accuracy in metres, timestamp as ISO, the avatar behind our own route", () => {
@@ -99,4 +99,19 @@ test("unit constants (accuracy: feet per ha-life360, real check pending; speed m
   expect(ACCURACY_TO_METRES).toBe(0.3048);
   expect(SPEED_TO_KMH).toBe(3.6);
   expect(LIVE_WINDOW_MS).toBe(15 * 60 * 1000);
+});
+
+describe("life360ConfigFromEnv", () => {
+  test("off without a key (no warning), off with a bad key (warning), on with 32 bytes base64", () => {
+    const warnings: string[] = [];
+    const warn = (message: string) => warnings.push(message);
+    expect(life360ConfigFromEnv({}, warn)).toBeNull();
+    expect(life360ConfigFromEnv({ LIFE360_SESSION_KEY: "  " }, warn)).toBeNull();
+    expect(warnings).toEqual([]);
+    expect(life360ConfigFromEnv({ LIFE360_SESSION_KEY: "kort" }, warn)).toBeNull();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("LIFE360_SESSION_KEY");
+    const key = Buffer.alloc(32, 7).toString("base64");
+    expect(life360ConfigFromEnv({ LIFE360_SESSION_KEY: ` ${key} ` }, warn)).toEqual({ sessionKey: key });
+  });
 });
