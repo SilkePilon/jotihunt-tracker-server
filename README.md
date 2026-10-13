@@ -112,6 +112,7 @@ TELEGRAM_API_ID= # Optioneel, leest de berichten van @Jotihunt_bot en meldt tege
 TELEGRAM_API_HASH=
 TELEGRAM_SESSION_KEY= # openssl rand -base64 32
 TELEGRAM_BOT_USERNAME= # Optioneel, standaard Jotihunt_bot
+LIFE360_SESSION_KEY= # Optioneel, Life360-laag (openssl rand -base64 32, zie configuratie)
 
 # Client
 JWT_SECRET=verander-dit-naar-een-veilige-random-string-van-minimaal-32-tekens
@@ -191,6 +192,14 @@ De organisatie meldt een tegenhunt met een Telegram-bericht van @Jotihunt_bot aa
 3. Een admin koppelt het account in de kaart "Jotihunt-berichten" door de QR-code te scannen in Telegram (Instellingen > Apparaten > Desktop-apparaat koppelen), eventueel met het cloud-wachtwoord.
 
 De server kan alle chats van dat account lezen, maar verwerkt en bewaart alleen berichten van `TELEGRAM_BOT_USERNAME` (standaard `Jotihunt_bot`). Een happy hour van de bot (hunts tellen dubbel) geeft een melding bij het bericht, bij de start (als die later is) en stil bij het einde; `GET /happy-hour` geeft het lopende of komende happy hour. Er draait één luisteraar per serverproces, dus draai de server met één replica. Zonder API id/hash staat dit uit.
+
+#### `LIFE360_SESSION_KEY` (optioneel)
+Teamleden zonder onze app kunnen hun locatie delen via een Life360-kring. De server leest die kring via de (onofficiële) Life360-API en toont ieder lid als eigen laag op de kaart.
+1. Zet `LIFE360_SESSION_KEY` op 32 willekeurige bytes in base64 (`openssl rand -base64 32`). Hiermee wordt het Life360-token versleuteld opgeslagen; verander je de key, dan moet een admin opnieuw inloggen. Op k3s komt de key met de hand in de Secret `jotihunt-secret`, net als de Telegram-keys.
+2. Maak een apart Life360-account aan (alleen e-mail, geen persoonlijk account) en laat het lid worden van de kring van het team.
+3. Een admin koppelt het account in de kaart "Life360": e-mailadres invullen, de code uit de mail invoeren en eventueel de kring kiezen. Lukt dat niet, dan kan de cookie `LIFE360_AUTH_TOKEN` van life360.com geplakt worden.
+
+De server vraagt één keer per 30 seconden de leden van de kring op en bewaart alleen de laatste posities in het geheugen (geen geschiedenis, geen adressen). Bij een rate limit van Life360 wacht de server tot Life360 weer verzoeken toelaat (minstens 5 minuten); als het token verloopt, staat de kaart op "Uitgelogd" en moet een admin opnieuw een code laten sturen. Profielfoto's lopen via de server (`/life360/avatar/:id`), zodat browsers Life360 nooit zelf benaderen. Zonder key staat dit uit.
 
 #### `JWT_SECRET`
 Genereer een willekeurige, veilige string van minimaal 32 tekens. Deze wordt gebruikt om JWT tokens te ondertekenen voor de authenticatie.

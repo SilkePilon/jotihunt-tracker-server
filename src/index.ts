@@ -10,6 +10,9 @@ import { isTraccarConfigured, usesLegacyTraccarEnv } from "./services/traccar-ht
 import { setTelegramService, telegramConfigFromEnv, TelegramService } from "./services/telegram.service";
 import { createMtcuteGateway } from "./services/telegram.gateway";
 import { HappyHourService } from "./services/happy-hour.service";
+import { Life360Client } from "./services/life360.client";
+import { life360ConfigFromEnv } from "./services/life360.helpers";
+import { Life360Service, setLife360Service } from "./services/life360.service";
 
 // A forgotten promise rejection is logged and the server keeps running; after an uncaught exception the process state
 // is unknown, so log it and exit (docker restarts the server in a second or two)
@@ -72,6 +75,14 @@ const telegram = new TelegramService({
 });
 setTelegramService(telegram);
 telegram.start().catch((error) => logger.error("Could not start the Telegram listener", error));
+
+// Life360: team members without our app share their location through a Life360 circle. The link lives in the real
+// database like the Telegram link; polling runs in the background so Life360 never delays the start
+const life360Config = life360ConfigFromEnv(process.env, (message) => logger.warn(message));
+if (!process.env.LIFE360_SESSION_KEY?.trim()) logger.warn("LIFE360_SESSION_KEY not set, the Life360 layer is off");
+const life360 = new Life360Service({ config: life360Config, connection: getDemoStateStore().connection, client: new Life360Client(), logger: serviceLogger });
+setLife360Service(life360);
+life360.start().catch((error) => logger.error("Could not start the Life360 sync", error));
 
 // Index maintenance of the real database runs in initDemoMode (and again whenever demo mode is switched off)
 

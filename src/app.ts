@@ -27,6 +27,7 @@ import demoRoute from "./routes/demo.route";
 import appRoute from "./routes/app.route";
 import settingsRoute from "./routes/settings.route";
 import telegramRoute from "./routes/telegram.route";
+import life360Route from "./routes/life360.route";
 import counterHuntRoute from "./routes/counter-hunt.route";
 import happyHourRoute from "./routes/happy-hour.route";
 
@@ -86,6 +87,8 @@ app.use("/notifications", notificationsRoute);
 app.use("/push", pushRoute);
 // Messages of @Jotihunt_bot and the tegenhunt state; the Telegram link itself is in the real database
 app.use("/telegram", telegramRoute);
+// Members of the team's Life360 circle (memory only) and their avatars; the link itself is in the real database
+app.use("/life360", life360Route);
 app.use("/counter-hunt", counterHuntRoute);
 app.use("/happy-hour", happyHourRoute);
 // After the demo gate: verifyToken reads the users of the default connection. The setting itself is global (real database).

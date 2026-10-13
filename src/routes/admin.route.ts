@@ -1,5 +1,6 @@
 import express from "express";
 import * as adminController from "../controllers/admin.controller";
+import * as life360Controller from "../controllers/life360.controller";
 import * as notificationsController from "../controllers/notifications.controller";
 import * as telegramController from "../controllers/telegram.controller";
 import * as trackerController from "../controllers/tracker.controller";
@@ -75,6 +76,30 @@ router.post(
   [verifyToken, isAdmin, validate([body("password").isString().withMessage("Wachtwoord mag niet leeg zijn.").bail().notEmpty().withMessage("Wachtwoord mag niet leeg zijn.")])],
   telegramController.submitPassword,
 );
+// Linking the team's Life360 circle (members without our app share their location through it)
+router.get("/life360", [verifyToken, isAdmin], life360Controller.getStatus);
+router.post(
+  "/life360/code",
+  [verifyToken, isAdmin, validate([body("email").isString().withMessage("E-mailadres is ongeldig.").bail().trim().toLowerCase().isEmail().withMessage("E-mailadres is ongeldig.")])],
+  life360Controller.sendCode,
+);
+router.post(
+  "/life360/verify",
+  [verifyToken, isAdmin, validate([body("code").isString().withMessage("De code is 6 cijfers.").bail().trim().matches(/^\d{6}$/).withMessage("De code is 6 cijfers.")])],
+  life360Controller.verifyCode,
+);
+router.post(
+  "/life360/circle",
+  [verifyToken, isAdmin, validate([body("circleId").isString().withMessage("Kies een kring.").bail().trim().notEmpty().withMessage("Kies een kring.")])],
+  life360Controller.chooseCircle,
+);
+router.post(
+  "/life360/token",
+  [verifyToken, isAdmin, validate([body("token").isString().withMessage("Token mag niet leeg zijn.").bail().trim().notEmpty().withMessage("Token mag niet leeg zijn.")])],
+  life360Controller.pasteToken,
+);
+router.post("/life360/refresh", [verifyToken, isAdmin], life360Controller.refresh);
+router.delete("/life360/link", [verifyToken, isAdmin], life360Controller.unlink);
 router.delete("/users/:id", [verifyToken, isAdmin, validate(deleteValidator)], adminController.deleteUser);
 router.put("/users/:id", [verifyToken, isAdmin, validate(updateValidator)], adminController.updateUser);
 router.put(
