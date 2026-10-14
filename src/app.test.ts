@@ -190,14 +190,22 @@ describe("intel: assignments and read state", () => {
   });
 
   test("marking an article read shows in the read state; a seeded test article is a 404", async () => {
-    const user = await createUser();
+    const user = await createUser({ name: "Sanne" });
     const token = tokenFor(user);
     await Promise.all([makeArticle(3, "news"), makeArticle(900001, "news")]);
     expect((await request("/articles/3/read", { method: "POST", token })).status).toBe(204);
     expect((await request("/articles/900001/read", { method: "POST", token })).status).toBe(404);
     const res = await request("/articles/read", { token });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ read: [3], readBy: { "3": 1 } });
+    expect(await res.json()).toEqual({ read: [3], readBy: { "3": ["Sanne"] } });
+  });
+
+  test("read state lists the readers of an article by name, sorted", async () => {
+    const [sanne, daan] = [await createUser({ name: "Sanne" }), await createUser({ name: "Daan" })];
+    await makeArticle(3, "news");
+    for (const user of [sanne, daan]) expect((await request("/articles/3/read", { method: "POST", token: tokenFor(user) })).status).toBe(204);
+    const state = (await (await request("/articles/read", { token: tokenFor(sanne) })).json()) as { read: number[]; readBy: Record<string, string[]> };
+    expect(state).toEqual({ read: [3], readBy: { "3": ["Daan", "Sanne"] } });
   });
 
   test("an admin's user answers never carry the read articles", async () => {

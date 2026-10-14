@@ -14,7 +14,7 @@ export async function getArticles(_req: Request, res: Response) {
   return sendCachedJson(res, "articles", () => Article.find(publicArticlesFilter()).sort({ publishAt: -1 }).lean());
 }
 
-/** The articles the caller read, and per article how many users read it */
+/** The articles the caller read, per article who read it */
 export function getRead(req: Request, res: Response) {
   return respond(res, 200, () => getReadState(req.user!._id));
 }
