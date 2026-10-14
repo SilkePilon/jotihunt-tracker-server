@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import mongoose from "mongoose";
+import { redactPath } from "../sentry";
 import { clearDemoUploads } from "../services/photo-store";
 import { activeWorkCount, beginWork, isDemoMode, nextGeneration, setDemoModeFlag, setDemoSwitchInProgress, waitForIdleWork } from "./demo-mode";
 import { openDemoStateStore, type DemoStateStore } from "./demo-state";
@@ -163,7 +164,7 @@ export function demoGate(req: Request, res: Response, next: NextFunction) {
       // photo download in sendFile may not respond for a long time)
       if (res.writableFinished || isRead) return release();
       abandonedTimer = setTimeout(() => {
-        log.warn(`${req.method} ${req.originalUrl} (client gone) still running after ${abandonedRequestMs / 1000} s; no longer delays a demo switch`);
+        log.warn(`${req.method} ${redactPath(req.originalUrl)} (client gone) still running after ${abandonedRequestMs / 1000} s; no longer delays a demo switch`);
         released = true;
         finish();
       }, abandonedRequestMs);

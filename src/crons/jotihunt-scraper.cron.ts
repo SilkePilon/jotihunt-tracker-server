@@ -39,7 +39,7 @@ export default async function scrapeJotihuntWebsite() {
   } catch (error) {
     // Start from a fresh browser next run; a broken page or login would otherwise keep failing
     await closeScraper();
-    logger.error(`(CRON) Scraping hunts failed: ${error instanceof Error ? error.message : String(error)}`);
+    logger.error("(CRON) Scraping hunts failed:", error);
     return;
   }
   if (webHunts.length === 0) {
@@ -67,12 +67,12 @@ export default async function scrapeJotihuntWebsite() {
           if (!deleted) logger.warn(`(CRON) Scraped only ${hunts.length} hunts, far fewer than stored; kept the stored hunts`);
         })
         .catch((error) => {
-          logger.error(`(CRON) Error storing hunts in database: ${error instanceof Error ? error.message : String(error)}`);
+          logger.error("(CRON) Error storing hunts in database:", error);
         });
 
       // Copy status and points to the app's own reports; they keep them after the scraper forgets older hunts
       await linkScrapedHunts(webHunts).catch((error) => {
-        logger.error(`(CRON) Error linking scraped hunts to hunt reports: ${error instanceof Error ? error.message : String(error)}`);
+        logger.error("(CRON) Error linking scraped hunts to hunt reports:", error);
       });
     },
     { generation },

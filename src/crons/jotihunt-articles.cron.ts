@@ -49,7 +49,7 @@ export default async function retrieveJotihuntArticles() {
   } catch (error) {
     // Logged by the service (one line); a pause after errors/429 is expected and quiet
     if (error instanceof JotihuntPausedError) logger.debug(`(CRON) Articles skipped: ${error.message}`);
-    else if (!(error instanceof Error && error.name === "JotihuntApiError")) logger.error(`(CRON) Error retrieving articles: ${error instanceof Error ? error.message : String(error)}`);
+    else if (!(error instanceof Error && error.name === "JotihuntApiError")) logger.error("(CRON) Error retrieving articles:", error);
     return;
   }
   // Store only into the database the run started on (skipped when a demo switch happened meanwhile)

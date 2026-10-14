@@ -1,4 +1,9 @@
+import * as Sentry from "@sentry/bun";
 import winston from "winston";
+import Transport from "winston-transport";
+import { captureThrottled, isAccessLog, isSentryEnabled, wasHandled, type Capture } from "./sentry";
+import { isDatabaseUnavailable } from "./utils/database-errors";
+import { isExpectedOutage } from "./utils/expected-outages";
 
 export const debug = process.env.DEBUG === "true";
 
@@ -14,6 +19,9 @@ interface AxiosLikeError extends Error {
 function isAxiosError(error: Error): error is AxiosLikeError {
   return (error as Partial<AxiosLikeError>).isAxiosError === true;
 }
+
+/** errorDetails keeps the original Error under this key, for the Sentry transport (the info fields are flattened). */
+export const ORIGINAL_ERROR = Symbol("originalError");
 
 /**
  * Turn errors into readable log fields. Winston serializes an Error passed as the message (node-cron does this) as
@@ -32,6 +40,7 @@ export const errorDetails = winston.format((info) => {
     if (meta instanceof Error) error = meta;
   }
   if (!error) return info;
+  (info as { [ORIGINAL_ERROR]?: Error })[ORIGINAL_ERROR] = error;
 
   for (const key of Object.keys(error)) if (key !== "message") delete info[key];
   // Winston also copies the (non-enumerable) cause, e.g. the whole socket error
@@ -51,6 +60,30 @@ export const errorDetails = winston.format((info) => {
   }
   return info;
 });
+
+/**
+ * Turns `logger.error("...", error)` into a Sentry issue (most crons and services catch and log instead of throwing).
+ * Errors the request handler or a cron wrapper already handled are skipped. Database outages and expected outages of
+ * external services (Jotihunt API, Gemini, ORS) are not issues: during an outage every cron run would log one.
+ * Repeats are throttled.
+ */
+export function createSentryErrorTransport(capture: Capture = Sentry.captureException) {
+  return new (class extends Transport {
+    log(info: winston.Logform.TransformableInfo, next: () => void) {
+      const error = (info as { [ORIGINAL_ERROR]?: Error })[ORIGINAL_ERROR];
+      if (info.level === "error" && error && !wasHandled(error) && !isDatabaseUnavailable(error) && !isExpectedOutage(error)) {
+        captureThrottled(error, { extra: { log: String(info.message) } }, "log", capture);
+      }
+      next();
+    }
+  })({ level: "error" });
+}
+
+/**
+ * Keeps express-winston access-log lines out of a transport: they carry the request (headers with the client IP,
+ * the url with query string and tokens). Used on the Sentry Logs transport; the log files keep them.
+ */
+export const dropAccessLogs = winston.format((info) => (isAccessLog(info) ? false : info));
 
 // Setup logging with Winston. The log files are rotated so a long event can never fill the disk.
 const MAX_LOG_FILE_BYTES = 10 * 1024 * 1024;
@@ -72,3 +105,10 @@ export const logger = winston.createLogger({
     new winston.transports.File({ filename: "combined.log", maxsize: MAX_LOG_FILE_BYTES, maxFiles: MAX_LOG_FILES, tailable: true }),
   ],
 });
+
+// Sentry (when SENTRY_DSN is set): logged errors become issues, warnings and errors (not access logs) also go to Sentry Logs for context
+if (isSentryEnabled()) {
+  logger.add(createSentryErrorTransport());
+  const SentryLogs = Sentry.createSentryWinstonTransport(Transport, { levels: ["error", "warn"] });
+  logger.add(new SentryLogs({ format: dropAccessLogs() }));
+}

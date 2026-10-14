@@ -20,6 +20,10 @@ COPY . .
 ARG PORT
 EXPOSE ${PORT:-3000}
 
+# Git commit of the build (set by CI), reported as the Sentry release
+ARG GIT_SHA
+ENV SENTRY_RELEASE=${GIT_SHA}
+
 # tini runs as PID 1 and reaps the orphaned chromium/crashpad processes left behind by puppeteer
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["bun", "run", "src/index.ts"]
+CMD ["bun", "run", "--preload", "./src/instrument.ts", "src/index.ts"]

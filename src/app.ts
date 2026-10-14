@@ -33,6 +33,7 @@ import telegramRoute from "./routes/telegram.route";
 import life360Route from "./routes/life360.route";
 import counterHuntRoute from "./routes/counter-hunt.route";
 import happyHourRoute from "./routes/happy-hour.route";
+import sentryTunnelRoute from "./routes/sentry-tunnel.route";
 
 export const app = express();
 if (process.env.TRUST_PROXY) app.set("trust proxy", parseTrustProxy(process.env.TRUST_PROXY));
@@ -47,6 +48,8 @@ app.use((_req, res, next) => {
 // Polled JSON (hint board, hunt reports, predictions) shrinks 5-10x. ETags are computed on the uncompressed body
 // before compression, so conditional requests still get a 304.
 app.use(compression());
+// Website error reports for Sentry (raw envelope body, no auth, before the JSON parser and the demo gate)
+app.use("/sentry-tunnel", cors({ maxAge: 86400, exposedHeaders: ["X-Sentry-Rate-Limits", "Retry-After"] }), sentryTunnelRoute);
 app.use(express.json());
 // Express 5 leaves req.body undefined when no body parser matched; keep the Express 4 behaviour of an empty object
 app.use((req, _res, next) => {
