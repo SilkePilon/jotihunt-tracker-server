@@ -48,6 +48,11 @@ const ArticleSchema = new mongoose.Schema({
     type: String,
     required: false,
   },
+  /** contentHash the AI hint split was made from (hint articles only): a changed article is split again */
+  hintSplitHash: {
+    type: String,
+    required: false,
+  },
 });
 
 export const Article = mongoose.model("Article", ArticleSchema);
