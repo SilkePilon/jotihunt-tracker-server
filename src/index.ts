@@ -6,6 +6,7 @@ import { publicAppUrl, webauthnConfig } from "./auth/config";
 import { setAuthConnection } from "./auth/auth-db";
 import { ensurePasswordless } from "./auth/migrate";
 import { initPredictionSetting } from "./settings/prediction-setting";
+import { initHuntableAreas } from "./settings/huntable-areas-setting";
 import { getDemoStateStore, initDemoMode, onDemoSwitch } from "./demo/database-switch";
 import { installDemoWorld } from "./demo/demo-world";
 import { huntOcr } from "./services/hunt-ocr.instance";
@@ -65,6 +66,7 @@ await initDemoMode(db, { logger: { info: (message) => logger.info(message), warn
 
 // Global settings live in the real database (also in demo mode); cached in memory from here on
 await initPredictionSetting(getDemoStateStore());
+await initHuntableAreas(getDemoStateStore());
 // Sessions, invites and herstel-links live in the real database, also while demo mode is on
 setAuthConnection(getDemoStateStore().connection);
 // The passwordless migration runs at every start (idempotent), so the deploy order doesn't matter. Also on the demo
