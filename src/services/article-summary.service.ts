@@ -42,8 +42,8 @@ function dayAndTime(date: Date): string {
 }
 
 /**
- * The prompt text. `images` are the names of the images sent along with it (in order); files that are not images are
- * only named.
+ * The prompt text. `images` are the names of the images sent along with it (in order); the article's other images and
+ * its files that are not images are only named.
  */
 export function buildSummaryPrompt(article: SummaryInput, images: string[] = []): string {
   const kind = article.type === "assignment" ? "assignment" : "news message";
@@ -54,6 +54,13 @@ export function buildSummaryPrompt(article: SummaryInput, images: string[] = [])
   const attachments = articleAttachments(article.content);
   if (attachments.length > 0) facts.push(`Bijlagen: ${attachments.join(", ")}`);
   if (images.length > 0) facts.push(`Bijgevoegde afbeeldingen: ${images.join(", ")}`);
+  // Images that are not attached (not on a Jotihunt host, or not downloaded) are only named
+  const notAttached = articleImages(article.content).map((image) => image.name);
+  for (const name of images) {
+    const at = notAttached.indexOf(name);
+    if (at >= 0) notAttached.splice(at, 1);
+  }
+  if (notAttached.length > 0) facts.push(`Niet bijgevoegde afbeeldingen: ${notAttached.join(", ")}`);
   const source =
     images.length > 0
       ? "Use only what the text and the attached images (the article's own images, in this order) say; read what the images show (text, times, places, instructions) as part of the article. Do not invent times, places or rules."

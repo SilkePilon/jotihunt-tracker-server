@@ -179,20 +179,48 @@ async function readCapped(response: Response, max: number): Promise<Uint8Array |
   return data;
 }
 
-/** One image, or null when it fails, times out, is too large or is not an image type we send */
-async function fetchOne(image: ArticleImage, fetchFn: NonNullable<FetchImagesOptions["fetch"]>, maxBytes: number, timeoutMs: number): Promise<FetchedImage | null> {
-  if (!isHttpUrl(image.url)) return null;
+/** Images are only downloaded over https from these hosts and their subdomains (e.g. cdn.jotihunt.net) */
+const IMAGE_HOSTS = ["jotihunt.net", "jotihunt.nl"];
+/** Redirects followed per image, each to an allowed host again */
+const MAX_REDIRECTS = 3;
+
+/** Whether an image may be downloaded from this URL: https on a Jotihunt host */
+export function isAllowedImageUrl(url: string): boolean {
   try {
-    const response = await fetchFn(image.url, { signal: AbortSignal.timeout(timeoutMs), redirect: "follow" });
-    // A redirect may only end on http(s)
-    if (!response.ok || (response.url && !isHttpUrl(response.url))) {
-      await response.body?.cancel().catch(() => {});
+    const { protocol, hostname } = new URL(url);
+    const host = hostname.toLowerCase().replace(/\.$/, "");
+    return protocol === "https:" && IMAGE_HOSTS.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
+  } catch {
+    return false;
+  }
+}
+
+const discard = (response: Response) => response.body?.cancel().catch(() => {});
+
+/** One image, or null when it fails, times out, is too large, is not an image type we send or leaves the Jotihunt hosts */
+async function fetchOne(image: ArticleImage, fetchFn: NonNullable<FetchImagesOptions["fetch"]>, maxBytes: number, timeoutMs: number): Promise<FetchedImage | null> {
+  let url = image.url;
+  if (!isAllowedImageUrl(url)) return null;
+  try {
+    const signal = AbortSignal.timeout(timeoutMs);
+    let response = await fetchFn(url, { signal, redirect: "manual" });
+    // Follow redirects by hand, so every hop is checked before it is requested
+    for (let hop = 0; response.status >= 300 && response.status < 400; hop++) {
+      const location = response.headers.get("location");
+      await discard(response);
+      if (!location || hop >= MAX_REDIRECTS) return null;
+      url = new URL(location, url).toString();
+      if (!isAllowedImageUrl(url)) return null;
+      response = await fetchFn(url, { signal, redirect: "manual" });
+    }
+    if (!response.ok) {
+      await discard(response);
       return null;
     }
     const mediaType = MEDIA_TYPES[(response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase()];
     const length = Number(response.headers.get("content-length"));
     if (!mediaType || (Number.isFinite(length) && length > maxBytes)) {
-      await response.body?.cancel().catch(() => {});
+      await discard(response);
       return null;
     }
     const data = await readCapped(response, maxBytes);
@@ -203,7 +231,8 @@ async function fetchOne(image: ArticleImage, fetchFn: NonNullable<FetchImagesOpt
 }
 
 /**
- * Download the images in order (a few at a time) for a Gemini call. Keeps only png/jpeg/webp/gif/heic/heif, skips
+ * Download the images in order (a few at a time) for a Gemini call, only over https from Jotihunt hosts (also after
+ * a redirect). Keeps only png/jpeg/webp/gif/heic/heif, skips
  * an image that fails, times out or is over `maxBytesEach`, and stops at `maxImages` images or when the next one no
  * longer fits in `maxBytesTotal`. Never throws.
  */
@@ -213,7 +242,7 @@ export async function fetchImages(
 ): Promise<FetchedImage[]> {
   const kept: FetchedImage[] = [];
   let total = 0;
-  const candidates = images.filter((image) => isHttpUrl(image.url));
+  const candidates = images.filter((image) => isAllowedImageUrl(image.url));
   for (let start = 0; start < candidates.length; start += parallel) {
     const batch = await Promise.all(candidates.slice(start, start + parallel).map((image) => fetchOne(image, fetchFn, maxBytesEach, timeoutMs)));
     for (const image of batch) {

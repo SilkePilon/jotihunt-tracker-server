@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { articleAttachments, articleImages, fetchImages, type ArticleImage } from "./article-media";
+import { articleAttachments, articleImages, fetchImages, isAllowedImageUrl, type ArticleImage } from "./article-media";
 
 const trixImage = (filename: string, url: string) =>
   `<figure data-trix-attachment="{&quot;contentType&quot;:&quot;image/png&quot;,&quot;filename&quot;:&quot;${filename}&quot;,&quot;url&quot;:&quot;${url}&quot;}" class="attachment attachment--preview">` +
@@ -51,7 +51,7 @@ describe("articleAttachments", () => {
 });
 
 describe("fetchImages", () => {
-  const images = (count: number): ArticleImage[] => Array.from({ length: count }, (_, index) => ({ url: `https://x.nl/${index}.png`, name: `${index}.png` }));
+  const images = (count: number): ArticleImage[] => Array.from({ length: count }, (_, index) => ({ url: `https://cdn.jotihunt.net/${index}.png`, name: `${index}.png` }));
   const png = (size: number, headers: Record<string, string> = {}) => new Response(new Uint8Array(size).fill(1), { headers: { "content-type": "image/png", ...headers } });
 
   test("downloads in order with the media type and name", async () => {
@@ -67,7 +67,7 @@ describe("fetchImages", () => {
       ["1.png", "image/jpeg", 1],
       ["2.png", "image/png", 2],
     ]);
-    expect(seen.sort()).toEqual(["https://x.nl/0.png", "https://x.nl/1.png", "https://x.nl/2.png"]);
+    expect(seen.sort()).toEqual(["https://cdn.jotihunt.net/0.png", "https://cdn.jotihunt.net/1.png", "https://cdn.jotihunt.net/2.png"]);
   });
 
   test("at most 20 images by default", async () => {
@@ -106,23 +106,54 @@ describe("fetchImages", () => {
     expect(result).toEqual([]);
   });
 
-  test("never requests a non-http(s) URL; a redirect ending elsewhere is skipped", async () => {
+  test("only https on jotihunt.net / jotihunt.nl and their subdomains is requested", async () => {
+    expect(isAllowedImageUrl("https://cdn.jotihunt.net/a.png")).toBe(true);
+    expect(isAllowedImageUrl("https://jotihunt.nl/a.png")).toBe(true);
+    expect(isAllowedImageUrl("https://www.JOTIHUNT.nl./a.png")).toBe(true);
+    for (const url of ["http://cdn.jotihunt.net/a.png", "https://evil-jotihunt.net/a.png", "https://jotihunt.net.evil.com/a.png", "https://127.0.0.1/a.png", "file:///etc/passwd", "nope"]) {
+      expect(isAllowedImageUrl(url)).toBe(false);
+    }
     const seen: string[] = [];
     const result = await fetchImages(
       [
-        { url: "file:///etc/passwd", name: "x" },
-        { url: "https://x.nl/r.png", name: "r" },
+        { url: "https://imgur.com/a.png", name: "a" },
+        { url: "http://cdn.jotihunt.net/b.png", name: "b" },
+        { url: "https://cdn.jotihunt.net/c.png", name: "c" },
       ],
       {
         fetch: async (url) => {
           seen.push(url);
-          const response = png(1);
-          Object.defineProperty(response, "url", { value: "file:///etc/passwd" });
-          return response;
+          return png(1);
         },
       },
     );
-    expect(seen).toEqual(["https://x.nl/r.png"]);
-    expect(result).toEqual([]);
+    expect(seen).toEqual(["https://cdn.jotihunt.net/c.png"]);
+    expect(result.map((image) => image.name)).toEqual(["c"]);
+  });
+
+  test("follows a redirect within the Jotihunt hosts, never one to another host", async () => {
+    const seen: string[] = [];
+    const redirect = (location: string) => new Response(null, { status: 302, headers: { location } });
+    const result = await fetchImages(
+      [
+        { url: "https://cdn.jotihunt.net/ok.png", name: "ok" },
+        { url: "https://cdn.jotihunt.net/away.png", name: "away" },
+        { url: "https://cdn.jotihunt.net/loop.png", name: "loop" },
+      ],
+      {
+        fetch: async (url, init) => {
+          seen.push(url);
+          expect(init.redirect).toBe("manual");
+          if (url.endsWith("/ok.png")) return redirect("/files/ok2.png");
+          if (url.endsWith("/away.png")) return redirect("http://169.254.169.254/latest");
+          if (url.includes("loop")) return redirect("https://cdn.jotihunt.net/loop.png");
+          return png(1);
+        },
+      },
+    );
+    expect(result.map((image) => image.name)).toEqual(["ok"]);
+    expect(seen).toContain("https://cdn.jotihunt.net/files/ok2.png");
+    expect(seen.some((url) => url.includes("169.254"))).toBe(false);
+    expect(seen.filter((url) => url.includes("loop"))).toHaveLength(4);
   });
 });

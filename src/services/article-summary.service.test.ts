@@ -4,7 +4,7 @@ import { Article } from "../models/article.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { mockModel } from "../test/ai";
 import { GeminiError } from "./ai/gemini-error";
-import type { ArticleImage, FetchedImage } from "./article-media";
+import { fetchImages, type ArticleImage, type FetchedImage } from "./article-media";
 import {
   buildSummaryPrompt,
   createArticleSummarizer,
@@ -138,6 +138,7 @@ describe("createArticleSummarizer with images", () => {
     expect(parts[2].data).toEqual({ type: "data", data: new Uint8Array([2, 2]) });
     const text = textOf(call);
     expect(text).toContain("Bijgevoegde afbeeldingen: Kaart, Route.png");
+    expect(text).not.toContain("Niet bijgevoegde");
     expect(text).toContain("Bijlagen: alpha.zip");
     expect(text).toContain("images");
   });
@@ -172,6 +173,21 @@ describe("createArticleSummarizer with images", () => {
     expect((call.prompt[0].content as { type: string }[]).map((part) => part.type)).toEqual(["text"]);
     expect(textOf(call)).not.toContain("Bijgevoegde afbeeldingen");
     expect(textOf(call)).toContain("Bijlagen: alpha.zip");
+    expect(textOf(call)).toContain("Niet bijgevoegde afbeeldingen: Kaart, Route.png");
+  });
+
+  test("images that are not attached (e.g. not on a Jotihunt host) are only named", async () => {
+    const model = mockModel(() => JSON.stringify({ summary: "s" }));
+    const content = `<img src="https://imgur.com/x.png" alt="Elders"><img src="https://cdn.jotihunt.net/a.png" alt="Kaart">`;
+    await createArticleSummarizer({
+      model,
+      // The real download: the imgur image is never requested
+      fetchImages: (images) => fetchImages(images, { fetch: async () => new Response(new Uint8Array([1]), { headers: { "content-type": "image/png" } }) }),
+    }).summarize({ title: "t", type: "news", content });
+    const [call] = model.doGenerateCalls;
+    expect((call.prompt[0].content as { type: string }[]).map((part) => part.type)).toEqual(["text", "file"]);
+    expect(textOf(call)).toContain("Bijgevoegde afbeeldingen: Kaart");
+    expect(textOf(call)).toContain("Niet bijgevoegde afbeeldingen: Elders");
   });
 });
 
