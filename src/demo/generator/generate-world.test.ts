@@ -5,7 +5,7 @@ import path from "node:path";
 import mongoose from "mongoose";
 import { Area } from "../../models/area.model";
 import { Article } from "../../models/article.model";
-import { HintCell, HintCellStatus, HintCheck } from "../../models/hint-cell.model";
+import { HintCell, HintCellStatus } from "../../models/hint-cell.model";
 import { Hunt } from "../../models/hunt.model";
 import { HuntReport } from "../../models/hunt-report.model";
 import { Marker, MarkerType } from "../../models/marker.model";
@@ -113,9 +113,8 @@ describe("demo world generator (full run)", () => {
     expect(await HintCell.countDocuments()).toBe(54);
     const solved = await HintCell.find({ status: HintCellStatus.Solved }).lean();
     expect(solved.length).toBeGreaterThan(20);
-    expect(await HintCell.countDocuments({ status: HintCellStatus.Solving })).toBeGreaterThan(0);
     expect(await HintCell.countDocuments({ status: HintCellStatus.Open })).toBeGreaterThan(0);
-    expect(await HintCell.countDocuments({ check: HintCheck.Disputed })).toBe(1);
+    expect(await HintCell.countDocuments({ $or: [{ claimedBy: { $exists: true } }, { notes: { $exists: true } }, { check: { $exists: true } }] })).toBe(0);
 
     // A solved answer parses (RD) onto its hint marker, inside its fox's area
     const teams = await Team.find().lean();

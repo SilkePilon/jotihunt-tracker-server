@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { HintCellStatus, HintCheck } from "../../models/hint-cell.model";
+import { HintCellStatus } from "../../models/hint-cell.model";
 import { huntReportStatus, needsReview } from "../../services/hunt-report.helpers";
 import { DEMO_AREAS, HOUR_MS, OSCAR } from "./constants";
 import { demoHuntStart } from "./articles";
@@ -23,16 +23,13 @@ describe("area statuses", () => {
 describe("hint cell states", () => {
   const hints = [0, 1, 2, 3, 4, 5].map((hour) => ({ articleId: 100 + hour, title: hour === 2 ? "Hint Oscar" : `Hint ${hour}`, slotTime: new Date(huntStart.getTime() + hour * HOUR_MS) }));
   const cells = hints.flatMap((hint) => DEMO_AREAS.map((area) => ({ articleId: hint.articleId, area: area.toLowerCase(), status: hint.articleId === 101 && area === "Bravo" ? "none" : "open" })));
-  const plans = planHintCells({ hints, cells, redAreas: ["Charlie", "Golf"], now, userCount: 8, rng: createRng(3) });
+  const plans = planHintCells({ hints, cells, redAreas: ["Charlie", "Golf"], now, rng: createRng(3) });
   const of = (articleId: number) => plans.filter((plan) => plan.articleId === articleId);
 
-  test("old hints are solved except 'none' cells; exactly one 'Twijfel', the rest 'Klopt'", () => {
+  test("old hints are solved except 'none' cells", () => {
     for (const articleId of [100, 101, 103]) {
       for (const plan of of(articleId)) expect(plan.status).toBe(articleId === 101 && plan.area === "bravo" ? HintCellStatus.None : HintCellStatus.Solved);
     }
-    const checks = plans.filter((plan) => plan.articleId <= 103 && plan.status === HintCellStatus.Solved).map((plan) => plan.check);
-    expect(checks.filter((check) => check === HintCheck.Disputed)).toHaveLength(1);
-    expect(checks.filter((check) => check === HintCheck.Verified)).toHaveLength(checks.length - 1);
   });
 
   test("'Hint Oscar' only concerns Oscar", () => {
@@ -43,34 +40,17 @@ describe("hint cell states", () => {
     ).toEqual(["oscar"]);
   });
 
-  test("the hint before the newest mixes solved and solving; the newest is open except one solving, red areas none", () => {
+  test("the hint before the newest mixes solved and open; the newest is open, red areas none", () => {
     const recent = of(104).map((plan) => plan.status);
     expect(recent.filter((status) => status === HintCellStatus.Solved).length).toBeGreaterThan(0);
-    expect(recent.filter((status) => status === HintCellStatus.Solving).length).toBeGreaterThan(0);
+    expect(recent.filter((status) => status === HintCellStatus.Open).length).toBeGreaterThan(0);
     const newest = of(105);
-    expect(newest.filter((plan) => plan.status === HintCellStatus.Solving)).toHaveLength(1);
     expect(newest.filter((plan) => plan.status === HintCellStatus.None).map((plan) => plan.area)).toEqual(["charlie", "golf"]);
-    expect(newest.filter((plan) => plan.status === HintCellStatus.Open)).toHaveLength(6);
-  });
-
-  test("every hint has 1–3 notes; claims, checks and notes are consistent and never after now", () => {
-    for (const hint of hints) {
-      const notes = of(hint.articleId).reduce((sum, plan) => sum + plan.notes.length, 0);
-      expect(notes).toBeGreaterThanOrEqual(1);
-      expect(notes).toBeLessThanOrEqual(3);
-    }
-    for (const plan of plans) {
-      if (plan.status === HintCellStatus.Solved || plan.status === HintCellStatus.Solving) {
-        expect(plan.claimedBy).toBeDefined();
-        expect(plan.claimedAt!.getTime()).toBeLessThanOrEqual(now.getTime());
-      }
-      if (plan.checkedBy !== undefined) expect(plan.checkedBy).not.toBe(plan.claimedBy);
-      for (const note of plan.notes) expect(note.at.getTime()).toBeLessThanOrEqual(now.getTime());
-    }
+    expect(newest.filter((plan) => plan.status === HintCellStatus.Open)).toHaveLength(7);
   });
 
   test("deterministic", () => {
-    expect(planHintCells({ hints, cells, redAreas: ["Charlie", "Golf"], now, userCount: 8, rng: createRng(3) })).toEqual(plans);
+    expect(planHintCells({ hints, cells, redAreas: ["Charlie", "Golf"], now, rng: createRng(3) })).toEqual(plans);
   });
 });
 

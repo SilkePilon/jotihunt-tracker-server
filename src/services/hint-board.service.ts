@@ -1,32 +1,26 @@
 import mongoose from "mongoose";
 import { Article } from "../models/article.model";
-import { HintCell, HintCellStatus, HintCheck } from "../models/hint-cell.model";
+import { HintCell, HintCellStatus } from "../models/hint-cell.model";
 import { Marker, MarkerType } from "../models/marker.model";
-import { User } from "../models/user.model"; // also registers the User model for populate
 import { parseRdAnswer } from "./rd-answer";
 import { isDuplicateKeyError } from "../utils/mongo";
 import { ServiceError } from "../http/service-error";
 import { currentGeneration } from "../demo/demo-mode";
-import { conflictError, setByOther } from "./write-conflict";
 
-type Id = mongoose.Types.ObjectId | string;
+/** Fields of the old hints page that may still be stored on a cell; never sent, removed on the next solve */
+const LEGACY_FIELDS = ["claimedBy", "claimedAt", "check", "checkedBy", "notes"] as const;
+const HIDE_LEGACY = Object.fromEntries(LEGACY_FIELDS.map((field) => [field, 0])) as Record<(typeof LEGACY_FIELDS)[number], 0>;
+const UNSET_LEGACY = Object.fromEntries(LEGACY_FIELDS.map((field) => [field, 1])) as Record<(typeof LEGACY_FIELDS)[number], 1>;
 
-const populateUsers = [
-  { path: "claimedBy", select: "name" },
-  { path: "checkedBy", select: "name" },
-  { path: "notes.user", select: "name" },
-];
-
-async function findCellOr404(articleId: number, area: string) {
-  const cell = await HintCell.findOne({ articleId, area }).populate(populateUsers);
-  if (!cell) throw new ServiceError(404, "Hintvak niet gevonden");
-  return cell;
+/** A cell as sent to clients: a legacy "solving" cell counts as open */
+function shown<T extends { status: string }>(cell: T): T {
+  return cell.status === "solving" ? { ...cell, status: HintCellStatus.Open } : cell;
 }
 
-async function updateCell(articleId: number, area: string, update: mongoose.UpdateQuery<unknown>) {
-  const cell = await HintCell.findOneAndUpdate({ articleId, area }, update, { returnDocument: "after" }).populate(populateUsers);
+async function findCellOr404(articleId: number, area: string) {
+  const cell = await HintCell.findOne({ articleId, area }, HIDE_LEGACY).lean();
   if (!cell) throw new ServiceError(404, "Hintvak niet gevonden");
-  return cell;
+  return shown(cell);
 }
 
 /** How long a built board is shared between requests (every hunter polls it every 3 s). */
@@ -43,35 +37,12 @@ export function invalidateBoardCache() {
   boardCache = null;
 }
 
-type UserRef = { _id: mongoose.Types.ObjectId; name: string } | null;
-
-/**
- * The same shape as populate(populateUsers) on lean cells, with one user query instead of one per path.
- */
-async function populateBoardUsers<T extends { claimedBy?: unknown; checkedBy?: unknown; notes?: { user?: unknown }[] }>(cells: T[]) {
-  const ids = new Set<string>();
-  for (const cell of cells) {
-    if (cell.claimedBy) ids.add(String(cell.claimedBy));
-    if (cell.checkedBy) ids.add(String(cell.checkedBy));
-    for (const note of cell.notes ?? []) if (note.user) ids.add(String(note.user));
-  }
-  const users = ids.size > 0 ? await User.find({ _id: { $in: [...ids] } }, { name: 1 }).lean() : [];
-  const byId = new Map(users.map((user) => [String(user._id), { _id: user._id, name: user.name } as UserRef]));
-  const lookup = (id: unknown): UserRef => byId.get(String(id)) ?? null;
-  for (const cell of cells) {
-    if (cell.claimedBy) cell.claimedBy = lookup(cell.claimedBy);
-    if (cell.checkedBy) cell.checkedBy = lookup(cell.checkedBy);
-    for (const note of cell.notes ?? []) if (note.user) note.user = lookup(note.user);
-  }
-  return cells;
-}
-
 export async function getBoard() {
   const [articles, cells] = await Promise.all([
     Article.find({ type: "hint" }, { _id: 0, id: 1, title: 1, publishAt: 1, content: 1 }).sort({ publishAt: -1 }).lean(),
-    HintCell.find().lean(),
+    HintCell.find({}, HIDE_LEGACY).lean(),
   ]);
-  return { articles, cells: await populateBoardUsers(cells) };
+  return { articles, cells: cells.map(shown) };
 }
 
 /**
@@ -93,46 +64,6 @@ export function getBoardJson(): Promise<string> {
     if (boardCache === entry) boardCache = null;
   });
   return json;
-}
-
-/** Claim an open cell. With `overwrite`, also take over a cell someone else is solving (after the user confirmed). */
-export async function claimCell(articleId: number, area: string, userId: Id, overwrite = false) {
-  const claimable: Record<string, unknown>[] = [{ status: HintCellStatus.Open }, { status: HintCellStatus.Solving, claimedBy: userId }];
-  if (overwrite) claimable.push({ status: HintCellStatus.Solving });
-  const cell = await HintCell.findOneAndUpdate(
-    { articleId, area, $or: claimable },
-    { $set: { status: HintCellStatus.Solving, claimedBy: userId, claimedAt: new Date() } },
-    { returnDocument: "after" },
-  ).populate(populateUsers);
-  if (cell) {
-    invalidateBoardCache();
-    return cell;
-  }
-
-  const existing = await findCellOr404(articleId, area);
-  if (existing.status === HintCellStatus.Solving) {
-    throw await conflictError("Dit vak is al geclaimd", "claim", null, existing.claimedBy?._id, existing.claimedAt, { claimedBy: existing.claimedBy ?? null });
-  }
-  const message = `Dit vak is ${existing.status === HintCellStatus.Solved ? "al opgelost" : "gemarkeerd als geen hint"}`;
-  throw new ServiceError(409, message, { claimedBy: existing.claimedBy ?? null });
-}
-
-export async function releaseCell(articleId: number, area: string, user: { _id: Id; admin: boolean }) {
-  const filter: Record<string, unknown> = { articleId, area, status: HintCellStatus.Solving };
-  if (!user.admin) filter.claimedBy = user._id;
-
-  const cell = await HintCell.findOneAndUpdate(
-    filter,
-    { $set: { status: HintCellStatus.Open }, $unset: { claimedBy: 1, claimedAt: 1 } },
-    { returnDocument: "after" },
-  ).populate(populateUsers);
-  if (cell) {
-    invalidateBoardCache();
-    return cell;
-  }
-
-  await findCellOr404(articleId, area);
-  throw new ServiceError(409, "Dit vak is niet door jou geclaimd");
 }
 
 function readCell(filter: Record<string, unknown>) {
@@ -212,32 +143,19 @@ async function syncHintMarker(cellId: mongoose.Types.ObjectId) {
     await deleteMarkerIfUnlinked(createdMarkerId);
   }
 }
-
 /**
- * Store an answer. A coordinate (RD) answer places the hint marker of the area and hour (409 with existingMarkerId
- * when another hint marker is already there, unless replaceMarker); a word removes the marker the cell had. The
- * cell is updated first with a compare-and-set, then the marker follows the answer that won. The compare-and-set
- * always covers the cell's marker link; without `overwrite` it also covers status and claimer, so a claim or answer
- * someone else made meanwhile is not overwritten but leads to the conflict 409 on the next attempt.
- * A cell someone else solved or is solving is a 409 with `conflict`, unless `overwrite`.
+ * Store an answer; anyone may answer, the last answer wins. A coordinate (RD) answer places the hint marker of the
+ * area and hour (409 with existingMarkerId when another hint marker is already there, unless replaceMarker); a word
+ * removes the marker the cell had. The cell is updated with a compare-and-set on its marker link, then the marker
+ * follows the answer that won.
  */
-export async function solveCell(articleId: number, area: string, userId: Id, answer: string, replaceMarker = false, overwrite = false) {
+export async function solveCell(articleId: number, area: string, answer: string, replaceMarker = false) {
   const trimmedAnswer = answer.trim();
   const rd = parseRdAnswer(trimmedAnswer);
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const cell = await readCell({ articleId, area });
     if (!cell) throw new ServiceError(404, "Hintvak niet gevonden");
-    if (!overwrite && cell.status !== HintCellStatus.Open && cell.status !== HintCellStatus.None && setByOther(cell.claimedBy, userId)) {
-      const solved = cell.status === HintCellStatus.Solved;
-      throw await conflictError(
-        solved ? "Dit vak is al opgelost door iemand anders" : "Iemand anders is met dit vak bezig",
-        solved ? "answer" : "claim",
-        solved ? cell.answer : null,
-        cell.claimedBy,
-        cell.claimedAt,
-      );
-    }
 
     if (rd) {
       const existing = await Marker.findOne({ type: MarkerType.Hint, area, time: cell.slotTime }, { _id: 1 }).lean();
@@ -254,91 +172,27 @@ export async function solveCell(articleId: number, area: string, userId: Id, ans
       }
     }
 
-    const unset: Record<string, 1> = { checkedBy: 1 };
+    const unset: Record<string, 1> = { ...UNSET_LEGACY };
     if (!rd) Object.assign(unset, { markerId: 1, answerLocation: 1 });
     const updated = await HintCell.updateOne(
-      // Compare-and-set on what the guard above saw: a concurrent claim or answer makes this attempt decide again.
-      // A confirmed overwrite has nothing to decide again, so it only depends on the marker link.
-      overwrite
-        ? { _id: cell._id, markerId: cell.markerId ?? null }
-        : { _id: cell._id, markerId: cell.markerId ?? null, status: cell.status, claimedBy: cell.claimedBy ?? null },
+      { _id: cell._id, markerId: cell.markerId ?? null },
       {
         $set: {
           answer: trimmedAnswer,
           answerKind: rd ? "rd" : "text",
           status: HintCellStatus.Solved,
-          check: HintCheck.Unchecked,
-          claimedBy: userId,
-          claimedAt: new Date(),
           ...(rd ? { answerLocation: [rd.lng, rd.lat] } : {}),
         },
         $unset: unset,
       },
+      // The legacy fields are no longer in the schema; strict mode would drop their $unset
+      { strict: false },
     );
-    if (updated.matchedCount === 0) continue; // the cell changed meanwhile: decide again
+    if (updated.matchedCount === 0) continue; // the marker link changed meanwhile: decide again
 
     // Answer changed from a coordinate to a word: remove the marker we created earlier
     if (!rd && cell.markerId) await deleteMarkerIfUnlinked(cell.markerId);
     if (rd) await syncHintMarker(cell._id);
-    invalidateBoardCache();
-    return findCellOr404(articleId, area);
-  }
-  throw busyError();
-}
-
-export async function setCheck(articleId: number, area: string, userId: Id, check: HintCheck) {
-  const cell =
-    check === HintCheck.Unchecked
-      ? await updateCell(articleId, area, { $set: { check }, $unset: { checkedBy: 1 } })
-      : await updateCell(articleId, area, { $set: { check, checkedBy: userId } });
-  invalidateBoardCache();
-  return cell;
-}
-
-export async function addNote(articleId: number, area: string, userId: Id, text: string) {
-  const cell = await updateCell(articleId, area, { $push: { notes: { user: userId, text, createdAt: new Date() } } });
-  invalidateBoardCache();
-  return cell;
-}
-
-/**
- * Mark a cell as "no hint" or open it again. Clears the claim and any answer (and the hint marker the answer placed).
- * Only the claimer may do this to a cell being solved, and a solved cell is left alone; admins may always.
- */
-export async function setStatus(
-  articleId: number,
-  area: string,
-  status: HintCellStatus.Open | HintCellStatus.None,
-  user: { _id: Id; admin: boolean },
-) {
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    const cell = await readCell({ articleId, area });
-    if (!cell) throw new ServiceError(404, "Hintvak niet gevonden");
-    if (!user.admin) {
-      if (cell.status === HintCellStatus.Solving && cell.claimedBy && String(cell.claimedBy) !== String(user._id)) {
-        const claimed = await findCellOr404(articleId, area);
-        throw new ServiceError(409, "Dit vak is niet door jou geclaimd", { claimedBy: claimed.claimedBy ?? null });
-      }
-      if (cell.status === HintCellStatus.Solved) throw new ServiceError(409, "Dit vak is al opgelost");
-    }
-
-    // Compare-and-set on what the checks above saw
-    const updated = await HintCell.updateOne(
-      {
-        _id: cell._id,
-        status: cell.status,
-        claimedBy: cell.claimedBy ?? null,
-        answer: cell.answer ?? null,
-        markerId: cell.markerId ?? null,
-      },
-      {
-        $set: { status, check: HintCheck.Unchecked },
-        $unset: { claimedBy: 1, claimedAt: 1, answer: 1, answerKind: 1, answerLocation: 1, markerId: 1, checkedBy: 1 },
-      },
-    );
-    if (updated.matchedCount === 0) continue;
-
-    if (cell.markerId) await deleteMarkerIfUnlinked(cell.markerId);
     invalidateBoardCache();
     return findCellOr404(articleId, area);
   }

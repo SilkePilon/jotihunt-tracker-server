@@ -1,5 +1,5 @@
-import { HintCellStatus, HintCheck } from "../../models/hint-cell.model";
-import { DEMO_AREAS, HINT_NOTES, HOUR_MS, LETTER_AREAS, MINUTE_MS, OSCAR, type DemoArea } from "./constants";
+import { HintCellStatus } from "../../models/hint-cell.model";
+import { DEMO_AREAS, HOUR_MS, LETTER_AREAS, MINUTE_MS, OSCAR, type DemoArea } from "./constants";
 import type { Rng } from "./prng";
 
 // --- Area statuses ----------------------------------------------------------------------------------------------
@@ -42,42 +42,21 @@ export interface CellInput {
   status: string;
 }
 
-export interface NotePlan {
-  user: number;
-  text: string;
-  at: Date;
-}
-
 export interface CellPlan {
   articleId: number;
   area: string;
   status: HintCellStatus;
-  /** Index into the demo users */
-  claimedBy?: number;
-  claimedAt?: Date;
-  check?: HintCheck;
-  checkedBy?: number;
-  notes: NotePlan[];
-}
-
-function clampToNow(time: number, now: Date): Date {
-  return new Date(Math.min(time, now.getTime() - MINUTE_MS));
-}
-
-function otherUser(user: number, userCount: number, rng: Rng): number {
-  return (user + rng.int(1, userCount - 1)) % userCount;
 }
 
 /**
  * Plan the state of every hint cell:
- * - old hints: solved, checked "Klopt" except exactly one "Twijfel";
- * - the hint before the newest: a mix of solved and solving;
- * - the newest hint: open except one solving; red areas "none".
+ * - old hints: solved;
+ * - the hint before the newest: about 60% solved, the rest open;
+ * - the newest hint: open; red areas "none".
  * A hint titled "Hint <area>" only concerns that area (the others become "none"); cells the article marks "-" stay "none".
- * Every hint gets 1–3 notes on some cells. All times are ≤ now.
  */
-export function planHintCells(input: { hints: HintInput[]; cells: CellInput[]; redAreas: string[]; now: Date; userCount: number; rng: Rng }): CellPlan[] {
-  const { now, userCount, rng } = input;
+export function planHintCells(input: { hints: HintInput[]; cells: CellInput[]; redAreas: string[]; now: Date; rng: Rng }): CellPlan[] {
+  const { rng } = input;
   const red = new Set(input.redAreas.map((area) => area.toLowerCase()));
   const byNewest = [...input.hints].sort((a, b) => b.slotTime.getTime() - a.slotTime.getTime());
   const plans: CellPlan[] = [];
@@ -87,55 +66,21 @@ export function planHintCells(input: { hints: HintInput[]; cells: CellInput[]; r
     const titled = /^hint\s+(\w+)$/i.exec(hint.title.trim())?.[1]?.toLowerCase();
     const onlyArea = DEMO_AREAS.some((area) => area.toLowerCase() === titled) ? titled : undefined;
     const cells = input.cells.filter((cell) => cell.articleId === hint.articleId).sort((a, b) => a.area.localeCompare(b.area));
-    const slot = hint.slotTime.getTime();
     const hintPlans: CellPlan[] = cells.map((cell) => {
       const none = cell.status === HintCellStatus.None || (onlyArea !== undefined && cell.area !== onlyArea) || (phase === "newest" && red.has(cell.area));
-      return { articleId: cell.articleId, area: cell.area, status: none ? HintCellStatus.None : HintCellStatus.Open, notes: [] };
+      return { articleId: cell.articleId, area: cell.area, status: none ? HintCellStatus.None : HintCellStatus.Open };
     });
     const active = hintPlans.filter((plan) => plan.status !== HintCellStatus.None);
-    const claim = (plan: CellPlan, status: HintCellStatus) => {
-      plan.status = status;
-      plan.claimedBy = rng.int(0, userCount - 1);
-      plan.claimedAt = clampToNow(slot + rng.int(4, 45) * MINUTE_MS, now);
-    };
 
     if (phase === "old") {
-      for (const plan of active) {
-        claim(plan, HintCellStatus.Solved);
-        plan.check = HintCheck.Verified;
-        plan.checkedBy = otherUser(plan.claimedBy!, userCount, rng);
-      }
+      for (const plan of active) plan.status = HintCellStatus.Solved;
     } else if (phase === "recent") {
       const shuffled = rng.shuffle(active);
       const solvedCount = Math.max(1, Math.round(shuffled.length * 0.6));
-      shuffled.forEach((plan, index) => {
-        if (index < solvedCount) {
-          claim(plan, HintCellStatus.Solved);
-          if (rng.chance(0.5)) {
-            plan.check = HintCheck.Verified;
-            plan.checkedBy = otherUser(plan.claimedBy!, userCount, rng);
-          } else {
-            plan.check = HintCheck.Unchecked;
-          }
-        } else {
-          claim(plan, HintCellStatus.Solving);
-        }
-      });
-    } else if (active.length) {
-      claim(rng.pick(active), HintCellStatus.Solving);
-    }
-
-    // Notes: 1–3 per hint, on cells that are not "none"
-    const noteCount = active.length ? rng.int(1, Math.min(3, active.length)) : 0;
-    for (const plan of rng.shuffle(active).slice(0, noteCount)) {
-      plan.notes.push({ user: rng.int(0, userCount - 1), text: rng.pick(HINT_NOTES), at: clampToNow(slot + rng.int(3, 50) * MINUTE_MS, now) });
+      shuffled.slice(0, solvedCount).forEach((plan) => (plan.status = HintCellStatus.Solved));
     }
     plans.push(...hintPlans);
   });
-
-  // Exactly one "Twijfel" among the old hints
-  const oldSolved = plans.filter((plan) => plan.check === HintCheck.Verified && byNewest.findIndex((hint) => hint.articleId === plan.articleId) >= 2);
-  if (oldSolved.length) rng.pick(oldSolved).check = HintCheck.Disputed;
   return plans;
 }
 

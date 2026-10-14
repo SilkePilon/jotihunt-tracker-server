@@ -2,24 +2,21 @@ import mongoose from "mongoose";
 
 export enum HintCellStatus {
   Open = "open",
-  Solving = "solving",
   Solved = "solved",
   None = "none",
 }
 
-export enum HintCheck {
-  Unchecked = "unchecked",
-  Verified = "verified",
-  Disputed = "disputed",
-}
-
-/** A team note with its author; shared by hint cells and assignments */
+/** A team note with its author (assignments) */
 export const NoteSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   text: { type: String, required: true },
   createdAt: { type: Date, required: true, default: Date.now },
 });
 
+/**
+ * One hint article × one area. Older documents may still hold claimedBy/claimedAt/check/checkedBy/notes and status
+ * "solving" from the old hints page: the board hides them and the next solve removes them.
+ */
 const HintCellSchema = new mongoose.Schema({
   articleId: { type: Number, required: true },
   area: { type: String, required: true, lowercase: true },
@@ -27,15 +24,10 @@ const HintCellSchema = new mongoose.Schema({
   slotTime: { type: Date, required: true },
   snippet: { type: String },
   status: { type: String, enum: Object.values(HintCellStatus), default: HintCellStatus.Open, required: true },
-  claimedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-  claimedAt: { type: Date },
   answer: { type: String },
   answerKind: { type: String, enum: ["rd", "text"] },
   answerLocation: { type: [Number], default: undefined }, // [lng, lat] for RD answers
   markerId: { type: mongoose.Schema.Types.ObjectId, ref: "Marker" },
-  check: { type: String, enum: Object.values(HintCheck), default: HintCheck.Unchecked, required: true },
-  checkedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-  notes: { type: [NoteSchema], default: [] },
   articleChanged: { type: Boolean, default: false, required: true },
 });
 
