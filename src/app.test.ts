@@ -141,9 +141,10 @@ describe("intel: assignments and read state", () => {
       ["/assignments", {}],
       ["/assignments/members", {}],
       ["/articles/read", {}],
-      ["/presence", { method: "POST", json: { itemId: 5 } }],
     ];
     for (const [path, init] of calls) expect([path, (await request(path, init)).status]).toEqual([path, 401]);
+    // The old hints page's presence heartbeat is gone
+    expect((await request("/presence", { method: "POST", token: tokenFor(await createUser()), json: { itemId: 5 } })).status).toBe(404);
   });
 
   test("an assignment write without a body, and an owner write without owner, are a 400", async () => {
@@ -186,25 +187,6 @@ describe("intel: assignments and read state", () => {
     const taken = await request("/assignments/7/owner", { method: "POST", token: tokenFor(b), json: { owner: String(b._id) } });
     expect(taken.status).toBe(200);
     expect(((await taken.json()) as { owner: { name: string } }).owner.name).toBe("Daan");
-  });
-
-  test("presence: a heartbeat lists the caller, an array as itemId is a 400, leaving is a 204", async () => {
-    const user = await createUser({ name: "Sanne" });
-    const token = tokenFor(user);
-    expect((await request("/presence", { method: "POST", token, json: { itemId: [1, 2] } })).status).toBe(400);
-    expect((await request("/presence", { method: "POST", token, json: { itemId: [5] } })).status).toBe(400);
-    expect((await request("/presence", { method: "POST", token })).status).toBe(400);
-    expect((await request("/presence", { method: "POST", token, json: { itemId: 5, area: "zulu" } })).status).toBe(400);
-
-    const beat = await request("/presence", { method: "POST", token, json: { itemId: 5, area: "CHARLIE" } });
-    expect(beat.status).toBe(200);
-    const list = (await beat.json()) as { userId: string; name: string; itemId: number; area?: string }[];
-    expect(list.find((entry) => entry.userId === String(user._id))).toMatchObject({ name: "Sanne", itemId: 5, area: "charlie" });
-
-    expect((await request("/presence", { method: "DELETE", token })).status).toBe(204);
-    const after = (await (await request("/presence", { method: "POST", token: tokenFor(await createUser()), json: { itemId: "6" } })).json()) as { userId: string; itemId: number }[];
-    expect(after.some((entry) => entry.userId === String(user._id))).toBe(false);
-    expect(after.every((entry) => typeof entry.itemId === "number")).toBe(true);
   });
 
   test("marking an article read shows in the read state; a seeded test article is a 404", async () => {
