@@ -125,7 +125,9 @@ function cleanSplit(output: unknown, areas: string[], blockCount: number): HintS
     if (!known.has(name) || split.some((done) => done.area === name)) continue;
     const numbers = Array.isArray(blocks) ? blocks : [];
     const usable = [...new Set(numbers.filter((n): n is number => Number.isInteger(n) && n >= 0 && n < blockCount))];
-    split.push({ area: name, none: none === true && usable.length === 0, blocks: usable });
+    // No usable blocks and not "none": the AI could not tell, so the area keeps the rule's result
+    if (usable.length === 0 && none !== true) continue;
+    split.push({ area: name, none: usable.length === 0, blocks: usable });
   }
   if (split.length === 0) throw invalidAnswer();
   return split;

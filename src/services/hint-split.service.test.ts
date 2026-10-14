@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Article } from "../models/article.model";
 import { HintCell, HintCellStatus } from "../models/hint-cell.model";
 import { mockModel } from "../test/ai";
@@ -88,6 +88,19 @@ describe("createHintSplitter", () => {
     expect(split).toEqual([{ area: "alpha", none: false, blocks: [1] }]);
   });
 
+  test("an area with no usable blocks and not none is unknown (dropped, keeps the rule result)", async () => {
+    const split = await splitWith({
+      areas: [
+        { area: "alpha", none: false, blocks: [] },
+        { area: "bravo", none: false, blocks: [9] },
+        { area: "charlie", none: false, blocks: [2] },
+      ],
+    });
+    expect(split).toEqual([{ area: "charlie", none: false, blocks: [2] }]);
+    const error = await splitWith({ areas: [{ area: "alpha", none: false, blocks: [] }] }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(GeminiError);
+  });
+
   test("an answer with no usable area is an invalid answer", async () => {
     for (const answer of [{ areas: [{ area: "zulu", none: false, blocks: [1] }] }, { areas: [] }, { nope: 1 }]) {
       const error = await splitWith(answer).catch((e: unknown) => e);
@@ -159,6 +172,30 @@ describe("applyHintSplit", () => {
     const { changed } = await applyHintSplit({ id: 1, content, contentHash: "h1" }, [{ area: "alpha", none: false, blocks: [1] }]);
     expect(changed).toEqual([]);
     expect(await find("charlie")).toMatchObject({ status: HintCellStatus.Open, snippet: "c" });
+  });
+
+  test("a cell solved between the read and the write stays solved and untouched", async () => {
+    await makeArticle();
+    await cell("alpha", HintCellStatus.None);
+    const findOne = HintCell.findOne.bind(HintCell);
+    const spy = spyOn(HintCell, "findOne").mockImplementation(((...args: Parameters<typeof HintCell.findOne>) => ({
+      lean: async () => {
+        const read = await findOne(...args).lean();
+        // A hunter solves the cell right after applyHintSplit read it
+        await HintCell.collection.updateOne({ articleId: 1, area: "alpha" }, { $set: { status: HintCellStatus.Solved, answer: "1234 5678" } });
+        return read;
+      },
+    })) as unknown as typeof HintCell.findOne);
+    try {
+      const { changed } = await applyHintSplit({ id: 1, content, contentHash: "h1" }, [{ area: "alpha", none: false, blocks: [1] }]);
+      expect(spy).toHaveBeenCalled();
+      expect(changed).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+    const alpha = await find("alpha");
+    expect(alpha).toMatchObject({ status: HintCellStatus.Solved, answer: "1234 5678" });
+    expect(alpha).not.toHaveProperty("snippet");
   });
 
   test("sets hintSplitHash, but not when the content changed meanwhile", async () => {
