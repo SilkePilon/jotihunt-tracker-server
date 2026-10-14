@@ -5,6 +5,7 @@ import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { mockModel } from "../test/ai";
 import { GeminiError } from "./ai/gemini-error";
 import {
+  buildSummaryPrompt,
   createArticleSummarizer,
   createSummaryJob,
   findPendingSummaries,
@@ -30,10 +31,9 @@ describe("createArticleSummarizer", () => {
   });
 
   test("sends title and plain text, asks for JSON with the schema, returns the cleaned summary", async () => {
-    const model = mockModel(() => JSON.stringify({ summary: "  Om 23:00 wisselen de vossen.  ", points: [" Hunters laten pauzeren ", "", "x".repeat(300)] }));
+    const model = mockModel(() => JSON.stringify({ summary: "  Om 23:00 wisselen de vossen.  " }));
     const result = await createArticleSummarizer({ model }).summarize(input);
-    expect(result.summary).toBe("Om 23:00 wisselen de vossen.");
-    expect(result.points).toEqual(["Hunters laten pauzeren", "x".repeat(200)]);
+    expect(result).toEqual({ summary: "Om 23:00 wisselen de vossen." });
     const [call] = model.doGenerateCalls;
     const text = (call.prompt[0].content as { type: string; text: string }[])[0].text;
     expect(text).toContain("Title: Vossen wisselen");
@@ -45,7 +45,7 @@ describe("createArticleSummarizer", () => {
   });
 
   test("an assignment prompt carries deadline and publication time (Dutch weekday and time) and points", async () => {
-    const model = mockModel(() => JSON.stringify({ summary: "s", points: [] }));
+    const model = mockModel(() => JSON.stringify({ summary: "s" }));
     await createArticleSummarizer({ model }).summarize({
       title: "Doedelzak",
       type: "assignment",
@@ -62,22 +62,27 @@ describe("createArticleSummarizer", () => {
   });
 
   test("a prompt without publication time or deadline has neither line", async () => {
-    const model = mockModel(() => JSON.stringify({ summary: "s", points: [] }));
+    const model = mockModel(() => JSON.stringify({ summary: "s" }));
     await createArticleSummarizer({ model }).summarize(input);
     const text = (model.doGenerateCalls[0].prompt[0].content as { text: string }[])[0].text;
     expect(text).not.toContain("Published:");
     expect(text).not.toContain("Deadline:");
   });
 
-  test("keeps at most 4 points and cuts a long summary", async () => {
-    const model = mockModel(() => JSON.stringify({ summary: "y".repeat(900), points: ["1", "2", "3", "4", "5"] }));
+  test("cuts a long summary", async () => {
+    const model = mockModel(() => JSON.stringify({ summary: "y".repeat(900) }));
     const result = await createArticleSummarizer({ model }).summarize(input);
     expect(result.summary).toHaveLength(600);
-    expect(result.points).toEqual(["1", "2", "3", "4"]);
+  });
+
+  test("the prompt asks for a summary only", () => {
+    const prompt = buildSummaryPrompt({ title: "t", type: "news", content: "c" });
+    expect(prompt).toContain('"summary"');
+    expect(prompt).not.toContain('"points"');
   });
 
   test("an empty summary or a wrong shape is a non-retryable GeminiError", async () => {
-    for (const answer of ['{"summary":"","points":[]}', '{"points":["a"]}', "not json"]) {
+    for (const answer of ['{"summary":""}', '{}', "not json"]) {
       const error = (await createArticleSummarizer({ model: mockModel(() => answer) })
         .summarize(input)
         .catch((caught: unknown) => caught)) as GeminiError;
@@ -114,15 +119,17 @@ describe("findPendingSummaries and storeSummary", () => {
 
   test("storeSummary stores for the content it was made from, and not for content that changed meanwhile", async () => {
     await article(1, "news");
-    await storeSummary({ id: 1, contentHash: "hash-1" }, { summary: "kort", points: ["a"] });
-    expect(await Article.findOne({ id: 1 }).lean()).toMatchObject({ summary: "kort", summaryPoints: ["a"], summaryHash: "hash-1" });
-    await storeSummary({ id: 1, contentHash: "andere-hash" }, { summary: "fout", points: [] });
+    await Article.collection.updateOne({ id: 1 }, { $set: { summaryPoints: ["oud"] } });
+    await storeSummary({ id: 1, contentHash: "hash-1" }, { summary: "kort" });
+    expect(await Article.findOne({ id: 1 }).lean()).toMatchObject({ summary: "kort", summaryHash: "hash-1" });
+    expect(await Article.findOne({ id: 1 }).lean()).not.toHaveProperty("summaryPoints");
+    await storeSummary({ id: 1, contentHash: "andere-hash" }, { summary: "fout" });
     expect((await Article.findOne({ id: 1 }).lean())?.summary).toBe("kort");
   });
 });
 
 describe("createSummaryJob", () => {
-  const ok: ArticleSummary = { summary: "kort", points: ["p"] };
+  const ok: ArticleSummary = { summary: "kort" };
   const unreachable = () => new GeminiError("Gemini niet bereikbaar", true);
 
   test("the pause after an outage is 2 minutes, at most 15", () => {

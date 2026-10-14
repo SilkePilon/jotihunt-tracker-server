@@ -43,11 +43,6 @@ const ArticleSchema = new mongoose.Schema({
     type: String,
     required: false,
   },
-  /** What the summary means for our team, as short points */
-  summaryPoints: {
-    type: [String],
-    default: undefined,
-  },
   /** contentHash the summary was made from: a changed article gets a new summary */
   summaryHash: {
     type: String,
