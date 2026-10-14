@@ -4,6 +4,9 @@ import { logger } from "../logger";
 /** Response headers of Sentry the browser SDK reads to back off when the quota is hit. */
 const RELAYED_HEADERS = ["x-sentry-rate-limits", "retry-after"];
 
+/** Sentry normally answers within a second; a hung upstream must not keep the request open. */
+const UPSTREAM_TIMEOUT_MS = 10_000;
+
 /** Host and project id of a Sentry DSN (https://<key>@<host>/<projectId>), or null when it is not one. */
 export function parseDsn(dsn: string): { host: string; projectId: string } | null {
   try {
@@ -24,7 +27,7 @@ export async function forwardEnvelope(
   body: Buffer,
   siteDsn: string | undefined,
   fetchImpl: typeof fetch = fetch,
-): Promise<{ status: number; body?: string; headers?: Record<string, string> }> {
+): Promise<{ status: number; body?: string; headers?: Record<string, string>; contentType?: string }> {
   const site = siteDsn?.trim() ? parseDsn(siteDsn.trim()) : null;
   if (!site) return { status: 404 };
 
@@ -43,13 +46,15 @@ export async function forwardEnvelope(
       method: "POST",
       headers: { "Content-Type": "application/x-sentry-envelope" },
       body: new Uint8Array(body),
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     });
     const headers: Record<string, string> = {};
     for (const name of RELAYED_HEADERS) {
       const value = response.headers.get(name);
       if (value !== null) headers[name] = value;
     }
-    return { status: response.status, body: await response.text(), headers };
+    const text = await response.text();
+    return { status: response.status, body: text, headers, contentType: response.headers.get("content-type") ?? undefined };
   } catch (error) {
     logger.warn(`Sentry tunnel: could not reach Sentry: ${error}`);
     return { status: 502 };
@@ -63,7 +68,9 @@ const router = Router();
 router.post("/", express.raw({ type: () => true, limit: "1mb" }), async (req, res) => {
   const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
   const result = await forwardEnvelope(body, process.env.SENTRY_SITE_DSN);
-  res.status(result.status).set(result.headers ?? {}).send(result.body ?? "");
+  res.status(result.status).set(result.headers ?? {});
+  if (result.contentType) res.type(result.contentType);
+  res.send(result.body ?? "");
 });
 
 export default router;

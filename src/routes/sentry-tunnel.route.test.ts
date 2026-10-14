@@ -65,9 +65,35 @@ describe("forwardEnvelope", () => {
     const failing = (async () => {
       throw new Error("ECONNRESET");
     }) as unknown as typeof fetch;
-    expect((await forwardEnvelope(envelope(SITE_DSN), SITE_DSN, failing)).status).toBe(502);
-    expect(warn).toHaveBeenCalledTimes(1);
-    warn.mockRestore();
+    try {
+      expect((await forwardEnvelope(envelope(SITE_DSN), SITE_DSN, failing)).status).toBe(502);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("502 when Sentry does not answer in time (timeout)", async () => {
+    const warn = spyOn(logger, "warn").mockImplementation((() => logger) as never);
+    let signal: AbortSignal | null | undefined;
+    const timingOut = (async (_url: string, init: RequestInit) => {
+      signal = init.signal;
+      throw new DOMException("The operation timed out.", "TimeoutError");
+    }) as unknown as typeof fetch;
+    try {
+      expect((await forwardEnvelope(envelope(SITE_DSN), SITE_DSN, timingOut)).status).toBe(502);
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("relays the upstream Content-Type when present", async () => {
+    const json = (async () => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } })) as unknown as typeof fetch;
+    expect((await forwardEnvelope(envelope(SITE_DSN), SITE_DSN, json)).contentType).toBe("application/json");
+    const none = (async () => new Response(null, { status: 200 })) as unknown as typeof fetch;
+    expect((await forwardEnvelope(envelope(SITE_DSN), SITE_DSN, none)).contentType).toBeUndefined();
   });
 });
 
@@ -111,8 +137,18 @@ describe("POST /sentry-tunnel through the app", () => {
   test("413 above 1 MB", async () => {
     process.env.SENTRY_SITE_DSN = SITE_DSN;
     const warn = spyOn(logger, "warn").mockImplementation((() => logger) as never);
-    expect((await post(Buffer.alloc(1024 * 1024 + 1, 0x61))).status).toBe(413);
-    warn.mockRestore();
+    try {
+      expect((await post(Buffer.alloc(1024 * 1024 + 1, 0x61))).status).toBe(413);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("exposes the rate limit headers to a cross-origin browser SDK", async () => {
+    const response = await realFetch(`${base}/sentry-tunnel`, { method: "POST", headers: { Origin: "http://localhost:5173", "Content-Type": "text/plain" }, body: "x" });
+    const exposed = (response.headers.get("access-control-expose-headers") ?? "").toLowerCase();
+    expect(exposed).toContain("x-sentry-rate-limits");
+    expect(exposed).toContain("retry-after");
   });
 
   // The browser SDK posts text/plain; application/json proves the tunnel runs before the app's JSON parser

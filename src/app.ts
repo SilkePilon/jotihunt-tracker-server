@@ -49,7 +49,7 @@ app.use((_req, res, next) => {
 // before compression, so conditional requests still get a 304.
 app.use(compression());
 // Website error reports for Sentry (raw envelope body, no auth, before the JSON parser and the demo gate)
-app.use("/sentry-tunnel", cors({ maxAge: 86400 }), sentryTunnelRoute);
+app.use("/sentry-tunnel", cors({ maxAge: 86400, exposedHeaders: ["X-Sentry-Rate-Limits", "Retry-After"] }), sentryTunnelRoute);
 app.use(express.json());
 // Express 5 leaves req.body undefined when no body parser matched; keep the Express 4 behaviour of an empty object
 app.use((req, _res, next) => {
