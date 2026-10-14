@@ -120,8 +120,47 @@ const InviteSettingSchema = new mongoose.Schema<InviteSettingDoc>(
   { collection: "settings", versionKey: false },
 );
 
+export const QR_LOGIN_STATUSES = ["waiting", "scanned", "approved", "denied"] as const;
+export type QrLoginStatus = (typeof QR_LOGIN_STATUSES)[number];
+
+/** A laptop waiting to be logged in by a phone that scans its QR code. Code and poll secret are stored hashed. */
+export interface QrLoginDoc {
+  _id: Types.ObjectId;
+  codeHash: string;
+  /** Only the laptop knows the poll secret: whoever scans the code can not collect the session */
+  pollSecretHash: string;
+  status: QrLoginStatus;
+  requester: { label: string; location: string | null };
+  scannedBy: Types.ObjectId | null;
+  scannedByName: string | null;
+  /** WebAuthn challenge for the scanning phone's passkey */
+  challenge: string | null;
+  createdAt: Date;
+  expiresAt: Date;
+}
+
+const QrLoginSchema = new mongoose.Schema<QrLoginDoc>(
+  {
+    codeHash: { type: String, required: true, unique: true },
+    pollSecretHash: { type: String, required: true },
+    status: { type: String, enum: QR_LOGIN_STATUSES, required: true },
+    requester: {
+      label: { type: String, required: true },
+      location: { type: String, default: null },
+    },
+    scannedBy: { type: mongoose.Schema.Types.ObjectId, default: null },
+    scannedByName: { type: String, default: null },
+    challenge: { type: String, default: null },
+    createdAt: { type: Date, required: true },
+    // Kept 10 minutes after expiry so the laptop's poll can still say "expired", then removed by MongoDB
+    expiresAt: { type: Date, required: true, index: { expires: 10 * 60 } },
+  },
+  { versionKey: false },
+);
+
 export const sessions = () => authModel<SessionDoc>("Session", SessionSchema);
 export const invites = () => authModel<InviteDoc>("Invite", InviteSchema);
 export const recoveryLinks = () => authModel<RecoveryLinkDoc>("RecoveryLink", RecoveryLinkSchema);
 export const authChallenges = () => authModel<AuthChallengeDoc>("AuthChallenge", AuthChallengeSchema);
 export const inviteSettings = () => authModel<InviteSettingDoc>("InviteSetting", InviteSettingSchema);
+export const qrLogins = () => authModel<QrLoginDoc>("QrLogin", QrLoginSchema);
