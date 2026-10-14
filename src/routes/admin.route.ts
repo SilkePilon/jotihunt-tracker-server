@@ -22,7 +22,14 @@ const deleteValidator = [param("id").isMongoId().withMessage("Ongeldig gebruiker
 
 const updateValidator = [
   param("id").isMongoId().withMessage("Ongeldig gebruikers-ID.").bail().custom(userExists),
-  body("name").optional().trim().notEmpty().withMessage("Naam mag niet leeg zijn."),
+  body("name")
+    .optional()
+    .trim()
+    .notEmpty()
+    .withMessage("Naam mag niet leeg zijn.")
+    .bail()
+    .isLength({ max: 40 })
+    .withMessage("Naam moet 1 tot 40 tekens zijn."),
   body("admin").optional().isBoolean().withMessage("Admin mag alleen true/false zijn.").toBoolean(),
 ];
 

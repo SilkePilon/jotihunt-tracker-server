@@ -228,6 +228,17 @@ describe("hints page: assignments, read state and presence", () => {
     expect(updated.status).toBe(200);
     expect(JSON.stringify(await updated.json())).not.toContain("readArticles");
   });
+
+  test("an admin can't give a user a name over 40 characters", async () => {
+    const token = tokenFor(await createUser({ admin: true }));
+    const user = await createUser();
+    const tooLong = await request(`/admin/users/${user._id}`, { method: "PUT", token, json: { name: "x".repeat(41) } });
+    expect(tooLong.status).toBe(400);
+    expect(JSON.stringify(await tooLong.json())).toContain("Naam moet 1 tot 40 tekens zijn.");
+    expect((await User.findById(user._id))?.name).toBe(user.name);
+    const exact = await request(`/admin/users/${user._id}`, { method: "PUT", token, json: { name: "x".repeat(40) } });
+    expect(exact.status).toBe(200);
+  });
 });
 
 describe("write rate limit", () => {
