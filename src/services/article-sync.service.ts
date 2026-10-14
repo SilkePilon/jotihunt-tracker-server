@@ -23,7 +23,8 @@ function hashContent(content: string) {
   return createHash("sha256").update(content).digest("hex");
 }
 
-async function getAreaNames(): Promise<string[]> {
+/** Lowercase names of the known areas in the Area collection; all default areas when none is stored yet */
+export async function getAreaNames(): Promise<string[]> {
   const areas = await Area.find({}, { name: 1 }).lean();
   const names = areas.map((area) => area.name.toLowerCase()).filter((name) => DEFAULT_AREAS.includes(name));
   return names.length ? names : DEFAULT_AREAS;

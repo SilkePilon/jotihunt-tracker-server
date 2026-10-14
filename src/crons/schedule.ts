@@ -3,6 +3,7 @@ import { logger } from "../logger";
 import { reportCronErrors } from "../sentry";
 import { isPushConfigured } from "../services/push.service";
 import summarizeArticles from "./article-summaries.cron";
+import splitHints from "./hint-split.cron";
 import retrieveJotihuntAreas from "./jotihunt-areas.cron";
 import retrieveJotihuntArticles from "./jotihunt-articles.cron";
 import retrieveJotihuntLogos from "./jotihunt-logos.cron";
@@ -39,6 +40,9 @@ export function scheduleCrons() {
 
   // Summaries of news and assignments (Gemini): one per run, also for demo articles
   cron.schedule("5,25,45 * * * * *", reportCronErrors("article-summaries", summarizeArticles), { name: "article-summaries", noOverlap: true });
+
+  // AI hint split (Gemini): corrects the rule's per-area cells of one hint article per run
+  cron.schedule("15,35,55 * * * * *", reportCronErrors("hint-split", splitHints), { name: "hint-split", noOverlap: true });
 
   // Notifications: fox status changes, new articles and hunt deadlines (push + in-app feed)
   cron.schedule("*/10 * * * * *", reportCronErrors("notifier", notify), { name: "notifier", noOverlap: true });

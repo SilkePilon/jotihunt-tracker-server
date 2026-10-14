@@ -5,7 +5,20 @@ import { mockModel } from "../test/ai";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { GeminiError } from "./ai/gemini-error";
 import { getBoardJson, invalidateBoardCache } from "./hint-board.service";
-import { applyHintSplit, buildHintSplitPrompt, createHintSplitter, hintBlocks, snippetFor } from "./hint-split.service";
+import { DEFAULT_AREAS } from "./hint-parser";
+import {
+  applyHintSplit,
+  buildHintSplitPrompt,
+  createHintSplitJob,
+  createHintSplitter,
+  findPendingHintSplits,
+  HINT_SPLIT_MAX_PAUSE_MS,
+  HINT_SPLIT_PAUSE_MS,
+  hintBlocks,
+  snippetFor,
+  type HintSplit,
+  type HintSplitter,
+} from "./hint-split.service";
 
 beforeAll(connectTestDb);
 beforeEach(clearTestDb);
@@ -270,5 +283,151 @@ describe("applyHintSplit", () => {
     expect(JSON.parse(await getBoardJson()).cells[0].status).toBe(HintCellStatus.None);
     await applyHintSplit({ id: 1, content, contentHash: "h1" }, [{ area: "alpha", none: false, blocks: [1] }]);
     expect(JSON.parse(await getBoardJson()).cells[0].status).toBe(HintCellStatus.Open);
+  });
+});
+
+describe("findPendingHintSplits", () => {
+  test("hint articles whose current content has no split yet, newest first", async () => {
+    const at = (hour: number) => new Date(`2026-10-17T${hour}:00:00Z`);
+    await Article.create([
+      { id: 1, title: "Oud", type: "hint", publishAt: at(10), content: "a", contentHash: "h1" },
+      { id: 2, title: "Nieuw", type: "hint", publishAt: at(12), content: "b", contentHash: "h2" },
+      { id: 3, title: "Gesplitst", type: "hint", publishAt: at(13), content: "c", contentHash: "h3", hintSplitHash: "h3" },
+      { id: 4, title: "Gewijzigd", type: "hint", publishAt: at(11), content: "d", contentHash: "h4b", hintSplitHash: "h4" },
+      { id: 5, title: "Nieuws", type: "news", publishAt: at(14), content: "e", contentHash: "h5" },
+      { id: 6, title: "Zonder hash", type: "hint", publishAt: at(15), content: "f" },
+    ]);
+    const pending = await findPendingHintSplits(10);
+    expect(pending.map((article) => article.id)).toEqual([2, 4, 1]);
+    expect(pending[0]).toEqual({ id: 2, title: "Nieuw", content: "b", contentHash: "h2" });
+    expect((await findPendingHintSplits(1)).map((article) => article.id)).toEqual([2]);
+  });
+});
+
+describe("createHintSplitJob", () => {
+  const publishAt = new Date("2026-10-17T12:00:00.000Z");
+  const hint = (id: number, contentHash = `h${id}`) => Article.create({ id, title: `Hint ${id}`, type: "hint", publishAt, content: SAMPLE, contentHash });
+  const noneCell = (articleId: number, area = "alpha") => HintCell.create({ articleId, area, publishAt, slotTime: publishAt, status: HintCellStatus.None });
+  const alphaOpen: HintSplit = [{ area: "alpha", none: false, blocks: [1] }];
+  const splitter = (split: HintSplitter["split"]): HintSplitter => ({ split });
+  const unreachable = () => new GeminiError("Gemini niet bereikbaar", true);
+  const invalid = () => new GeminiError("Gemini gaf geen geldig antwoord", false);
+
+  test("the pause after an outage is 2 minutes, at most 15", () => {
+    expect(HINT_SPLIT_PAUSE_MS).toBe(120_000);
+    expect(HINT_SPLIT_MAX_PAUSE_MS).toBe(900_000);
+  });
+
+  test("splits a pending hint, applies it to the cells and marks the article as split", async () => {
+    await hint(1);
+    await noneCell(1);
+    const seen: { title: string; areas: string[] }[] = [];
+    const job = createHintSplitJob({
+      splitter: splitter(async (article, areas) => {
+        seen.push({ title: article.title, areas });
+        return alphaOpen;
+      }),
+      areas: async () => AREAS,
+    });
+    expect(await job.run()).toEqual({ done: [1], failed: [] });
+    expect(seen).toEqual([{ title: "Hint 1", areas: AREAS }]);
+    expect((await HintCell.findOne({ articleId: 1, area: "alpha" }).lean())!.status).toBe(HintCellStatus.Open);
+    expect((await Article.findOne({ id: 1 }).lean())!.hintSplitHash).toBe("h1");
+    expect((await job.run()).done).toEqual([]);
+  });
+
+  test("areas default to the area names the cells are made for", async () => {
+    await hint(1);
+    let given: string[] = [];
+    await createHintSplitJob({
+      splitter: splitter(async (_, areas) => {
+        given = areas;
+        return alphaOpen;
+      }),
+    }).run();
+    expect(given).toEqual([...DEFAULT_AREAS]);
+  });
+
+  test("one article per run by default, at most `batch` when given", async () => {
+    for (const id of [1, 2, 3]) await hint(id);
+    const ok = splitter(async () => alphaOpen);
+    expect((await createHintSplitJob({ splitter: ok, areas: async () => AREAS }).run()).done).toHaveLength(1);
+    expect((await createHintSplitJob({ splitter: ok, areas: async () => AREAS, batch: 5 }).run()).done).toHaveLength(2);
+  });
+
+  test("a non-retryable failure is tried twice for the same content, then left alone; a content change resets", async () => {
+    await hint(1);
+    let calls = 0;
+    const job = createHintSplitJob({
+      splitter: splitter(async () => {
+        calls++;
+        throw invalid();
+      }),
+      areas: async () => AREAS,
+    });
+    expect((await job.run()).failed.map((failure) => failure.id)).toEqual([1]);
+    await job.run();
+    await job.run();
+    expect(calls).toBe(2);
+    await Article.updateOne({ id: 1 }, { $set: { contentHash: "nieuw" } });
+    await job.run();
+    expect(calls).toBe(3);
+  });
+
+  test("a retryable failure pauses 2 minutes, then 4, and does not count toward giving up", async () => {
+    await hint(1);
+    let time = 0;
+    let calls = 0;
+    let failing = true;
+    const job = createHintSplitJob({
+      splitter: splitter(async () => {
+        calls++;
+        if (failing) throw unreachable();
+        return alphaOpen;
+      }),
+      areas: async () => AREAS,
+      now: () => time,
+    });
+    expect((await job.run()).failed[0].error).toBeInstanceOf(GeminiError);
+    time += HINT_SPLIT_PAUSE_MS - 1;
+    expect(await job.run()).toEqual({ done: [], failed: [] });
+    expect(calls).toBe(1);
+    time += 1;
+    await job.run();
+    expect(calls).toBe(2);
+    time += 2 * HINT_SPLIT_PAUSE_MS - 1;
+    await job.run();
+    expect(calls).toBe(2);
+    time += 1;
+    await job.run();
+    expect(calls).toBe(3);
+    time += 4 * HINT_SPLIT_PAUSE_MS;
+    failing = false;
+    expect((await job.run()).done).toEqual([1]);
+  });
+
+  test("a demo switch (tracked skipped) stops the run without applying", async () => {
+    await hint(1);
+    await hint(2);
+    await noneCell(1);
+    await noneCell(2);
+    let calls = 0;
+    const job = createHintSplitJob({
+      splitter: splitter(async () => {
+        calls++;
+        return alphaOpen;
+      }),
+      areas: async () => AREAS,
+      batch: 2,
+      // The read passes, the apply is skipped: a demo switch happened during the Gemini call
+      beginRun: () => {
+        let reads = 0;
+        return async (fn) => (reads++ === 0 ? fn() : undefined);
+      },
+    });
+    expect(await job.run()).toEqual({ done: [], failed: [] });
+    expect(calls).toBe(1);
+    expect(await HintCell.countDocuments({ status: HintCellStatus.None })).toBe(2);
+    expect(await Article.countDocuments({ hintSplitHash: { $exists: true } })).toBe(0);
   });
 });

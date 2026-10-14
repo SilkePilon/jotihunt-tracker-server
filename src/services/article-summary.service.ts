@@ -1,6 +1,7 @@
 import { generateText, jsonSchema, Output, type JSONSchema7, type LanguageModel } from "ai";
 import { Article, publicArticlesFilter } from "../models/article.model";
-import { GeminiError, invalidAnswer, toGeminiError } from "./ai/gemini-error";
+import { invalidAnswer, toGeminiError } from "./ai/gemini-error";
+import { createGeminiJob, GEMINI_JOB_MAX_PAUSE_MS, GEMINI_JOB_PAUSE_MS, type Tracked } from "./ai/gemini-job";
 import { htmlToText } from "./html-text";
 
 export interface ArticleSummary {
@@ -115,30 +116,17 @@ export async function storeSummary(article: { id: number; contentHash: string },
 }
 
 /** Pause of the job after a failure that says Gemini is down or busy; doubles on every next one in a row */
-export const SUMMARY_PAUSE_MS = 120_000;
+export const SUMMARY_PAUSE_MS = GEMINI_JOB_PAUSE_MS;
 /** Longest pause of the job */
-export const SUMMARY_MAX_PAUSE_MS = 900_000;
-
-type Tracked = <T>(fn: () => Promise<T>) => Promise<T | undefined>;
-
-const isOutage = (error: unknown) => error instanceof GeminiError && error.retryable;
+export const SUMMARY_MAX_PAUSE_MS = GEMINI_JOB_MAX_PAUSE_MS;
 
 /**
  * Background job: summarise what is pending, one article per run by default (summaries are not urgent and share the
- * API key with the time-critical reading of hunt photos). `beginRun` gives every run its own `tracked` wrapper, bound
- * to the database the run started on: reading and storing run inside it, the Gemini call outside it (it can take
- * long). When a tracked call is skipped (a demo switch happened) the run stops.
- *
- * A retryable failure (Gemini down or busy: 429, 5xx, timeout, network) stops the run and pauses the job:
- * 2 minutes at first, doubling on every next such failure up to 15 minutes, back to 2 after a success. Any other
- * failure counts for the article: after `maxAttempts` of them for the same content it is left without a summary.
+ * API key with the time-critical reading of hunt photos). Pause, give-up and demo-switch rules: see createGeminiJob.
  */
 export function createSummaryJob({
   summarizer,
-  beginRun = () => (fn) => fn(),
-  maxAttempts = 2,
-  batch = 1,
-  now = Date.now,
+  ...options
 }: {
   summarizer: ArticleSummarizer;
   beginRun?: () => Tracked;
@@ -146,45 +134,5 @@ export function createSummaryJob({
   batch?: number;
   now?: () => number;
 }) {
-  const attempts = new Map<number, { hash: string; count: number }>();
-  const givenUp = (article: PendingArticle) => {
-    const entry = attempts.get(article.id);
-    return entry?.hash === article.contentHash && entry.count >= maxAttempts;
-  };
-  let pausedUntil = 0;
-  let nextPause = SUMMARY_PAUSE_MS;
-
-  return {
-    async run() {
-      const done: number[] = [];
-      const failed: { id: number; error: unknown }[] = [];
-      if (now() < pausedUntil) return { done, failed };
-      const tracked = beginRun();
-      // Read a few more than the batch, so articles that were given up on do not block the ones behind them
-      const pending = ((await tracked(() => findPendingSummaries(batch + attempts.size))) ?? []).filter((article) => !givenUp(article)).slice(0, batch);
-      for (const article of pending) {
-        try {
-          const summary = await summarizer.summarize(article);
-          nextPause = SUMMARY_PAUSE_MS;
-          const stored = await tracked(async () => {
-            await storeSummary(article, summary);
-            return true;
-          });
-          if (!stored) break;
-          attempts.delete(article.id);
-          done.push(article.id);
-        } catch (error) {
-          failed.push({ id: article.id, error });
-          if (isOutage(error)) {
-            pausedUntil = now() + nextPause;
-            nextPause = Math.min(nextPause * 2, SUMMARY_MAX_PAUSE_MS);
-            break;
-          }
-          const entry = attempts.get(article.id);
-          attempts.set(article.id, { hash: article.contentHash, count: entry?.hash === article.contentHash ? entry.count + 1 : 1 });
-        }
-      }
-      return { done, failed };
-    },
-  };
+  return createGeminiJob({ findPending: findPendingSummaries, work: (article) => summarizer.summarize(article), store: storeSummary, ...options });
 }

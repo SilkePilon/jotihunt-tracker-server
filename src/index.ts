@@ -117,7 +117,7 @@ await huntOcr
   .then((count) => count > 0 && logger.info(`Resumed reading ${count} hunt report photo(s)`))
   .catch((error) => logger.error("Could not resume hunt report reading", error));
 if (!process.env.GEMINI_API_KEY?.trim()) {
-  logger.warn("GEMINI_API_KEY not set, hunt photos are not read, fox predictions are off and articles get no summary");
+  logger.warn("GEMINI_API_KEY not set, hunt photos are not read, fox predictions are off and articles get no summary, and hints are split by rule only");
 }
 if (!isTraccarConfigured) {
   logger.warn("TRACCAR_API_URL/TRACCAR_API_TOKEN not set, tracker endpoints will return 503");

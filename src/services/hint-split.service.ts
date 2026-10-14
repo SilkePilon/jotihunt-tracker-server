@@ -2,6 +2,8 @@ import { generateText, jsonSchema, Output, type JSONSchema7, type LanguageModel 
 import { Article } from "../models/article.model";
 import { HintCell, HintCellStatus } from "../models/hint-cell.model";
 import { invalidAnswer, toGeminiError } from "./ai/gemini-error";
+import { createGeminiJob, GEMINI_JOB_MAX_PAUSE_MS, GEMINI_JOB_PAUSE_MS, type Tracked } from "./ai/gemini-job";
+import { getAreaNames } from "./article-sync.service";
 import { invalidateBoardCache } from "./hint-board.service";
 import { htmlToText } from "./html-text";
 
@@ -243,4 +245,56 @@ export async function applyHintSplit(article: { id: number; content: string; con
   await Article.updateOne({ id: article.id, contentHash: article.contentHash }, { $set: { hintSplitHash: article.contentHash } });
   if (changed.length > 0) invalidateBoardCache();
   return { changed };
+}
+
+export interface PendingHintSplit {
+  id: number;
+  title: string;
+  content: string;
+  contentHash: string;
+}
+
+/** Hint articles whose current content has not been split by the AI yet, newest first */
+export async function findPendingHintSplits(limit: number): Promise<PendingHintSplit[]> {
+  const articles = await Article.find(
+    { type: "hint", contentHash: { $type: "string" }, $expr: { $ne: ["$hintSplitHash", "$contentHash"] } },
+    { _id: 0, id: 1, title: 1, content: 1, contentHash: 1 },
+  )
+    .sort({ publishAt: -1 })
+    .limit(limit)
+    .lean();
+  return articles as PendingHintSplit[];
+}
+
+/** Pause of the job after a failure that says Gemini is down or busy; doubles on every next one in a row */
+export const HINT_SPLIT_PAUSE_MS = GEMINI_JOB_PAUSE_MS;
+/** Longest pause of the job */
+export const HINT_SPLIT_MAX_PAUSE_MS = GEMINI_JOB_MAX_PAUSE_MS;
+
+/**
+ * Background job: let Gemini split pending hint articles (one per run by default) and correct their cells. `areas`
+ * (read inside the tracked read) defaults to the areas the cells are made for. Pause, give-up and demo-switch rules:
+ * see createGeminiJob.
+ */
+export function createHintSplitJob({
+  splitter,
+  areas = getAreaNames,
+  ...options
+}: {
+  splitter: HintSplitter;
+  areas?: () => Promise<string[]>;
+  beginRun?: () => Tracked;
+  maxAttempts?: number;
+  batch?: number;
+  now?: () => number;
+}) {
+  return createGeminiJob({
+    findPending: async (limit: number) => {
+      const [pending, names] = await Promise.all([findPendingHintSplits(limit), areas()]);
+      return pending.map((article) => ({ ...article, areas: names }));
+    },
+    work: (article) => splitter.split({ title: article.title, content: article.content }, article.areas),
+    store: (article, split) => applyHintSplit(article, split),
+    ...options,
+  });
 }
