@@ -28,7 +28,7 @@ export async function getInvite(req: Request, res: Response) {
   if (!invite) return res.status(404).json({ valid: false, reason: "unknown" });
   const reason = await blockReason(invite.code);
   const [group, inviter, memberCount] = await Promise.all([groupInfo(), User.findById(invite.createdBy, { name: 1 }).lean(), User.countDocuments()]);
-  return res.status(200).json({ valid: reason === null, reason, group, invitedBy: inviter?.name ?? null, memberCount, onlineCount: 0 /* presence is gone; the field stays for the invite page */ });
+  return res.status(200).json({ valid: reason === null, reason, group, invitedBy: inviter?.name ?? null, memberCount });
 }
 
 export async function registerOptions(req: Request, res: Response) {
