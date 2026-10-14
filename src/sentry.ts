@@ -5,7 +5,8 @@ import { isDatabaseUnavailable } from "./utils/database-errors";
 /**
  * Sentry options from the environment, or null when no SENTRY_DSN is set (tests, local dev, demo stacks send nothing).
  * Errors only: no tracing, and none of the request data Sentry v11 collects by default (bodies hold GPS positions,
- * AI calls hold hunt photos and hint text).
+ * AI calls hold hunt photos and hint text). Access-log lines are kept out of Sentry Logs (see dropAccessLogs in logger.ts);
+ * beforeSendLog drops any that still get through.
  */
 export function sentryOptions(env: NodeJS.ProcessEnv = process.env): BunOptions | null {
   const dsn = env.SENTRY_DSN?.trim();
@@ -14,7 +15,6 @@ export function sentryOptions(env: NodeJS.ProcessEnv = process.env): BunOptions 
     dsn,
     environment: env.SENTRY_ENVIRONMENT?.trim() || env.NODE_ENV || "development",
     release: env.SENTRY_RELEASE?.trim() || undefined,
-    tracesSampleRate: 0,
     dataCollection: {
       userInfo: false,
       httpBodies: [],
@@ -25,7 +25,31 @@ export function sentryOptions(env: NodeJS.ProcessEnv = process.env): BunOptions 
       databaseQueryData: false,
       stackFrameVariables: false,
     },
+    beforeSendLog: (log) => (isAccessLog(log.attributes ?? {}) ? null : log),
   };
+}
+
+/**
+ * True for an express-winston access-log line: it carries the request (headers with the client IP, url with query
+ * string and tokens) under meta.req, or under req/res with other field settings.
+ */
+export function isAccessLog(fields: Record<string, unknown>): boolean {
+  const meta = fields.meta as { req?: unknown; res?: unknown } | undefined;
+  return "req" in fields || "res" in fields || (typeof meta === "object" && meta !== null && ("req" in meta || "res" in meta));
+}
+
+// Paths whose segment after the prefix is a secret: recovery links, invite codes and QR login codes
+const SECRET_SEGMENTS: [RegExp, string][] = [
+  [/^\/herstel\/[^/]+/, "/herstel/:token"],
+  [/^\/invites\/[^/]+/, "/invites/:code"],
+  [/^\/auth\/qr\/scan\/[^/]+/, "/auth/qr/scan/:code"],
+];
+
+/** A request path safe to log and tag: no query string, no secret tokens or codes, ObjectIds as :id. */
+export function redactPath(path: string): string {
+  let redacted = path.split("?")[0];
+  for (const [pattern, replacement] of SECRET_SEGMENTS) redacted = redacted.replace(pattern, replacement);
+  return redacted.replace(/\/[0-9a-f]{24}(?=\/|$)/gi, "/:id");
 }
 
 let enabled = false;
@@ -43,10 +67,10 @@ export function isSentryEnabled(): boolean {
   return enabled;
 }
 
-/** Groups repeats of one error for the throttle: where it happened, its type and its message. */
+/** Groups repeats of one error for the throttle: where it happened, its type and its message (numbers ignored). */
 export function issueKey(error: unknown, context = ""): string {
-  if (error instanceof Error) return `${context}|${error.name}|${error.message}`.slice(0, 300);
-  return `${context}|${typeof error}|${String(error)}`.slice(0, 300);
+  const [type, message] = error instanceof Error ? [error.name, error.message] : [typeof error, String(error)];
+  return `${context}|${type}|${message.replace(/\d+(\.\d+)?/g, "#")}`.slice(0, 300);
 }
 
 /** True when the key was not sent in the last windowMs. Keys are forgotten after their window. */
@@ -69,8 +93,17 @@ export type Capture = (
 // Crons run every 10 seconds: a broken upstream would otherwise send 8640 events a day (the free plan has 5000 a month)
 const allowIssue = createIssueThrottle(10 * 60 * 1000);
 
+// Errors captureThrottled already decided on (sent or throttled), so a later log line of the same error is skipped
+const handled = new WeakSet<object>();
+
+/** True when captureThrottled already saw this error object. */
+export function wasHandled(error: unknown): boolean {
+  return typeof error === "object" && error !== null && handled.has(error);
+}
+
 /** Send an error to Sentry, at most once per 10 minutes per issueKey. */
 export function captureThrottled(error: unknown, hint: Parameters<Capture>[1], context = "", capture: Capture = Sentry.captureException) {
+  if (typeof error === "object" && error !== null) handled.add(error);
   if (!allowIssue(issueKey(error, context))) return;
   capture(error, hint);
 }
@@ -85,15 +118,18 @@ export function shouldReportRequestError(error: unknown, status: number): boolea
   return status >= 500 && !isDatabaseUnavailable(error);
 }
 
-/** Report a failed request with its route and user. Context goes on the event (Bun has no per-request scope). */
+/**
+ * Report a failed request with its route and user, throttled like crons (a broken endpoint polled by every hunter).
+ * Context goes on the event (Bun has no per-request scope).
+ */
 export function reportRequestError(
   error: unknown,
   req: { method: string; originalUrl: string; user?: { _id: unknown; name?: string } | null },
   capture: Capture = Sentry.captureException,
 ) {
-  const hint: Parameters<Capture>[1] = { tags: { route: `${req.method} ${req.originalUrl.split("?")[0]}` } };
+  const hint: Parameters<Capture>[1] = { tags: { route: `${req.method} ${redactPath(req.originalUrl)}` } };
   if (req.user) hint.user = { id: String(req.user._id), username: req.user.name };
-  capture(error, hint);
+  captureThrottled(error, hint, "request", capture);
 }
 
 /** Wrap a cron job: a thrown error is reported (throttled) with the job name, then rethrown for node-cron's own log. */

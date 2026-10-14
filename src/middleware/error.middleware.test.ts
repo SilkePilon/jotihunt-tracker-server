@@ -50,8 +50,8 @@ describe("errorHandler", () => {
     res.setHeader = (name, value) => ((res.headers[name] = value), res);
     return res;
   }
-  const handle = (err: unknown) => {
-    const req = { method: "POST", originalUrl: "/api/locations?token=secret&x=1" } as unknown as Request;
+  const handle = (err: unknown, originalUrl = "/api/locations?token=secret&x=1") => {
+    const req = { method: "POST", originalUrl } as unknown as Request;
     const res = fakeRes();
     errorHandler(err, req, res as unknown as Response, () => {});
     return res;
@@ -82,6 +82,12 @@ describe("errorHandler", () => {
     expect(error.mock.calls[0]).toEqual(["Unhandled error on POST /api/locations", err]);
     expect(res.statusCode).toBe(500);
     expect(res.body).toEqual({ message: "Internal server error" });
+  });
+
+  test("secrets in the path are not logged", () => {
+    const err = withStatus(400, "Bad JSON");
+    handle(err, "/invites/s3cr3t/register/options?x=1");
+    expect(warn.mock.calls[0]).toEqual(["Unhandled error on POST /invites/:code/register/options", err]);
   });
 
   test("a database outage is logged at error and answers 503 with Retry-After", () => {

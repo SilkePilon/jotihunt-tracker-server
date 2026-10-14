@@ -33,5 +33,9 @@ export default async function summarizeArticles() {
   if (!job) return;
   const { done, failed } = await job.run();
   if (done.length > 0) logger.info(`(CRON) Summarised articles ${done.join(", ")}`);
-  for (const failure of failed) logger.warn(`(CRON) Summary of article ${failure.id} failed: ${describe(failure.error)}`);
+  for (const failure of failed) {
+    // A Gemini failure (rate limit, quota, bad answer) is expected and stays a warning; anything else is a bug and an issue
+    if (failure.error instanceof GeminiError || !(failure.error instanceof Error)) logger.warn(`(CRON) Summary of article ${failure.id} failed: ${describe(failure.error)}`);
+    else logger.error(`(CRON) Summary of article ${failure.id} failed:`, failure.error);
+  }
 }

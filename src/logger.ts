@@ -1,8 +1,9 @@
 import * as Sentry from "@sentry/bun";
 import winston from "winston";
 import Transport from "winston-transport";
-import { captureThrottled, isSentryEnabled, type Capture } from "./sentry";
+import { captureThrottled, isAccessLog, isSentryEnabled, wasHandled, type Capture } from "./sentry";
 import { isDatabaseUnavailable } from "./utils/database-errors";
+import { isExpectedOutage } from "./utils/expected-outages";
 
 export const debug = process.env.DEBUG === "true";
 
@@ -62,20 +63,27 @@ export const errorDetails = winston.format((info) => {
 
 /**
  * Turns `logger.error("...", error)` into a Sentry issue (most crons and services catch and log instead of throwing).
- * Errors the request handler or a cron wrapper already sent are skipped by Sentry itself; database outages are not
- * reported; repeats are throttled.
+ * Errors the request handler or a cron wrapper already handled are skipped. Database outages and expected outages of
+ * external services (Jotihunt API, Gemini, ORS) are not issues: during an outage every cron run would log one.
+ * Repeats are throttled.
  */
 export function createSentryErrorTransport(capture: Capture = Sentry.captureException) {
   return new (class extends Transport {
     log(info: winston.Logform.TransformableInfo, next: () => void) {
       const error = (info as { [ORIGINAL_ERROR]?: Error })[ORIGINAL_ERROR];
-      if (info.level === "error" && error && !isDatabaseUnavailable(error)) {
+      if (info.level === "error" && error && !wasHandled(error) && !isDatabaseUnavailable(error) && !isExpectedOutage(error)) {
         captureThrottled(error, { extra: { log: String(info.message) } }, "log", capture);
       }
       next();
     }
   })({ level: "error" });
 }
+
+/**
+ * Keeps express-winston access-log lines out of a transport: they carry the request (headers with the client IP,
+ * the url with query string and tokens). Used on the Sentry Logs transport; the log files keep them.
+ */
+export const dropAccessLogs = winston.format((info) => (isAccessLog(info) ? false : info));
 
 // Setup logging with Winston. The log files are rotated so a long event can never fill the disk.
 const MAX_LOG_FILE_BYTES = 10 * 1024 * 1024;
@@ -98,9 +106,9 @@ export const logger = winston.createLogger({
   ],
 });
 
-// Sentry (when SENTRY_DSN is set): logged errors become issues, warnings and errors also go to Sentry Logs for context
+// Sentry (when SENTRY_DSN is set): logged errors become issues, warnings and errors (not access logs) also go to Sentry Logs for context
 if (isSentryEnabled()) {
   logger.add(createSentryErrorTransport());
   const SentryLogs = Sentry.createSentryWinstonTransport(Transport, { levels: ["error", "warn"] });
-  logger.add(new SentryLogs());
+  logger.add(new SentryLogs({ format: dropAccessLogs() }));
 }

@@ -1,6 +1,6 @@
 import { NextFunction, Request, Response } from "express";
 import { logger } from "../logger";
-import { reportRequestError, shouldReportRequestError } from "../sentry";
+import { redactPath, reportRequestError, shouldReportRequestError } from "../sentry";
 import { isDatabaseUnavailable } from "../utils/database-errors";
 
 export { isDatabaseUnavailable };
@@ -10,9 +10,9 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
   const { status = 500, message } = (err ?? {}) as { status?: number; message?: string };
   // Before the log line: Sentry marks the error as sent, so the logger's Sentry transport skips it
   if (shouldReportRequestError(err, status)) reportRequestError(err, req);
-  // Path only: query strings can hold tokens and the log line also goes to Sentry Logs.
+  // Path only, without secrets: query strings and some paths hold tokens, and the log line also goes to Sentry Logs.
   // Client errors (4xx, e.g. malformed JSON) are warnings: logger.error would make them Sentry issues.
-  const line = `Unhandled error on ${req.method} ${req.originalUrl.split("?")[0]}`;
+  const line = `Unhandled error on ${req.method} ${redactPath(req.originalUrl)}`;
   if (status < 500 && !isDatabaseUnavailable(err)) logger.warn(line, err);
   else logger.error(line, err);
   if (res.headersSent) return;

@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { Writable } from "node:stream";
 import winston from "winston";
 import { AxiosError, AxiosHeaders } from "axios";
-import { createSentryErrorTransport, errorDetails } from "./logger";
+import Transport from "winston-transport";
+import { createSentryErrorTransport, dropAccessLogs, errorDetails } from "./logger";
+import { captureThrottled } from "./sentry";
 
 /** A logger with the production format that collects the JSON lines. */
 function capture() {
@@ -99,6 +101,27 @@ describe("Sentry error transport", () => {
     expect(captured[0]?.[0]).toBe(error);
   });
 
+  test("an error the request handler or a cron wrapper already handled is not captured again", async () => {
+    const error = new Error("transport-handled");
+    captureThrottled(error, {}, "request", () => {});
+    const captured = logWith(["error", "Unhandled error on GET /x", error]);
+    await Bun.sleep(10);
+    expect(captured).toEqual([]);
+  });
+
+  test("expected outages of external services are not captured", async () => {
+    const named = (name: string) => Object.assign(new Error(`transport-${name}`), { name });
+    const captured = logWith(
+      ["error", "Jotihunt", named("JotihuntApiError")],
+      ["error", "Jotihunt", named("JotihuntPausedError")],
+      ["error", "Gemini", named("GeminiError")],
+      ["error", "ORS", named("RoutingUnavailableError")],
+      ["error", "AI answer", named("InvalidPredictionError")],
+    );
+    await Bun.sleep(10);
+    expect(captured).toEqual([]);
+  });
+
   test("no Error, warn level or database outage: not captured", async () => {
     const captured = logWith(
       ["error", "plain message"],
@@ -107,5 +130,39 @@ describe("Sentry error transport", () => {
     );
     await Bun.sleep(10);
     expect(captured).toEqual([]);
+  });
+});
+
+describe("Sentry Logs access-log filter", () => {
+  test("express-winston lines (request under meta) are dropped", () => {
+    const format = dropAccessLogs();
+    const info = { level: "warn", message: "HTTP GET /herstel/secret?x=1", meta: { req: { headers: { "cf-connecting-ip": "1.2.3.4" } }, res: { statusCode: 404 }, responseTime: 2 } };
+    expect(format.transform(info)).toBe(false);
+    expect(format.transform({ level: "error", message: "x", req: {} })).toBe(false);
+  });
+
+  test("other lines pass unchanged", () => {
+    const info = { level: "error", message: "Could not store areas", stack: "Error: x" };
+    expect(format().transform(info)).toBe(info);
+    function format() {
+      return dropAccessLogs();
+    }
+  });
+
+  test("on a transport, access-log lines from the shared logger never arrive", async () => {
+    const received: unknown[] = [];
+    const sink = new (class extends Transport {
+      log(info: unknown, next: () => void) {
+        received.push(info);
+        next();
+      }
+    })({ format: dropAccessLogs() });
+    const log = winston.createLogger({ format: winston.format.combine(errorDetails(), winston.format.json()), transports: [sink] });
+    // The shape express-winston 4 logs with (winstonInstance.log({ meta: { req, res, responseTime }, level, message }))
+    log.log({ level: "warn", message: "HTTP POST /invites/code", meta: { req: { url: "/invites/code" }, res: { statusCode: 400 }, responseTime: 1 } });
+    log.warn("Real warning");
+    await Bun.sleep(10);
+    expect(received).toHaveLength(1);
+    expect((received[0] as { message: string }).message).toBe("Real warning");
   });
 });

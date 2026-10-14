@@ -74,7 +74,7 @@ export default async function retrieveJotihuntAreas() {
   await runTracked(
     () =>
       storeAreas(parsed.areas).catch((error) => {
-        logger.error(`(CRON) Error storing areas in database: ${error instanceof Error ? error.message : String(error)}`);
+        logger.error("(CRON) Error storing areas in database:", error);
       }),
     { generation },
   );
