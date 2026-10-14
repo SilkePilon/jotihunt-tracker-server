@@ -69,6 +69,11 @@ describe("hintBlocks", () => {
     expect(blocks.map((block) => block.text)).toEqual(["[bestand: echo.pdf]", "klik"]);
   });
 
+  test("a link around an image is only the image; a link without href gets no label", () => {
+    const blocks = hintBlocks(`<div><a href="https://cdn.jotihunt.net/big.png"><img src="https://cdn.jotihunt.net/big.png"></a></div><div>Golf:<a name="x"></a></div>`);
+    expect(blocks.map((block) => block.text)).toEqual(["[afbeelding: big.png]", "Golf:"]);
+  });
+
   test("also cuts after </blockquote>, </ul>, </ol> and </pre>", () => {
     const blocks = hintBlocks("<blockquote>a</blockquote>b<br><ul><li>c</li></ul>d<br><pre>e</pre>f<br><ol><li>g</li></ol>h");
     expect(blocks.map((block) => block.text)).toEqual(["a", "b", "c", "d", "e", "f", "g", "h"]);

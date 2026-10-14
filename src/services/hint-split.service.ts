@@ -106,8 +106,12 @@ function figureLabel(figure: string): string {
   return label(isImage ? "afbeelding" : "bestand", name);
 }
 
-/** "[bestand: <file name>]" for a link without text */
-const emptyLinkLabel = (link: string, inner: string) => (inner.replace(/<[^>]*>/g, "").trim() ? link : `${link} ${label("bestand", fileName(attribute(link, "href")))} `);
+/** A link with an href and nothing shown inside (no text, no image) gets "[bestand: <file name>]" */
+function emptyLinkLabel(link: string, inner: string): string {
+  const href = attribute(link, "href");
+  if (!href || /<img\b/i.test(inner) || inner.replace(/<[^>]*>/g, "").trim()) return link;
+  return `${link} ${label("bestand", fileName(href))} `;
+}
 
 function blockText(html: string): string {
   // htmlToText puts blocks on lines (and "- " before a list item); inside one block a line break is just a space
