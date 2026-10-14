@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { captureThrottled, createIssueThrottle, issueKey, sentryOptions } from "./sentry";
+import { captureThrottled, createIssueThrottle, issueKey, reportCronErrors, reportRequestError, sentryOptions, shouldReportRequestError } from "./sentry";
 
 describe("sentryOptions", () => {
   test("null without a DSN (tests, local dev)", () => {
@@ -53,5 +53,37 @@ describe("issue throttle", () => {
     captureThrottled(new Error("same"), {}, "t1", capture);
     captureThrottled(new Error("same"), {}, "t1", capture);
     expect(sent).toHaveLength(1);
+  });
+});
+
+describe("request errors", () => {
+  test("only 5xx that are not a database outage", () => {
+    expect(shouldReportRequestError(new Error("bug"), 500)).toBe(true);
+    expect(shouldReportRequestError(new Error("nope"), 404)).toBe(false);
+    expect(shouldReportRequestError(Object.assign(new Error("x"), { name: "MongoNetworkError" }), 500)).toBe(false);
+  });
+
+  test("sends route and user id + name", () => {
+    const calls: unknown[][] = [];
+    const error = new Error("req-bug");
+    reportRequestError(error, { method: "GET", originalUrl: "/hunts/1", user: { _id: "u1", name: "Fox" } }, (...args) => calls.push(args));
+    expect(calls).toEqual([[error, { tags: { route: "GET /hunts/1" }, user: { id: "u1", username: "Fox" } }]]);
+  });
+});
+
+describe("reportCronErrors", () => {
+  test("captures with the cron tag and rethrows", async () => {
+    const calls: unknown[][] = [];
+    const error = new Error("cron-bug");
+    const job = reportCronErrors("areas", async () => {
+      throw error;
+    }, (...args) => calls.push(args));
+    await expect(job()).rejects.toBe(error);
+    expect(calls).toEqual([[error, { tags: { cron: "areas" } }]]);
+  });
+
+  test("passes arguments and result through", async () => {
+    const job = reportCronErrors("x", async (n: number) => n * 2, () => {});
+    expect(await job(21)).toBe(42);
   });
 });

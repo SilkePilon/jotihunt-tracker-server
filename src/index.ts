@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { debug, logger } from "./logger";
+import { flushSentry } from "./sentry";
 import { app } from "./app";
 import { scheduleCrons } from "./crons/schedule";
 import { publicAppUrl, webauthnConfig } from "./auth/config";
@@ -24,8 +25,8 @@ process.on("unhandledRejection", (reason) => {
 });
 process.on("uncaughtException", (error) => {
   logger.error("Uncaught exception, exiting", error);
-  // Give the file transports a moment to write the line
-  setTimeout(() => process.exit(1), 500);
+  // Give the file transports a moment to write the line, and Sentry up to 2 s to send the error
+  void Promise.all([flushSentry(2000), Bun.sleep(500)]).finally(() => process.exit(1));
 });
 
 if (debug) logger.warn("Debug mode enabled");

@@ -1,5 +1,6 @@
 import * as Sentry from "@sentry/bun";
 import type { BunOptions } from "@sentry/bun";
+import { isDatabaseUnavailable } from "./utils/database-errors";
 
 /**
  * Sentry options from the environment, or null when no SENTRY_DSN is set (tests, local dev, demo stacks send nothing).
@@ -77,4 +78,32 @@ export function captureThrottled(error: unknown, hint: Parameters<Capture>[1], c
 /** Wait (bounded) until queued events are sent, e.g. before the process exits. */
 export async function flushSentry(timeoutMs = 2000): Promise<void> {
   if (enabled) await Sentry.flush(timeoutMs);
+}
+
+/** 5xx answers are bugs worth an issue; a database outage is not (503, every request would report it). */
+export function shouldReportRequestError(error: unknown, status: number): boolean {
+  return status >= 500 && !isDatabaseUnavailable(error);
+}
+
+/** Report a failed request with its route and user. Context goes on the event (Bun has no per-request scope). */
+export function reportRequestError(
+  error: unknown,
+  req: { method: string; originalUrl: string; user?: { _id: unknown; name?: string } | null },
+  capture: Capture = Sentry.captureException,
+) {
+  const hint: Parameters<Capture>[1] = { tags: { route: `${req.method} ${req.originalUrl.split("?")[0]}` } };
+  if (req.user) hint.user = { id: String(req.user._id), username: req.user.name };
+  capture(error, hint);
+}
+
+/** Wrap a cron job: a thrown error is reported (throttled) with the job name, then rethrown for node-cron's own log. */
+export function reportCronErrors<A extends unknown[]>(name: string, job: (...args: A) => unknown, capture: Capture = Sentry.captureException) {
+  return async (...args: A) => {
+    try {
+      return await job(...args);
+    } catch (error) {
+      captureThrottled(error, { tags: { cron: name } }, `cron:${name}`, capture);
+      throw error;
+    }
+  };
 }

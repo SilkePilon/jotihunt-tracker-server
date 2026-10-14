@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Writable } from "node:stream";
 import winston from "winston";
 import { AxiosError, AxiosHeaders } from "axios";
-import { errorDetails } from "./logger";
+import { createSentryErrorTransport, errorDetails } from "./logger";
 
 /** A logger with the production format that collects the JSON lines. */
 function capture() {
@@ -69,5 +69,43 @@ describe("errorDetails log format", () => {
     const { logger, lines } = capture();
     logger.info("Starting", { a: 1 });
     expect(lines[0]).toEqual({ level: "info", message: "Starting", a: 1 });
+  });
+});
+
+describe("Sentry error transport", () => {
+  function logWith(...args: unknown[][]) {
+    const captured: unknown[][] = [];
+    const log = winston.createLogger({
+      format: winston.format.combine(errorDetails(), winston.format.json()),
+      transports: [createSentryErrorTransport((...call) => captured.push(call))],
+    });
+    for (const [level, ...rest] of args) (log as unknown as Record<string, (...a: unknown[]) => void>)[level as string](...rest);
+    return captured;
+  }
+
+  test("logger.error with an Error becomes an issue with the message as extra", async () => {
+    const error = new Error("transport-a");
+    const captured = logWith(["error", "Could not fetch areas", error]);
+    await Bun.sleep(10);
+    // Winston appends the meta error's message with a space
+    expect(captured).toEqual([[error, { extra: { log: "Could not fetch areas transport-a" } }]]);
+  });
+
+  test("an Error passed as the message (node-cron) is captured too", async () => {
+    const error = new Error("transport-b");
+    // node-cron's logger adapter calls logger.error(error, undefined)
+    const captured = logWith(["error", error, undefined]);
+    await Bun.sleep(10);
+    expect(captured[0]?.[0]).toBe(error);
+  });
+
+  test("no Error, warn level or database outage: not captured", async () => {
+    const captured = logWith(
+      ["error", "plain message"],
+      ["warn", "careful", new Error("transport-c")],
+      ["error", "db", Object.assign(new Error("transport-d"), { name: "MongoNetworkError" })],
+    );
+    await Bun.sleep(10);
+    expect(captured).toEqual([]);
   });
 });
