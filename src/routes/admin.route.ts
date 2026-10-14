@@ -52,6 +52,7 @@ router.post(
   [verifyToken, isAdmin, validate([body("message").isString().trim().isLength({ min: 1, max: 200 }).withMessage("Bericht moet 1 tot 200 tekens zijn.")])],
   notificationsController.broadcast,
 );
+router.get("/broadcasts", [verifyToken, isAdmin], notificationsController.listBroadcasts);
 // Linking the group's Telegram account (tegenhunts and other @Jotihunt_bot messages come in through it)
 router.get("/telegram", [verifyToken, isAdmin], telegramController.getStatus);
 router.post("/telegram/link", [verifyToken, isAdmin], telegramController.startLink);

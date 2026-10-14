@@ -66,6 +66,12 @@ export async function broadcast(req: Request, res: Response) {
   return res.status(201).json(toNotificationView(notification));
 }
 
+/** GET /admin/broadcasts: the latest HQ messages (notifications live 48 hours), newest first. */
+export async function listBroadcasts(_req: Request, res: Response) {
+  const latest = await AppNotification.find({ type: "broadcast" }).sort({ createdAt: -1 }).limit(20).lean();
+  return res.status(200).json(latest.map(toNotificationView));
+}
+
 /** The latest tegenhunt: active for 30 minutes from its start, otherwise the last one (notifications live 48 hours). */
 export async function getCounterHunt(_req: Request, res: Response) {
   const latest = await AppNotification.findOne({ type: "counter-hunt" }).sort({ createdAt: -1 }).lean();
