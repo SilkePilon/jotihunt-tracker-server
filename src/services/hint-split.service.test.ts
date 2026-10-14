@@ -36,6 +36,45 @@ describe("hintBlocks", () => {
     expect(blocks[0].text).toBe("[afbeelding: delta-puzzel.png]");
   });
 
+  test("a real Trix image attachment is labelled by its attachment filename", () => {
+    const html =
+      `<div>Oscar:<br><figure data-trix-attachment="{&quot;contentType&quot;:&quot;image/png&quot;,&quot;filename&quot;:&quot;Hint Oscar.png&quot;,&quot;filesize&quot;:12345,&quot;url&quot;:&quot;https://cdn.jotihunt.net/NELCynV1WhOy8LaNELWKMxXJmGWmO8DE99RwS90E.png&quot;,&quot;width&quot;:1042}" data-trix-content-type="image/png" class="attachment attachment--preview attachment--png">` +
+      `<img src="https://cdn.jotihunt.net/NELCynV1WhOy8LaNELWKMxXJmGWmO8DE99RwS90E.png" width="1042" height="539">` +
+      `<figcaption class="attachment__caption"><span class="attachment__name">Hint Oscar.png</span> <span class="attachment__size">12.06 KB</span></figcaption></figure></div>`;
+    const blocks = hintBlocks(html);
+    expect(blocks.map((block) => block.text)).toEqual(["Oscar:", "[afbeelding: Hint Oscar.png]"]);
+    expect(blocks[1].html).toContain("<img");
+    expect(blocks[1].html).toContain("</figure>");
+  });
+
+  test("an image figure without trix filename uses the caption name, then alt, then the src file name", () => {
+    const caption = `<figure><img src="/x/a1.png" alt="Alt"><figcaption><span class="attachment__name">Bravo.png</span></figcaption></figure>`;
+    const alt = `<figure><img src="/x/a2.png" alt="Charlie"></figure>`;
+    const src = `<figure data-trix-attachment="{broken"><img src="/x/delta.png"></figure>`;
+    expect(hintBlocks(caption + alt + src).map((block) => block.text)).toEqual(["[afbeelding: Bravo.png]", "[afbeelding: Charlie]", "[afbeelding: delta.png]"]);
+  });
+
+  test("a Trix file attachment is kept as [bestand: name]", () => {
+    const withName =
+      `<figure data-trix-attachment="{&quot;contentType&quot;:&quot;application/zip&quot;,&quot;filename&quot;:&quot;alpha.zip&quot;}" class="attachment attachment--file attachment--zip">` +
+      `<a href="https://cdn.jotihunt.net/jotihunt2025-files/x1.zip"><figcaption class="attachment__caption"><span class="attachment__name">alpha.zip</span></figcaption></a></figure>`;
+    const byHref = `<figure class="attachment attachment--file"><a href="https://cdn.jotihunt.net/jotihunt2025-files/bravo.zip"></a></figure>`;
+    const blocks = hintBlocks(withName + byHref);
+    expect(blocks.map((block) => block.text)).toEqual(["[bestand: alpha.zip]", "[bestand: bravo.zip]"]);
+    expect(blocks[0].html).toContain("<a href");
+  });
+
+  test("a link without text is kept as [bestand: name]; a link with text keeps its text", () => {
+    const blocks = hintBlocks(`<div><a href="https://cdn.jotihunt.net/files/echo.pdf"></a></div><div><a href="https://x.nl/a">klik</a></div>`);
+    expect(blocks.map((block) => block.text)).toEqual(["[bestand: echo.pdf]", "klik"]);
+  });
+
+  test("also cuts after </blockquote>, </ul>, </ol> and </pre>", () => {
+    const blocks = hintBlocks("<blockquote>a</blockquote>b<br><ul><li>c</li></ul>d<br><pre>e</pre>f<br><ol><li>g</li></ol>h");
+    expect(blocks.map((block) => block.text)).toEqual(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    expect(blocks.find((block) => block.text === "e")!.html).toBe("<pre>e</pre>");
+  });
+
   test("&nbsp; becomes a space and whitespace collapses", () => {
     expect(hintBlocks("Alpha:&nbsp;&nbsp;  12<br>")[0].text).toBe("Alpha: 12");
   });
@@ -51,6 +90,9 @@ describe("buildHintSplitPrompt", () => {
     expect(prompt).toContain('"-"');
     expect(prompt).toContain("no hint");
     expect(prompt).toContain("Hint 3");
+    expect(prompt).toContain("[afbeelding: name]");
+    expect(prompt).toContain("[bestand: name]");
+    expect(prompt).toContain('a lone "Alpha:" line');
   });
 });
 
@@ -205,6 +247,15 @@ describe("applyHintSplit", () => {
     await Article.updateOne({ id: 1 }, { $set: { contentHash: "h2" } });
     await applyHintSplit({ id: 1, content, contentHash: "h1-old" }, []);
     expect((await Article.findOne({ id: 1 }).lean())!.hintSplitHash).toBe("h1");
+  });
+
+  test("writes no cells when the stored content changed since the split was made", async () => {
+    await makeArticle("h2");
+    await cell("alpha", HintCellStatus.None);
+    const { changed } = await applyHintSplit({ id: 1, content, contentHash: "h1" }, [{ area: "alpha", none: false, blocks: [1] }]);
+    expect(changed).toEqual([]);
+    expect(await find("alpha")).toMatchObject({ status: HintCellStatus.None });
+    expect((await Article.findOne({ id: 1 }).lean())!.hintSplitHash).toBeUndefined();
   });
 
   test("invalidates the board cache when something changed", async () => {
