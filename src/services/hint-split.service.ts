@@ -1,5 +1,5 @@
 import { generateText, jsonSchema, Output, type JSONSchema7, type LanguageModel } from "ai";
-import { Article } from "../models/article.model";
+import { Article, publicArticlesFilter } from "../models/article.model";
 import { HintCell, HintCellStatus } from "../models/hint-cell.model";
 import { invalidAnswer, toGeminiError } from "./ai/gemini-error";
 import { createGeminiJob, GEMINI_JOB_MAX_PAUSE_MS, GEMINI_JOB_PAUSE_MS, type Tracked } from "./ai/gemini-job";
@@ -254,10 +254,10 @@ export interface PendingHintSplit {
   contentHash: string;
 }
 
-/** Hint articles whose current content has not been split by the AI yet, newest first */
+/** Hint articles whose current content has not been split by the AI yet, newest first; never seeded test hints */
 export async function findPendingHintSplits(limit: number): Promise<PendingHintSplit[]> {
   const articles = await Article.find(
-    { type: "hint", contentHash: { $type: "string" }, $expr: { $ne: ["$hintSplitHash", "$contentHash"] } },
+    { ...publicArticlesFilter(), type: "hint", contentHash: { $type: "string" }, $expr: { $ne: ["$hintSplitHash", "$contentHash"] } },
     { _id: 0, id: 1, title: 1, content: 1, contentHash: 1 },
   )
     .sort({ publishAt: -1 })

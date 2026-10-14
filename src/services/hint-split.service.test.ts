@@ -287,7 +287,7 @@ describe("applyHintSplit", () => {
 });
 
 describe("findPendingHintSplits", () => {
-  test("hint articles whose current content has no split yet, newest first", async () => {
+  test("hint articles whose current content has no split yet, newest first, never seeded test hints", async () => {
     const at = (hour: number) => new Date(`2026-10-17T${hour}:00:00Z`);
     await Article.create([
       { id: 1, title: "Oud", type: "hint", publishAt: at(10), content: "a", contentHash: "h1" },
@@ -296,6 +296,7 @@ describe("findPendingHintSplits", () => {
       { id: 4, title: "Gewijzigd", type: "hint", publishAt: at(11), content: "d", contentHash: "h4b", hintSplitHash: "h4" },
       { id: 5, title: "Nieuws", type: "news", publishAt: at(14), content: "e", contentHash: "h5" },
       { id: 6, title: "Zonder hash", type: "hint", publishAt: at(15), content: "f" },
+      { id: 900001, title: "Testhint (seed)", type: "hint", publishAt: at(16), content: "g", contentHash: "h900001" },
     ]);
     const pending = await findPendingHintSplits(10);
     expect(pending.map((article) => article.id)).toEqual([2, 4, 1]);
