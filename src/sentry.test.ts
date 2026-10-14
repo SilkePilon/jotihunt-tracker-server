@@ -162,3 +162,24 @@ describe("reportCronErrors", () => {
     expect(await job(21)).toBe(42);
   });
 });
+
+describe("sentryOptions beforeSend", () => {
+  type TestEvent = { request?: { url?: string }; transaction?: string; message?: string };
+  const beforeSend = (event: TestEvent) => (sentryOptions({ SENTRY_DSN: "https://k@o1.ingest.sentry.io/2" })!.beforeSend as unknown as (e: TestEvent) => TestEvent)(event);
+
+  test("redacts an absolute request URL and drops the query", () => {
+    const event = beforeSend({ request: { url: "https://x.example/herstel/abc123?q=1" } });
+    expect(event.request?.url).toBe("https://x.example/herstel/:token");
+  });
+
+  test("redacts a bare path and the transaction name", () => {
+    const event = beforeSend({ request: { url: "/invites/secret?x=1" }, transaction: "GET /herstel/abc123" });
+    expect(event.request?.url).toBe("/invites/:code");
+    expect(event.transaction).toBe("GET /herstel/:token");
+  });
+
+  test("leaves an event without a request untouched", () => {
+    const event = { message: "boom" };
+    expect(beforeSend(event)).toEqual({ message: "boom" });
+  });
+});

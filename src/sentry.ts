@@ -26,7 +26,23 @@ export function sentryOptions(env: NodeJS.ProcessEnv = process.env): BunOptions 
       stackFrameVariables: false,
     },
     beforeSendLog: (log) => (isAccessLog(log.attributes ?? {}) ? null : log),
+    // Defence in depth in case the SDK attaches request data (Bun normally has no per-request scope)
+    beforeSend: (event) => {
+      if (event.request?.url) event.request.url = redactUrl(event.request.url);
+      if (event.transaction) event.transaction = event.transaction.replace(/^([A-Z]+ )?(\/.*)$/, (_, method = "", path) => method + redactPath(path));
+      return event;
+    },
   };
+}
+
+/** A URL with its path redacted and no query string; scheme and host are kept for absolute URLs, bare paths are just redacted. */
+function redactUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${redactPath(parsed.pathname)}`;
+  } catch {
+    return redactPath(url);
+  }
 }
 
 /**

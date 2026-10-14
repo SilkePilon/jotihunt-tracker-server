@@ -8,7 +8,7 @@ export { isDatabaseUnavailable };
 /** Fallback error handler (Express 5 forwards rejected promises from async handlers here). */
 export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
   const { status = 500, message } = (err ?? {}) as { status?: number; message?: string };
-  // Before the log line: Sentry marks the error as sent, so the logger's Sentry transport skips it
+  // Before the log line: captureThrottled marks the error (also when throttled), so the logger's Sentry transport skips it
   if (shouldReportRequestError(err, status)) reportRequestError(err, req);
   // Path only, without secrets: query strings and some paths hold tokens, and the log line also goes to Sentry Logs.
   // Client errors (4xx, e.g. malformed JSON) are warnings: logger.error would make them Sentry issues.
