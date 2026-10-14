@@ -5,8 +5,6 @@ import { htmlToText } from "./html-text";
 
 export interface ArticleSummary {
   summary: string;
-  /** What it means for our team; may be empty */
-  points: string[];
 }
 
 export interface SummaryInput {
@@ -27,13 +25,11 @@ export interface ArticleSummarizer {
 export const SUMMARY_TIMEOUT_MS = 30_000;
 const MAX_TEXT_CHARS = 6000;
 const MAX_SUMMARY_CHARS = 600;
-const MAX_POINTS = 4;
-const MAX_POINT_CHARS = 200;
 
 const SUMMARY_SCHEMA = {
   type: "object",
-  properties: { summary: { type: "string" }, points: { type: "array", items: { type: "string" } } },
-  required: ["summary", "points"],
+  properties: { summary: { type: "string" } },
+  required: ["summary"],
 } satisfies JSONSchema7;
 
 /** Dutch weekday and time, e.g. "zaterdag 15:30" (the game runs over a weekend, so the day matters) */
@@ -52,7 +48,6 @@ export function buildSummaryPrompt(article: SummaryInput): string {
   return `You help the headquarters of a scouting group that plays Jotihunt, a weekend-long fox hunt game in Gelderland (the Netherlands). The organisation published this ${kind}. Summarise it for the team, in Dutch.
 
 - "summary": at most 2 short sentences with the facts that matter (what, when, deadline, points).
-- "points": 0 to ${MAX_POINTS} short points on what our team must do or change because of it. Empty when nothing follows from it.
 
 Use only what the text says. Do not invent times, places or rules.
 
@@ -61,17 +56,12 @@ Text:
 ${htmlToText(article.content).slice(0, MAX_TEXT_CHARS)}`;
 }
 
-/** The parts of the answer we can use; an answer without a summary is invalid */
+/** The part of the answer we can use; an answer without a summary is invalid */
 function cleanSummary(output: unknown): ArticleSummary {
-  const raw = (output ?? {}) as { summary?: unknown; points?: unknown };
+  const raw = (output ?? {}) as { summary?: unknown };
   const summary = typeof raw.summary === "string" ? raw.summary.trim().slice(0, MAX_SUMMARY_CHARS) : "";
   if (!summary) throw invalidAnswer();
-  const points = (Array.isArray(raw.points) ? raw.points : [])
-    .filter((point): point is string => typeof point === "string")
-    .map((point) => point.trim().slice(0, MAX_POINT_CHARS))
-    .filter((point) => point.length > 0)
-    .slice(0, MAX_POINTS);
-  return { summary, points };
+  return { summary };
 }
 
 /** Summarises one article with one Gemini call; retrying is the job's business */
@@ -118,7 +108,9 @@ export async function findPendingSummaries(limit: number): Promise<PendingArticl
 export async function storeSummary(article: { id: number; contentHash: string }, summary: ArticleSummary): Promise<void> {
   await Article.updateOne(
     { id: article.id, contentHash: article.contentHash },
-    { $set: { summary: summary.summary, summaryPoints: summary.points, summaryHash: article.contentHash } },
+    { $set: { summary: summary.summary, summaryHash: article.contentHash }, $unset: { summaryPoints: 1 } },
+    // summaryPoints is no longer in the schema; strict mode would drop the $unset
+    { strict: false },
   );
 }
 

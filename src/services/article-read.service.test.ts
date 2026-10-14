@@ -35,14 +35,14 @@ describe("article read state", () => {
     expect((await User.findById(user._id).lean())?.readArticles).toEqual([]);
   });
 
-  test("getReadState returns the user's own ids and how many users read each article", async () => {
+  test("getReadState returns the user's own ids and the names of the users who read each article", async () => {
     const [a, b] = await Promise.all([makeUser("sanne"), makeUser("daan"), makeArticle(3), makeArticle(4)]);
     await markArticleRead(a._id, 3);
     await markArticleRead(a._id, 4);
     await markArticleRead(b._id, 3);
     const state = await getReadState(b._id);
     expect(state.read).toEqual([3]);
-    expect(state.readBy).toEqual({ "3": 2, "4": 1 });
+    expect(state.readBy).toEqual({ "3": ["daan", "sanne"], "4": ["sanne"] });
   });
 
   test("a user who read nothing gets empty state", async () => {

@@ -1,7 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { Request, Response } from "express";
 import { User, type UserType } from "../models/user.model";
-import { presence } from "../services/presence.service";
 import { isDuplicateKeyError } from "../utils/mongo";
 import { saveChallenge, takeChallenge } from "./challenges";
 import { groupInfo } from "./group-info";
@@ -29,7 +28,7 @@ export async function getInvite(req: Request, res: Response) {
   if (!invite) return res.status(404).json({ valid: false, reason: "unknown" });
   const reason = await blockReason(invite.code);
   const [group, inviter, memberCount] = await Promise.all([groupInfo(), User.findById(invite.createdBy, { name: 1 }).lean(), User.countDocuments()]);
-  return res.status(200).json({ valid: reason === null, reason, group, invitedBy: inviter?.name ?? null, memberCount, onlineCount: presence.list().length });
+  return res.status(200).json({ valid: reason === null, reason, group, invitedBy: inviter?.name ?? null, memberCount });
 }
 
 export async function registerOptions(req: Request, res: Response) {

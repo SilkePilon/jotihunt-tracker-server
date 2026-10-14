@@ -13,11 +13,11 @@ export function members(_req: Request, res: Response) {
 }
 
 export function setStatus(req: Request, res: Response) {
-  return respond(res, 200, () => assignments.setAssignmentStatus(articleId(req), req.body?.status, req.user!._id, req.body?.overwrite === true));
+  return respond(res, 200, () => assignments.setAssignmentStatus(articleId(req), req.body?.status, req.user!._id));
 }
 
 export function setOwner(req: Request, res: Response) {
-  return respond(res, 200, () => assignments.setAssignmentOwner(articleId(req), req.body?.owner ?? null, req.user!._id, req.body?.overwrite === true));
+  return respond(res, 200, () => assignments.setAssignmentOwner(articleId(req), req.body?.owner ?? null, req.user!._id));
 }
 
 export function addNote(req: Request, res: Response) {

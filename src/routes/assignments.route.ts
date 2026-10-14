@@ -7,7 +7,6 @@ import { limitUserWrites } from "../middleware/rate-limit";
 import { AssignmentStatus } from "../models/assignment.model";
 
 const articleParam = param("articleId").isInt({ min: 0 });
-const overwrite = body("overwrite").optional().isBoolean();
 // The key must be there: null (nobody) or a user id. Without it a body-less request would unassign.
 const owner = body("owner")
   .exists()
@@ -24,12 +23,12 @@ router.get("/", verifyToken, assignmentsController.list);
 router.get("/members", verifyToken, assignmentsController.members);
 router.post(
   "/:articleId/status",
-  [verifyToken, assignmentWrites, validate([articleParam, body("status").isIn(Object.values(AssignmentStatus)), overwrite])],
+  [verifyToken, assignmentWrites, validate([articleParam, body("status").isIn(Object.values(AssignmentStatus))])],
   assignmentsController.setStatus,
 );
 router.post(
   "/:articleId/owner",
-  [verifyToken, assignmentWrites, validate([articleParam, owner, overwrite])],
+  [verifyToken, assignmentWrites, validate([articleParam, owner])],
   assignmentsController.setOwner,
 );
 router.post(

@@ -120,24 +120,23 @@ describe("syncArticles", () => {
   test("a changed article loses the summary of its old content", async () => {
     await syncArticles([apiArticle(20, "news", "<div>Wissel om 23:00</div>")]);
     const { contentHash } = (await Article.findOne({ id: 20 }).lean())!;
-    await Article.updateOne({ id: 20 }, { $set: { summary: "Wissel om 23:00.", summaryPoints: ["pauzeren"], summaryHash: contentHash } });
+    await Article.updateOne({ id: 20 }, { $set: { summary: "Wissel om 23:00.", summaryHash: contentHash } });
 
     await syncArticles([apiArticle(20, "news", "<div>Wissel om 22:00</div>")]);
 
     const changed = (await Article.findOne({ id: 20 }).lean())!;
     expect(changed.contentHash).not.toBe(contentHash);
     expect(changed.summary).toBeUndefined();
-    expect(changed.summaryPoints ?? []).toEqual([]);
     expect(changed.summaryHash).toBeUndefined();
   });
 
   test("an unchanged article keeps its summary", async () => {
     await syncArticles([apiArticle(21, "news", "<div>Wissel om 23:00</div>")]);
     const { contentHash } = (await Article.findOne({ id: 21 }).lean())!;
-    await Article.updateOne({ id: 21 }, { $set: { summary: "Wissel om 23:00.", summaryPoints: ["pauzeren"], summaryHash: contentHash } });
+    await Article.updateOne({ id: 21 }, { $set: { summary: "Wissel om 23:00.", summaryHash: contentHash } });
 
     await syncArticles([apiArticle(21, "news", "<div>Wissel om 23:00</div>")]);
 
-    expect(await Article.findOne({ id: 21 }).lean()).toMatchObject({ summary: "Wissel om 23:00.", summaryPoints: ["pauzeren"], summaryHash: contentHash });
+    expect(await Article.findOne({ id: 21 }).lean()).toMatchObject({ summary: "Wissel om 23:00.", summaryHash: contentHash });
   });
 });

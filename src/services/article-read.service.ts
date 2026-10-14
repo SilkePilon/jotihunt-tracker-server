@@ -12,11 +12,13 @@ export async function markArticleRead(userId: Id, articleId: number): Promise<vo
   await User.updateOne({ _id: userId }, { $addToSet: { readArticles: articleId } });
 }
 
-/** The articles this user read, and per article how many users read it */
-export async function getReadState(userId: Id): Promise<{ read: number[]; readBy: Record<string, number> }> {
-  const [user, counts] = await Promise.all([
+/** The articles this user read, and per article the names of the users who read it (sorted) */
+export async function getReadState(userId: Id): Promise<{ read: number[]; readBy: Record<string, string[]> }> {
+  const [user, readers] = await Promise.all([
     User.findById(userId, { readArticles: 1 }).lean(),
-    User.aggregate<{ _id: number; count: number }>([{ $unwind: "$readArticles" }, { $group: { _id: "$readArticles", count: { $sum: 1 } } }]),
+    User.find({ "readArticles.0": { $exists: true } }, { name: 1, readArticles: 1 }).sort({ name: 1 }).lean(),
   ]);
-  return { read: user?.readArticles ?? [], readBy: Object.fromEntries(counts.map((entry) => [String(entry._id), entry.count])) };
+  const readBy: Record<string, string[]> = {};
+  for (const reader of readers) for (const articleId of reader.readArticles ?? []) (readBy[String(articleId)] ??= []).push(reader.name);
+  return { read: user?.readArticles ?? [], readBy };
 }

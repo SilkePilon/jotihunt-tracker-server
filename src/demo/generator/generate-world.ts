@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import mongoose from "mongoose";
 import { Area } from "../../models/area.model";
-import { HintCell, HintCellStatus, HintCheck } from "../../models/hint-cell.model";
+import { HintCell, HintCellStatus } from "../../models/hint-cell.model";
 import { Hunt } from "../../models/hunt.model";
 import { HuntReport } from "../../models/hunt-report.model";
 import { Marker, MarkerType } from "../../models/marker.model";
@@ -86,7 +86,7 @@ async function createDemoUsers() {
 }
 
 /** Apply the planned states to the hint cells; solved cells get the fox position as RD answer and a hint marker there. */
-async function applyCellPlans(plans: CellPlan[], routes: Map<DemoArea, FoxRoute>, userIds: mongoose.Types.ObjectId[]) {
+async function applyCellPlans(plans: CellPlan[], routes: Map<DemoArea, FoxRoute>) {
   const areaByLower = new Map(DEMO_AREAS.map((area) => [area.toLowerCase(), area]));
   const cellKey = (articleId: number, area: string) => `${articleId}|${area}`;
   const cells = await HintCell.find({}, { articleId: 1, area: 1, slotTime: 1 }).lean();
@@ -99,24 +99,15 @@ async function applyCellPlans(plans: CellPlan[], routes: Map<DemoArea, FoxRoute>
     const cell = cellByKey.get(cellKey(plan.articleId, plan.area));
     if (!cell) continue;
     const set: Record<string, unknown> = { status: plan.status };
-    const unset: Record<string, 1> = {};
-    if (plan.claimedBy !== undefined) {
-      set.claimedBy = userIds[plan.claimedBy];
-      set.claimedAt = plan.claimedAt;
-    } else {
-      unset.claimedBy = 1;
-      unset.claimedAt = 1;
-    }
+    const unset: Record<string, 1> = { claimedBy: 1, claimedAt: 1, check: 1, checkedBy: 1, notes: 1 };
     const area = areaByLower.get(plan.area);
     if (plan.status === HintCellStatus.Solved && area) {
       const answer = formatRdAnswer(...positionAt(routes.get(area)!, cell.slotTime.getTime()));
       const rd = parseRdAnswer(answer)!;
       const location = { type: "Point" as const, coordinates: [rd.lng, rd.lat] };
       solved.push({ marker: { area: plan.area, time: cell.slotTime, type: MarkerType.Hint, location }, set });
-      Object.assign(set, { answer, answerKind: "rd", answerLocation: [rd.lng, rd.lat], markerId: null, check: plan.check ?? HintCheck.Unchecked });
-      if (plan.checkedBy !== undefined && plan.check !== HintCheck.Unchecked) set.checkedBy = userIds[plan.checkedBy];
+      Object.assign(set, { answer, answerKind: "rd", answerLocation: [rd.lng, rd.lat], markerId: null });
     }
-    if (plan.notes.length) set.notes = plan.notes.map((note) => ({ user: userIds[note.user], text: note.text, createdAt: note.at }));
     updates.push({ cellId: cell._id, set, unset });
   }
 
@@ -131,6 +122,8 @@ async function applyCellPlans(plans: CellPlan[], routes: Map<DemoArea, FoxRoute>
       updates.map(({ cellId, set, unset }) => ({
         updateOne: { filter: { _id: cellId }, update: Object.keys(unset).length ? { $set: set, $unset: unset } : { $set: set } },
       })),
+      // The legacy claim/check/notes fields are no longer in the schema; strict mode would drop their $unset
+      { strict: false },
     );
   }
 }
@@ -157,7 +150,6 @@ export async function generateDemoWorld(now: Date, options: WorldOptions): Promi
   const huntableAreas = areaPlans.filter((area) => area.status !== "red").map((area) => area.name);
 
   const users = await createDemoUsers();
-  const userIds = users.map((user) => user._id);
 
   // Fox routes
   const groupsByArea = new Map<DemoArea, LngLat[]>();
@@ -175,8 +167,8 @@ export async function generateDemoWorld(now: Date, options: WorldOptions): Promi
   if (sync.failed.length) throw new Error(`Demo articles could not be stored: ${sync.failed.join(", ")}`);
   const hints = retimed.filter((article) => article.type === "hint").map((article) => ({ articleId: article.id, title: article.title, slotTime: floorToHour(new Date(article.publish_at)) }));
   const cells = await HintCell.find({}, { articleId: 1, area: 1, status: 1 }).lean();
-  const cellPlans = planHintCells({ hints, cells, redAreas, now, userCount: users.length, rng: createRng(DEMO_SEED + 3) });
-  await applyCellPlans(cellPlans, routes, userIds);
+  const cellPlans = planHintCells({ hints, cells, redAreas, now, rng: createRng(DEMO_SEED + 3) });
+  await applyCellPlans(cellPlans, routes);
 
   // Spots
   const spotRng = createRng(DEMO_SEED + 4);

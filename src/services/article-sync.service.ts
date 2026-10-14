@@ -104,7 +104,7 @@ export async function syncArticles(apiArticles: ApiArticle[]): Promise<SyncResul
       const changed = Boolean(previous?.contentHash) && previous?.contentHash !== contentHash;
       // A summary of the old content would be shown with the new text until the next summary is made
       if (changed) {
-        await Article.updateOne({ id: apiArticle.id, summaryHash: { $ne: contentHash } }, { $unset: { summary: 1, summaryPoints: 1, summaryHash: 1 } });
+        await Article.updateOne({ id: apiArticle.id, summaryHash: { $ne: contentHash } }, { $unset: { summary: 1, summaryPoints: 1, summaryHash: 1 } }, { strict: false });
       }
 
       if (apiArticle.type !== "hint") continue;

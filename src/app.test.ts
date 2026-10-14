@@ -133,7 +133,7 @@ describe("admin user management", () => {
 
 });
 
-describe("hints page: assignments, read state and presence", () => {
+describe("intel: assignments and read state", () => {
   const makeArticle = (id: number, type: string) => Article.create({ id, title: `Artikel ${id}`, type, publishAt: new Date("2026-10-17T12:00:00Z"), content: "<div>tekst</div>" });
 
   test("without a token every route answers 401", async () => {
@@ -141,9 +141,10 @@ describe("hints page: assignments, read state and presence", () => {
       ["/assignments", {}],
       ["/assignments/members", {}],
       ["/articles/read", {}],
-      ["/presence", { method: "POST", json: { itemId: 5 } }],
     ];
     for (const [path, init] of calls) expect([path, (await request(path, init)).status]).toEqual([path, 401]);
+    // The old hints page's presence heartbeat is gone
+    expect((await request("/presence", { method: "POST", token: tokenFor(await createUser()), json: { itemId: 5 } })).status).toBe(404);
   });
 
   test("an assignment write without a body, and an owner write without owner, are a 400", async () => {
@@ -170,50 +171,41 @@ describe("hints page: assignments, read state and presence", () => {
     expect(((await taken.json()) as { owner?: unknown }).owner ?? null).toBeNull();
   });
 
-  test("a status someone else set is a 409 with the conflict; overwrite: true goes through", async () => {
+  test("anyone may change a status someone else set; the last write wins and records who", async () => {
     const [a, b] = [await createUser({ name: "Sanne" }), await createUser({ name: "Daan" })];
     await makeArticle(7, "assignment");
     expect((await request("/assignments/7/status", { method: "POST", token: tokenFor(a), json: { status: "busy" } })).status).toBe(200);
-
-    const refused = await request("/assignments/7/status", { method: "POST", token: tokenFor(b), json: { status: "skipped" } });
-    expect(refused.status).toBe(409);
-    const body = (await refused.json()) as { message: string; conflict: { kind: string; value: string; by: { name: string } } };
-    expect(body.conflict).toMatchObject({ kind: "status", value: "busy", by: { _id: String(a._id), name: "Sanne" } });
-    expect(typeof body.message).toBe("string");
-
-    const forced = await request("/assignments/7/status", { method: "POST", token: tokenFor(b), json: { status: "skipped", overwrite: true } });
-    expect(forced.status).toBe(200);
-    expect((await forced.json()) as { status: string; statusBy: { name: string } }).toMatchObject({ status: "skipped", statusBy: { name: "Daan" } });
+    const changed = await request("/assignments/7/status", { method: "POST", token: tokenFor(b), json: { status: "skipped" } });
+    expect(changed.status).toBe(200);
+    expect((await changed.json()) as { status: string; statusBy: { name: string } }).toMatchObject({ status: "skipped", statusBy: { name: "Daan" } });
   });
 
-  test("presence: a heartbeat lists the caller, an array as itemId is a 400, leaving is a 204", async () => {
-    const user = await createUser({ name: "Sanne" });
-    const token = tokenFor(user);
-    expect((await request("/presence", { method: "POST", token, json: { itemId: [1, 2] } })).status).toBe(400);
-    expect((await request("/presence", { method: "POST", token, json: { itemId: [5] } })).status).toBe(400);
-    expect((await request("/presence", { method: "POST", token })).status).toBe(400);
-    expect((await request("/presence", { method: "POST", token, json: { itemId: 5, area: "zulu" } })).status).toBe(400);
-
-    const beat = await request("/presence", { method: "POST", token, json: { itemId: 5, area: "CHARLIE" } });
-    expect(beat.status).toBe(200);
-    const list = (await beat.json()) as { userId: string; name: string; itemId: number; area?: string }[];
-    expect(list.find((entry) => entry.userId === String(user._id))).toMatchObject({ name: "Sanne", itemId: 5, area: "charlie" });
-
-    expect((await request("/presence", { method: "DELETE", token })).status).toBe(204);
-    const after = (await (await request("/presence", { method: "POST", token: tokenFor(await createUser()), json: { itemId: "6" } })).json()) as { userId: string; itemId: number }[];
-    expect(after.some((entry) => entry.userId === String(user._id))).toBe(false);
-    expect(after.every((entry) => typeof entry.itemId === "number")).toBe(true);
+  test("anyone may take over an owned assignment", async () => {
+    const [a, b] = [await createUser({ name: "Sanne" }), await createUser({ name: "Daan" })];
+    await makeArticle(7, "assignment");
+    await request("/assignments/7/owner", { method: "POST", token: tokenFor(a), json: { owner: String(a._id) } });
+    const taken = await request("/assignments/7/owner", { method: "POST", token: tokenFor(b), json: { owner: String(b._id) } });
+    expect(taken.status).toBe(200);
+    expect(((await taken.json()) as { owner: { name: string } }).owner.name).toBe("Daan");
   });
 
   test("marking an article read shows in the read state; a seeded test article is a 404", async () => {
-    const user = await createUser();
+    const user = await createUser({ name: "Sanne" });
     const token = tokenFor(user);
     await Promise.all([makeArticle(3, "news"), makeArticle(900001, "news")]);
     expect((await request("/articles/3/read", { method: "POST", token })).status).toBe(204);
     expect((await request("/articles/900001/read", { method: "POST", token })).status).toBe(404);
     const res = await request("/articles/read", { token });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ read: [3], readBy: { "3": 1 } });
+    expect(await res.json()).toEqual({ read: [3], readBy: { "3": ["Sanne"] } });
+  });
+
+  test("read state lists the readers of an article by name, sorted", async () => {
+    const [sanne, daan] = [await createUser({ name: "Sanne" }), await createUser({ name: "Daan" })];
+    await makeArticle(3, "news");
+    for (const user of [sanne, daan]) expect((await request("/articles/3/read", { method: "POST", token: tokenFor(user) })).status).toBe(204);
+    const state = (await (await request("/articles/read", { token: tokenFor(sanne) })).json()) as { read: number[]; readBy: Record<string, string[]> };
+    expect(state).toEqual({ read: [3], readBy: { "3": ["Daan", "Sanne"] } });
   });
 
   test("an admin's user answers never carry the read articles", async () => {

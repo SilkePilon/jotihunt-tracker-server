@@ -36,19 +36,3 @@ export const DEMO_HUNTERS: readonly DemoHunter[] = [
 
 /** First Traccar device id of the simulated trackers (far above real Traccar ids). */
 export const DEMO_DEVICE_ID_BASE = 900_001;
-
-/** Short puzzle notes hunters leave on hint cells. */
-export const HINT_NOTES = [
-  "Lijkt op een rebus, eerste woord is 'toren'?",
-  "Coördinaten staan in spiegelschrift",
-  "Getallen in Romeinse cijfers, al omgerekend",
-  "Het plaatje is een stuk kaart van de Veluwe",
-  "Morse in de rand van het plaatje",
-  "Ik denk dat het een kerk in het dorp is",
-  "Letters tellen per regel geeft de X",
-  "Anagram van een straatnaam?",
-  "Kaart gedraaid, noorden staat onder",
-  "Check even de laatste twee cijfers, twijfel tussen 3 en 8",
-  "Tekst achterstevoren lezen",
-  "Zelfde puzzel als vorig uur, andere getallen",
-];
