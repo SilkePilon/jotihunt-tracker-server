@@ -105,7 +105,8 @@ export function articleImages(html: string): ArticleImage[] {
     if (!parts.isImage) continue;
     const src = parts.img && attribute(parts.img, "src");
     const alt = parts.img && decodeAttribute(attribute(parts.img, "alt") ?? "");
-    add(parts.attachment.url ?? parts.attachment.href ?? src, parts.attachment.filename, parts.caption && decodeAttribute(parts.caption), alt);
+    const url = [parts.attachment.url, parts.attachment.href, src].find((candidate) => isHttpUrl(candidate && decodeAttribute(candidate).trim()));
+    add(url, parts.attachment.filename, parts.caption && decodeAttribute(parts.caption), alt);
   }
   return images;
 }
@@ -136,7 +137,10 @@ export interface FetchImagesOptions {
   maxImages?: number;
   maxBytesEach?: number;
   maxBytesTotal?: number;
+  /** Per image */
   timeoutMs?: number;
+  /** For the whole call: what is not in by then is left out */
+  totalTimeoutMs?: number;
   /** Downloads at the same time */
   parallel?: number;
 }
@@ -198,11 +202,10 @@ export function isAllowedImageUrl(url: string): boolean {
 const discard = (response: Response) => response.body?.cancel().catch(() => {});
 
 /** One image, or null when it fails, times out, is too large, is not an image type we send or leaves the Jotihunt hosts */
-async function fetchOne(image: ArticleImage, fetchFn: NonNullable<FetchImagesOptions["fetch"]>, maxBytes: number, timeoutMs: number): Promise<FetchedImage | null> {
+async function fetchOne(image: ArticleImage, fetchFn: NonNullable<FetchImagesOptions["fetch"]>, maxBytes: number, signal: AbortSignal): Promise<FetchedImage | null> {
   let url = image.url;
   if (!isAllowedImageUrl(url)) return null;
   try {
-    const signal = AbortSignal.timeout(timeoutMs);
     let response = await fetchFn(url, { signal, redirect: "manual" });
     // Follow redirects by hand, so every hop is checked before it is requested
     for (let hop = 0; response.status >= 300 && response.status < 400; hop++) {
@@ -232,19 +235,29 @@ async function fetchOne(image: ArticleImage, fetchFn: NonNullable<FetchImagesOpt
 
 /**
  * Download the images in order (a few at a time) for a Gemini call, only over https from Jotihunt hosts (also after
- * a redirect). Keeps only png/jpeg/webp/gif/heic/heif, skips
+ * a redirect), trying at most the first `maxImages * 2` of them and stopping at `totalTimeoutMs`. Keeps only
+ * png/jpeg/webp/gif/heic/heif, skips
  * an image that fails, times out or is over `maxBytesEach`, and stops at `maxImages` images or when the next one no
  * longer fits in `maxBytesTotal`. Never throws.
  */
 export async function fetchImages(
   images: ArticleImage[],
-  { fetch: fetchFn = fetch, maxImages = 20, maxBytesEach = 5 * 1024 * 1024, maxBytesTotal = 18 * 1024 * 1024, timeoutMs = 10_000, parallel = 4 }: FetchImagesOptions = {},
+  {
+    fetch: fetchFn = fetch,
+    maxImages = 20,
+    maxBytesEach = 5 * 1024 * 1024,
+    maxBytesTotal = 14 * 1024 * 1024,
+    timeoutMs = 10_000,
+    totalTimeoutMs = 40_000,
+    parallel = 4,
+  }: FetchImagesOptions = {},
 ): Promise<FetchedImage[]> {
   const kept: FetchedImage[] = [];
   let total = 0;
-  const candidates = images.filter((image) => isAllowedImageUrl(image.url));
-  for (let start = 0; start < candidates.length; start += parallel) {
-    const batch = await Promise.all(candidates.slice(start, start + parallel).map((image) => fetchOne(image, fetchFn, maxBytesEach, timeoutMs)));
+  const deadline = AbortSignal.timeout(totalTimeoutMs);
+  const candidates = images.filter((image) => isAllowedImageUrl(image.url)).slice(0, maxImages * 2);
+  for (let start = 0; start < candidates.length && !deadline.aborted; start += parallel) {
+    const batch = await Promise.all(candidates.slice(start, start + parallel).map((image) => fetchOne(image, fetchFn, maxBytesEach, AbortSignal.any([AbortSignal.timeout(timeoutMs), deadline]))));
     for (const image of batch) {
       if (!image) continue;
       if (total + image.data.byteLength > maxBytesTotal) return kept;

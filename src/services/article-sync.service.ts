@@ -1,9 +1,8 @@
 import { createHash } from "node:crypto";
-import { Article } from "../models/article.model";
+import { Article, summaryKey } from "../models/article.model";
 import { Area } from "../models/area.model";
 import { HintCell, HintCellStatus } from "../models/hint-cell.model";
 import { ApiArticle } from "../types/api";
-import { summaryKey } from "./article-summary.service";
 import { DEFAULT_AREAS, parseHintArticle } from "./hint-parser";
 import { isDuplicateKeyError } from "../utils/mongo";
 

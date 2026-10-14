@@ -1,10 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { Article } from "../models/article.model";
+import { Article, summaryKey } from "../models/article.model";
 import { Area } from "../models/area.model";
 import { HintCell, HintCellStatus } from "../models/hint-cell.model";
 import { ApiArticle } from "../types/api";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
-import { summaryKey } from "./article-summary.service";
 import { floorToHour, syncArticles } from "./article-sync.service";
 
 function apiArticle(id: number, type: string, content: string, publishAt = "2026-10-17T12:05:00.000000Z"): ApiArticle {

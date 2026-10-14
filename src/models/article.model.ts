@@ -64,3 +64,9 @@ export const Article = mongoose.model("Article", ArticleSchema);
 export function publicArticlesFilter() {
   return { id: { $lt: 900000 } };
 }
+
+/** Version of the summaries: v2 summaries were made with the article's images (older ones are made again once) */
+export const SUMMARY_VERSION = "v2";
+
+/** The summaryHash of a summary of this content made by the current version */
+export const summaryKey = (contentHash: string) => `${contentHash}:${SUMMARY_VERSION}`;

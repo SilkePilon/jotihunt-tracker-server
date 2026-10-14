@@ -1,6 +1,6 @@
 import { generateText, jsonSchema, Output, type JSONSchema7, type LanguageModel } from "ai";
-import { Article, publicArticlesFilter } from "../models/article.model";
-import { invalidAnswer, toGeminiError } from "./ai/gemini-error";
+import { Article, publicArticlesFilter, SUMMARY_VERSION, summaryKey } from "../models/article.model";
+import { GeminiError, invalidAnswer, toGeminiError } from "./ai/gemini-error";
 import { createGeminiJob, GEMINI_JOB_MAX_PAUSE_MS, GEMINI_JOB_PAUSE_MS, type Tracked } from "./ai/gemini-job";
 import { articleAttachments, articleImages, fetchImages as downloadImages, type ArticleImage, type FetchedImage } from "./article-media";
 import { htmlToText } from "./html-text";
@@ -97,7 +97,8 @@ async function attachedImages(content: string, fetchImages: (images: ArticleImag
 
 /**
  * Summarises one article with one Gemini call, its images attached (downloaded first, with their own limits; the
- * timeout covers the Gemini call only); retrying is the job's business
+ * timeout covers the Gemini call only). When Gemini refuses a call with images (not an outage) it is asked once more
+ * with the text only; any other retrying is the job's business.
  */
 export function createArticleSummarizer({
   model,
@@ -110,30 +111,38 @@ export function createArticleSummarizer({
 }): ArticleSummarizer {
   return {
     async summarize(article) {
+      const ask = async (images: FetchedImage[]) => {
+        try {
+          const result = await generateText({
+            model,
+            messages: [
+              {
+                role: "user",
+                content: [
+                  { type: "text", text: buildSummaryPrompt(article, images.map((image) => image.name)) },
+                  ...images.map((image) => ({ type: "file" as const, data: image.data, mediaType: image.mediaType, filename: image.name })),
+                ],
+              },
+            ],
+            output: Output.object({ schema: jsonSchema(SUMMARY_SCHEMA) }),
+            temperature: 0.2,
+            maxRetries: 0,
+            timeout: timeoutMs,
+          });
+          return cleanSummary(result.output);
+        } catch (error) {
+          throw toGeminiError(error);
+        }
+      };
       const images = await attachedImages(article.content, fetchImages);
-      let output: unknown;
       try {
-        const result = await generateText({
-          model,
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: buildSummaryPrompt(article, images.map((image) => image.name)) },
-                ...images.map((image) => ({ type: "file" as const, data: image.data, mediaType: image.mediaType, filename: image.name })),
-              ],
-            },
-          ],
-          output: Output.object({ schema: jsonSchema(SUMMARY_SCHEMA) }),
-          temperature: 0.2,
-          maxRetries: 0,
-          timeout: timeoutMs,
-        });
-        output = result.output;
+        return await ask(images);
       } catch (error) {
-        throw toGeminiError(error);
+        // Gemini refused the request or the answer (a bad image, too large): once more with the text only. An outage
+        // (timeout, 429, 5xx, network) is the job's business.
+        if (images.length === 0 || !(error instanceof GeminiError) || error.retryable) throw error;
+        return ask([]);
       }
-      return cleanSummary(output);
     },
   };
 }
@@ -142,12 +151,6 @@ export interface PendingArticle extends SummaryInput {
   id: number;
   contentHash: string;
 }
-
-/** Version of the summaries: v2 summaries were made with the article's images (v1 ones are made again once) */
-const SUMMARY_VERSION = "v2";
-
-/** The summaryHash of a summary of this content made by the current version */
-export const summaryKey = (contentHash: string) => `${contentHash}:${SUMMARY_VERSION}`;
 
 /** News and assignments whose current content has no summary (of the current version) yet, newest first */
 export async function findPendingSummaries(limit: number): Promise<PendingArticle[]> {

@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { APICallError } from "ai";
-import { Article } from "../models/article.model";
+import { Article, summaryKey } from "../models/article.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
+import { MockLanguageModelV4 } from "ai/test";
 import { mockModel } from "../test/ai";
 import { GeminiError } from "./ai/gemini-error";
 import { fetchImages, type ArticleImage, type FetchedImage } from "./article-media";
@@ -11,7 +12,6 @@ import {
   createSummaryJob,
   findPendingSummaries,
   storeSummary,
-  summaryKey,
   SUMMARY_MAX_PAUSE_MS,
   SUMMARY_PAUSE_MS,
   SUMMARY_TIMEOUT_MS,
@@ -105,6 +105,11 @@ describe("createArticleSummarizer", () => {
   });
 });
 
+const usage = {
+  inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+  outputTokens: { total: 1, text: 1, reasoning: undefined },
+};
+
 describe("createArticleSummarizer with images", () => {
   const html =
     `<div>Zie de afbeeldingen.<img src="https://cdn.jotihunt.net/a.png" alt="Kaart"></div>` +
@@ -174,6 +179,61 @@ describe("createArticleSummarizer with images", () => {
     expect(textOf(call)).not.toContain("Bijgevoegde afbeeldingen");
     expect(textOf(call)).toContain("Bijlagen: alpha.zip");
     expect(textOf(call)).toContain("Niet bijgevoegde afbeeldingen: Kaart, Route.png");
+  });
+
+  const twoImages = async (): Promise<FetchedImage[]> => [
+    { data: new Uint8Array([1]), mediaType: "image/png", name: "Kaart" },
+    { data: new Uint8Array([2]), mediaType: "image/png", name: "Route.png" },
+  ];
+  const partTypes = (call: { prompt: { content: unknown }[] }) => (call.prompt[0].content as { type: string }[]).map((part) => part.type);
+
+  test("when Gemini refuses the call with images (not an outage), it is asked once more with the text only", async () => {
+    const model = new MockLanguageModelV4({
+      doGenerate: async (options) => {
+        if ((options.prompt[0].content as { type: string }[]).some((part) => part.type === "file")) {
+          throw new APICallError({ message: "bad image", url: "u", requestBodyValues: {}, statusCode: 400, isRetryable: false });
+        }
+        return { content: [{ type: "text", text: JSON.stringify({ summary: "alleen tekst" }) }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] };
+      },
+    });
+    expect(await createArticleSummarizer({ model, fetchImages: twoImages }).summarize(input)).toEqual({ summary: "alleen tekst" });
+    expect(model.doGenerateCalls).toHaveLength(2);
+    expect(partTypes(model.doGenerateCalls[0])).toEqual(["text", "file", "file"]);
+    expect(partTypes(model.doGenerateCalls[1])).toEqual(["text"]);
+    const text = textOf(model.doGenerateCalls[1]);
+    expect(text).not.toContain("Bijgevoegde afbeeldingen");
+    expect(text).toContain("Niet bijgevoegde afbeeldingen: Kaart, Route.png");
+  });
+
+  test("an invalid answer with images is also asked once more without them; a second failure is thrown", async () => {
+    const model = mockModel(() => "geen json");
+    const error = (await createArticleSummarizer({ model, fetchImages: twoImages })
+      .summarize(input)
+      .catch((caught: unknown) => caught)) as GeminiError;
+    expect(error).toBeInstanceOf(GeminiError);
+    expect(error.retryable).toBe(false);
+    expect(model.doGenerateCalls.map(partTypes)).toEqual([["text", "file", "file"], ["text"]]);
+  });
+
+  test("an outage with images is not retried here (the job pauses)", async () => {
+    const model = mockModel(() => {
+      throw new APICallError({ message: "x", url: "u", requestBodyValues: {}, statusCode: 503, isRetryable: true });
+    });
+    const error = (await createArticleSummarizer({ model, fetchImages: twoImages })
+      .summarize(input)
+      .catch((caught: unknown) => caught)) as GeminiError;
+    expect(error.retryable).toBe(true);
+    expect(model.doGenerateCalls).toHaveLength(1);
+  });
+
+  test("a refused call without images is not retried", async () => {
+    const model = mockModel(() => {
+      throw new APICallError({ message: "x", url: "u", requestBodyValues: {}, statusCode: 400, isRetryable: false });
+    });
+    await createArticleSummarizer({ model, fetchImages: async () => [] })
+      .summarize(input)
+      .catch(() => {});
+    expect(model.doGenerateCalls).toHaveLength(1);
   });
 
   test("images that are not attached (e.g. not on a Jotihunt host) are only named", async () => {

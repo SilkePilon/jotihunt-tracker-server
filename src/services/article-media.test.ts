@@ -28,6 +28,13 @@ describe("articleImages", () => {
     expect(articleImages(html)).toEqual([{ url: "https://x.nl/plaat.jpg", name: "plaat.jpg" }]);
   });
 
+  test("a Trix figure uses the first candidate URL that is http(s): url, href, then the inner img", () => {
+    const html =
+      `<figure data-trix-attachment="{&quot;contentType&quot;:&quot;image/png&quot;,&quot;filename&quot;:&quot;Kaart.png&quot;,&quot;url&quot;:&quot;/rails/blob/1&quot;,&quot;href&quot;:&quot;blob:x&quot;}">` +
+      `<img src="https://cdn.jotihunt.net/k.png"></figure>`;
+    expect(articleImages(html)).toEqual([{ url: "https://cdn.jotihunt.net/k.png", name: "Kaart.png" }]);
+  });
+
   test("deduplicates by URL, skips relative, data and other non-http(s) URLs, and file attachments", () => {
     const html =
       `<img src="https://x.nl/a.png"><img src="https://x.nl/a.png" alt="nog eens">` +
@@ -84,6 +91,42 @@ describe("fetchImages", () => {
       },
     });
     expect(result.map((image) => image.name)).toEqual(["2.png"]);
+  });
+
+  test("the total budget defaults to 14 MB (5 MB each)", async () => {
+    const result = await fetchImages(images(4), { fetch: async () => png(5 * 1024 * 1024) });
+    expect(result).toHaveLength(2);
+    expect(await fetchImages(images(1), { fetch: async () => png(5 * 1024 * 1024 + 1) })).toEqual([]);
+  });
+
+  test("tries at most the first maxImages * 2 allowed images", async () => {
+    let calls = 0;
+    const result = await fetchImages(images(50), {
+      maxImages: 5,
+      fetch: async () => {
+        calls++;
+        return new Response("weg", { status: 404 });
+      },
+    });
+    expect(result).toEqual([]);
+    expect(calls).toBe(10);
+  });
+
+  test("an overall deadline ends the whole download; what is in by then is kept", async () => {
+    let calls = 0;
+    const started = Date.now();
+    const result = await fetchImages(images(12), {
+      parallel: 2,
+      totalTimeoutMs: 80,
+      fetch: (url, init) => {
+        calls++;
+        if (url.endsWith("/0.png") || url.endsWith("/1.png")) return Promise.resolve(png(1));
+        return new Promise<Response>((_, reject) => init.signal?.addEventListener("abort", () => reject(new DOMException("timeout", "TimeoutError"))));
+      },
+    });
+    expect(result.map((image) => image.name)).toEqual(["0.png", "1.png"]);
+    expect(calls).toBe(4);
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 
   test("stops adding once the total budget is reached", async () => {
