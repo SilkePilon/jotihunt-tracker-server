@@ -53,12 +53,12 @@ app.use((req, _res, next) => {
   req.body ??= {};
   next();
 });
-// Never write credentials (user JWTs, cookies) from request headers to the logs. Successful reads are not logged:
+// Never write credentials (user JWTs, cookies, QR poll secrets) from request headers to the logs. Successful reads are not logged:
 // every hunter polls a dozen endpoints every few seconds, which filled gigabytes of logs per event.
 app.use(
   expressWinston.logger({
     winstonInstance: logger,
-    headerBlacklist: ["authorization", "cookie"],
+    headerBlacklist: ["authorization", "cookie", "x-qr-secret"],
     // 4xx as warn, 5xx as error (so failing requests also land in error.log)
     statusLevels: true,
     skip: (req: Request, res: Response) => isQuietRequest(req.method, res.statusCode),

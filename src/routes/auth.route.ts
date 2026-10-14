@@ -2,8 +2,9 @@ import express from "express";
 import * as authController from "../controllers/auth.controller";
 import * as pairingController from "../controllers/pairing.controller";
 import * as loginController from "../auth/login.controller";
+import * as qrController from "../auth/qr.controller";
 import { body } from "express-validator";
-import verifyToken from "../middleware/auth.middleware";
+import verifyToken, { requireWebSession } from "../middleware/auth.middleware";
 import { validate } from "../middleware/validate.middleware";
 import { limitFailures, limitRate } from "../middleware/rate-limit";
 
@@ -35,6 +36,17 @@ const passkeyLimiter = limitFailures({
   key: (req) => String(req.ip),
 });
 const optionsLimiter = limitRate({ windowMs: 15 * 60 * 1000, max: 200, key: (req) => String(req.ip) });
+// A login page makes a code every 2 minutes for 10 minutes; polling is every 1.5 s (600 per 15 minutes)
+const qrStartLimiter = limitRate({ windowMs: 15 * 60 * 1000, max: 60, key: (req) => String(req.ip) });
+const qrPollLimiter = limitRate({ windowMs: 15 * 60 * 1000, max: 1500, key: (req) => String(req.ip) });
+// Guessing codes from a logged-in phone: 30 unknown codes per address per 15 minutes
+const qrScanLimiter = limitFailures({
+  windowMs: 15 * 60 * 1000,
+  maxFailures: 30,
+  failureStatus: 404,
+  resetOnSuccess: false,
+  key: (req) => String(req.ip),
+});
 
 const router = express.Router();
 
@@ -48,6 +60,17 @@ router.post(
 );
 router.get("/me", verifyToken, loginController.me);
 router.post("/logout", verifyToken, loginController.logout);
+
+// QR login: the laptop shows a code and polls, a logged-in phone scans it and confirms with its passkey
+router.post("/qr", qrStartLimiter, qrController.start);
+router.get("/qr/:id", qrPollLimiter, qrController.poll);
+router.post("/qr/scan/:code", [verifyToken, requireWebSession, qrScanLimiter], qrController.scan);
+router.post(
+  "/qr/scan/:code/approve",
+  [verifyToken, requireWebSession, passkeyLimiter, validate([body("response").isObject().withMessage("response ontbreekt.")])],
+  qrController.approve,
+);
+router.post("/qr/scan/:code/deny", [verifyToken, requireWebSession], qrController.deny);
 
 router.post("/tutorial", [verifyToken, validate(tutorialValidator)], authController.updateTutorial);
 
