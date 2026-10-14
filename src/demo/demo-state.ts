@@ -43,6 +43,27 @@ const PredictionSettingSchema = new mongoose.Schema<PredictionSettingDoc>(
 
 const PREDICTION_KEY = "prediction";
 
+/** Fox teams we may hunt besides our own (rule 5.1); one document (key "huntable-areas") in the same `settings` collection. */
+export interface HuntableAreasSettingDoc {
+  key: string;
+  /** Lowercase area names, sorted, without duplicates */
+  areas: string[];
+  updatedAt?: Date | null;
+  updatedBy?: string | null;
+}
+
+const HuntableAreasSettingSchema = new mongoose.Schema<HuntableAreasSettingDoc>(
+  {
+    key: { type: String, required: true, unique: true },
+    areas: { type: [String], required: true, default: [] },
+    updatedAt: { type: Date, default: null },
+    updatedBy: { type: String, default: null },
+  },
+  { collection: "settings", versionKey: false },
+);
+
+const HUNTABLE_AREAS_KEY = "huntable-areas";
+
 /**
  * Store for the DemoState document on a dedicated connection to the real database, so it stays reachable whichever
  * database the default Mongoose connection currently points to. Not registered in `mongoose.models`.
@@ -53,6 +74,8 @@ export interface DemoStateStore {
   write(state: Omit<DemoStateDoc, "key">): Promise<void>;
   readPrediction(): Promise<PredictionSettingDoc | null>;
   writePrediction(setting: Omit<PredictionSettingDoc, "key">): Promise<void>;
+  readHuntableAreas(): Promise<HuntableAreasSettingDoc | null>;
+  writeHuntableAreas(setting: Omit<HuntableAreasSettingDoc, "key">): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -60,6 +83,7 @@ export async function openDemoStateStore(realUri: string, options: mongoose.Conn
   const connection = await mongoose.createConnection(realUri, options).asPromise();
   const DemoState: Model<DemoStateDoc> = connection.model<DemoStateDoc>("DemoState", DemoStateSchema);
   const PredictionSetting: Model<PredictionSettingDoc> = connection.model<PredictionSettingDoc>("PredictionSetting", PredictionSettingSchema);
+  const HuntableAreasSetting: Model<HuntableAreasSettingDoc> = connection.model<HuntableAreasSettingDoc>("HuntableAreasSetting", HuntableAreasSettingSchema);
   return {
     connection,
     async read() {
@@ -73,6 +97,12 @@ export async function openDemoStateStore(realUri: string, options: mongoose.Conn
     },
     async writePrediction(setting) {
       await PredictionSetting.updateOne({ key: PREDICTION_KEY }, { $set: { ...setting, key: PREDICTION_KEY } }, { upsert: true });
+    },
+    async readHuntableAreas() {
+      return HuntableAreasSetting.findOne({ key: HUNTABLE_AREAS_KEY }).lean<HuntableAreasSettingDoc>();
+    },
+    async writeHuntableAreas(setting) {
+      await HuntableAreasSetting.updateOne({ key: HUNTABLE_AREAS_KEY }, { $set: { ...setting, key: HUNTABLE_AREAS_KEY } }, { upsert: true });
     },
     async close() {
       await connection.close();
