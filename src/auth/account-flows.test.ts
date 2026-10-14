@@ -101,10 +101,11 @@ describe("passkeys", () => {
   test("two removals at the same time never remove the last passkey", async () => {
     const jesse = await userWithTwoKeys();
     const token = tokenFor(jesse);
-    await Promise.all([
+    const responses = await Promise.all([
       request("/account/passkeys/cred-1", { method: "DELETE", token }),
       request("/account/passkeys/cred-2", { method: "DELETE", token }),
     ]);
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
     expect((await User.findById(jesse._id))!.passkeys).toHaveLength(1);
   });
 

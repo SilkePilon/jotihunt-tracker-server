@@ -90,6 +90,7 @@ export async function removeSession(req: Request, res: Response) {
 
 /** Log out every other browser of this user; this one stays logged in. */
 export async function removeOtherSessions(req: Request, res: Response) {
-  const result = await sessions().deleteMany({ user: req.user!._id, _id: { $ne: res.locals.sessionId } });
+  // Expired sessions are left to MongoDB's TTL index; counting them would report browsers that were already logged out
+  const result = await sessions().deleteMany({ user: req.user!._id, _id: { $ne: res.locals.sessionId }, expiresAt: { $gt: new Date() } });
   return res.status(200).json({ removed: result.deletedCount });
 }

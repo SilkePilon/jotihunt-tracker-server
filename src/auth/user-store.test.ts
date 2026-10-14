@@ -78,6 +78,17 @@ describe("updateAccounts", () => {
     expect((await User.findById(user._id))?.name).toBe("Jes");
     expect((await real.collection("users").findOne({ _id: user._id }))?.name).toBe("Jes");
   });
+
+  test("in demo mode leaves the real database alone when the current one matched nothing", async () => {
+    setAuthConnection(real);
+    setDemoModeFlag(true);
+    const user = await createAccount({ name: "Jesse" });
+    // Only the real database still has the old name, so only it would match
+    await User.updateOne({ _id: user._id }, { $set: { name: "Demo" } });
+    expect(await updateAccounts({ _id: user._id, name: "Jesse" }, { $set: { name: "Jes" } })).toBe(false);
+    expect((await real.collection("users").findOne({ _id: user._id }))?.name).toBe("Jesse");
+    expect(await updateAccounts({ _id: user._id }, { $set: { name: "Jes" } })).toBe(true);
+  });
 });
 
 describe("publicUser", () => {

@@ -38,6 +38,15 @@ export async function createAccount(fields: { name: string; admin?: boolean; inv
   return (await User.findById(doc._id))!;
 }
 
-export async function updateAccounts(filter: Record<string, unknown>, update: Record<string, unknown>): Promise<void> {
-  for (const model of userModels()) await model.updateOne(filter, update);
+/**
+ * Update the account in the current database, then (in demo mode) the same in the real one. When the current
+ * database matched nothing the real one is left alone, so a conditional filter (e.g. "a second passkey exists")
+ * decides once and both databases stay in step. Resolves to whether the current database matched.
+ */
+export async function updateAccounts(filter: Record<string, unknown>, update: Record<string, unknown>): Promise<boolean> {
+  const [current, ...others] = userModels();
+  const result = await current.updateOne(filter, update);
+  if (result.matchedCount === 0) return false;
+  for (const model of others) await model.updateOne(filter, update);
+  return true;
 }
