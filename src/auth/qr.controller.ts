@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { User } from "../models/user.model";
-import { approxLocation } from "./location";
+import { approxLocation, behindCloudflare } from "./location";
 import { publicUser } from "./public-user";
 import { approveQrLogin, createQrLogin, denyQrLogin, findScannedQrLogin, pollQrLogin, scanQrLogin } from "./qr-login";
 import { PASSKEY_FAILED } from "./session-response";
@@ -23,7 +23,7 @@ const stored = (passkey: UserPasskey): StoredPasskey => ({
 
 /** Laptop: a new code to show as QR. */
 export async function start(req: Request, res: Response) {
-  const qr = await createQrLogin({ label: deviceLabel(req.get("user-agent")), location: approxLocation((name) => req.get(name)) });
+  const qr = await createQrLogin({ label: deviceLabel(req.get("user-agent")), location: approxLocation((name) => req.get(name), behindCloudflare()) });
   return res.status(201).json(qr);
 }
 

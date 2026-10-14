@@ -54,7 +54,15 @@ const approve = (qr: Qr, token: string, id = "cred-1", signature = "valid") =>
 describe("QR login", () => {
   test("laptop shows a code, phone scans and approves with its passkey, laptop gets a session once", async () => {
     const jesse = await withSession(await createAccount({ name: "Jesse", passkey: passkey("cred-1") }));
-    const qr = await startQr({ "cf-ipcity": "Arnhem" });
+    const previous = process.env.CLIENT_IP_HEADER;
+    process.env.CLIENT_IP_HEADER = "cf-connecting-ip";
+    let qr: Qr;
+    try {
+      qr = await startQr({ "cf-ipcity": "Arnhem" });
+    } finally {
+      if (previous === undefined) delete process.env.CLIENT_IP_HEADER;
+      else process.env.CLIENT_IP_HEADER = previous;
+    }
     expect(qr.url).toBe(`https://jotihunt.test/l/${qr.code}`);
     expect((await json(await poll(qr))).status).toBe("waiting");
 
@@ -76,6 +84,20 @@ describe("QR login", () => {
     expect(laptopSession).toMatchObject({ label: "Firefox op Linux" });
     expect((await User.findById(jesse._id))!.passkeys[0].counter).toBe(1);
     expect((await poll(qr)).status).toBe(404);
+  });
+
+  test("without CLIENT_IP_HEADER=cf-connecting-ip the Cloudflare location headers are ignored", async () => {
+    const jesse = await withSession(await createAccount({ name: "Jesse", passkey: passkey("cred-1") }));
+    const previous = process.env.CLIENT_IP_HEADER;
+    delete process.env.CLIENT_IP_HEADER;
+    let qr: Qr;
+    try {
+      qr = await startQr({ "cf-ipcity": "Arnhem", "cf-ipcountry": "NL" });
+    } finally {
+      if (previous !== undefined) process.env.CLIENT_IP_HEADER = previous;
+    }
+    const body = await json<{ requester: unknown }>(await scan(qr, tokenFor(jesse)));
+    expect(body.requester).toEqual({ label: "Firefox op Linux", location: null });
   });
 
   test("a wrong poll secret is a 404 and never hands over the session", async () => {

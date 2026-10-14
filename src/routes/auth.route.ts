@@ -36,9 +36,12 @@ const passkeyLimiter = limitFailures({
   key: (req) => String(req.ip),
 });
 const optionsLimiter = limitRate({ windowMs: 15 * 60 * 1000, max: 200, key: (req) => String(req.ip) });
-// A login page makes a code every 2 minutes for 10 minutes; polling is every 1.5 s (600 per 15 minutes)
+// Starting codes: 60 per address per 15 minutes (one login page makes a new code every 2 minutes, so this
+// leaves room for several laptops behind one NAT)
 const qrStartLimiter = limitRate({ windowMs: 15 * 60 * 1000, max: 60, key: (req) => String(req.ip) });
-const qrPollLimiter = limitRate({ windowMs: 15 * 60 * 1000, max: 1500, key: (req) => String(req.ip) });
+// Polling is every 1.5 s (600 per 15 minutes per open login page); 6000 allows ten HQ laptops behind one NAT.
+// Polls are cheap reads behind a 256-bit secret
+const qrPollLimiter = limitRate({ windowMs: 15 * 60 * 1000, max: 6000, key: (req) => String(req.ip) });
 // Guessing codes from a logged-in phone: 30 unknown codes per address per 15 minutes
 const qrScanLimiter = limitFailures({
   windowMs: 15 * 60 * 1000,
