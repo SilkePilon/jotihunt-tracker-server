@@ -4,6 +4,7 @@ import { Area } from "../models/area.model";
 import { HintCell, HintCellStatus } from "../models/hint-cell.model";
 import { ApiArticle } from "../types/api";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
+import { summaryKey } from "./article-summary.service";
 import { floorToHour, syncArticles } from "./article-sync.service";
 
 function apiArticle(id: number, type: string, content: string, publishAt = "2026-10-17T12:05:00.000000Z"): ApiArticle {
@@ -120,7 +121,7 @@ describe("syncArticles", () => {
   test("a changed article loses the summary of its old content", async () => {
     await syncArticles([apiArticle(20, "news", "<div>Wissel om 23:00</div>")]);
     const { contentHash } = (await Article.findOne({ id: 20 }).lean())!;
-    await Article.updateOne({ id: 20 }, { $set: { summary: "Wissel om 23:00.", summaryHash: contentHash } });
+    await Article.updateOne({ id: 20 }, { $set: { summary: "Wissel om 23:00.", summaryHash: summaryKey(contentHash!) } });
 
     await syncArticles([apiArticle(20, "news", "<div>Wissel om 22:00</div>")]);
 
@@ -130,13 +131,24 @@ describe("syncArticles", () => {
     expect(changed.summaryHash).toBeUndefined();
   });
 
+  test("a changed article keeps a summary that was already made for its new content", async () => {
+    await syncArticles([apiArticle(99, "news", "<div>Wissel om 22:00</div>")]);
+    const newHash = (await Article.findOne({ id: 99 }).lean())!.contentHash!;
+    await syncArticles([apiArticle(22, "news", "<div>Wissel om 23:00</div>")]);
+    await Article.updateOne({ id: 22 }, { $set: { summary: "Wissel om 22:00.", summaryHash: summaryKey(newHash) } });
+
+    await syncArticles([apiArticle(22, "news", "<div>Wissel om 22:00</div>")]);
+
+    expect(await Article.findOne({ id: 22 }).lean()).toMatchObject({ summary: "Wissel om 22:00.", summaryHash: summaryKey(newHash) });
+  });
+
   test("an unchanged article keeps its summary", async () => {
     await syncArticles([apiArticle(21, "news", "<div>Wissel om 23:00</div>")]);
     const { contentHash } = (await Article.findOne({ id: 21 }).lean())!;
-    await Article.updateOne({ id: 21 }, { $set: { summary: "Wissel om 23:00.", summaryHash: contentHash } });
+    await Article.updateOne({ id: 21 }, { $set: { summary: "Wissel om 23:00.", summaryHash: summaryKey(contentHash!) } });
 
     await syncArticles([apiArticle(21, "news", "<div>Wissel om 23:00</div>")]);
 
-    expect(await Article.findOne({ id: 21 }).lean()).toMatchObject({ summary: "Wissel om 23:00.", summaryHash: contentHash });
+    expect(await Article.findOne({ id: 21 }).lean()).toMatchObject({ summary: "Wissel om 23:00.", summaryHash: summaryKey(contentHash!) });
   });
 });

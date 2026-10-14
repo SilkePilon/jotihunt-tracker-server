@@ -3,6 +3,7 @@ import { Article } from "../models/article.model";
 import { Area } from "../models/area.model";
 import { HintCell, HintCellStatus } from "../models/hint-cell.model";
 import { ApiArticle } from "../types/api";
+import { summaryKey } from "./article-summary.service";
 import { DEFAULT_AREAS, parseHintArticle } from "./hint-parser";
 import { isDuplicateKeyError } from "../utils/mongo";
 
@@ -105,7 +106,7 @@ export async function syncArticles(apiArticles: ApiArticle[]): Promise<SyncResul
       const changed = Boolean(previous?.contentHash) && previous?.contentHash !== contentHash;
       // A summary of the old content would be shown with the new text until the next summary is made
       if (changed) {
-        await Article.updateOne({ id: apiArticle.id, summaryHash: { $ne: contentHash } }, { $unset: { summary: 1, summaryPoints: 1, summaryHash: 1 } }, { strict: false });
+        await Article.updateOne({ id: apiArticle.id, summaryHash: { $ne: summaryKey(contentHash) } }, { $unset: { summary: 1, summaryPoints: 1, summaryHash: 1 } }, { strict: false });
       }
 
       if (apiArticle.type !== "hint") continue;

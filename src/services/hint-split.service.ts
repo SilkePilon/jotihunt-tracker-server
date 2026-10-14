@@ -3,6 +3,7 @@ import { Article, publicArticlesFilter } from "../models/article.model";
 import { HintCell, HintCellStatus } from "../models/hint-cell.model";
 import { invalidAnswer, toGeminiError } from "./ai/gemini-error";
 import { createGeminiJob, GEMINI_JOB_MAX_PAUSE_MS, GEMINI_JOB_PAUSE_MS, type Tracked } from "./ai/gemini-job";
+import { attribute, figureParts, fileName } from "./article-media";
 import { getAreaNames } from "./article-sync.service";
 import { invalidateBoardCache } from "./hint-board.service";
 import { htmlToText } from "./html-text";
@@ -56,34 +57,6 @@ const SPLIT_SCHEMA = {
 /** A block ends after one of these (the closing tag stays with the block before it) */
 const BLOCK_END = /<br\s*\/?>|<\/(?:p|div|li|ul|ol|figure|blockquote|pre|h[1-6])\s*>|<hr\b[^>]*>/gi;
 
-const attribute = (tag: string, name: string) => new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i").exec(tag)?.slice(1).find((v) => v !== undefined);
-
-/** Last path segment of a URL, without query or hash */
-const fileName = (url: string | undefined) => {
-  const last = (url ?? "").split(/[?#]/)[0].split("/").pop() ?? "";
-  try {
-    return decodeURIComponent(last).trim();
-  } catch {
-    return last.trim();
-  }
-};
-
-/** filename and contentType from a Trix figure's data-trix-attachment JSON (entity-encoded in the attribute) */
-function trixAttachment(figureTag: string): { filename?: string; contentType?: string } {
-  const raw = attribute(figureTag, "data-trix-attachment");
-  if (!raw) return {};
-  const json = raw.replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, "&");
-  const string = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined);
-  try {
-    const parsed = JSON.parse(json) as { filename?: unknown; contentType?: unknown };
-    return { filename: string(parsed.filename), contentType: string(parsed.contentType) };
-  } catch {
-    // Cut off or otherwise broken JSON: pick the fields by hand
-    const field = (key: string) => string(new RegExp(`"${key}"\\s*:\\s*"([^"]*)"`).exec(json)?.[1]);
-    return { filename: field("filename"), contentType: field("contentType") };
-  }
-}
-
 const label = (kind: "afbeelding" | "bestand", name: string | undefined) => (name ? `[${kind}: ${name}]` : `[${kind}]`);
 
 /** "[afbeelding: <alt or file name>]" for a loose <img> */
@@ -95,16 +68,10 @@ const imageLabel = (tag: string) => label("afbeelding", attribute(tag, "alt")?.t
  * image src or link href.
  */
 function figureLabel(figure: string): string {
-  const openTag = /^<figure\b[^>]*>/i.exec(figure)?.[0] ?? "";
-  const attachment = trixAttachment(openTag);
-  const img = /<img\b[^>]*>/i.exec(figure)?.[0];
-  const href = /<a\b[^>]*>/i.exec(figure)?.[0];
-  const caption = /<span\b[^>]*\battachment__name\b[^>]*>([^<]*)<\/span>/i.exec(figure)?.[1]?.trim();
-  const isImage = img !== undefined || /^image\//i.test(attachment.contentType ?? "");
+  const { attachment, img, link, caption, isImage } = figureParts(figure);
   // The JSON filename is plain text (the other names are still HTML-encoded): encode it, as the label goes through htmlToText
   const filename = attachment.filename?.replace(/&/g, "&amp;").replace(/</g, "&lt;");
-  const name =
-    filename || caption || (img && attribute(img, "alt")?.trim()) || fileName(img ? attribute(img, "src") : href && attribute(href, "href"));
+  const name = filename || caption || (img && attribute(img, "alt")?.trim()) || fileName(img ? attribute(img, "src") : link && attribute(link, "href"));
   return label(isImage ? "afbeelding" : "bestand", name);
 }
 

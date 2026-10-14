@@ -2,6 +2,7 @@ import { generateText, jsonSchema, Output, type JSONSchema7, type LanguageModel 
 import { Article, publicArticlesFilter } from "../models/article.model";
 import { invalidAnswer, toGeminiError } from "./ai/gemini-error";
 import { createGeminiJob, GEMINI_JOB_MAX_PAUSE_MS, GEMINI_JOB_PAUSE_MS, type Tracked } from "./ai/gemini-job";
+import { articleAttachments, articleImages, fetchImages as downloadImages, type ArticleImage, type FetchedImage } from "./article-media";
 import { htmlToText } from "./html-text";
 
 export interface ArticleSummary {
@@ -40,17 +41,28 @@ function dayAndTime(date: Date): string {
   return `${weekday} ${time}`;
 }
 
-export function buildSummaryPrompt(article: SummaryInput): string {
+/**
+ * The prompt text. `images` are the names of the images sent along with it (in order); files that are not images are
+ * only named.
+ */
+export function buildSummaryPrompt(article: SummaryInput, images: string[] = []): string {
   const kind = article.type === "assignment" ? "assignment" : "news message";
   const facts = [`Title: ${article.title}`];
   if (article.publishAt) facts.push(`Published: ${dayAndTime(new Date(article.publishAt))}`);
   if (article.endTime) facts.push(`Deadline: ${dayAndTime(new Date(article.endTime))}`);
   if (article.maxPoints != null) facts.push(`Max points: ${article.maxPoints}`);
+  const attachments = articleAttachments(article.content);
+  if (attachments.length > 0) facts.push(`Bijlagen: ${attachments.join(", ")}`);
+  if (images.length > 0) facts.push(`Bijgevoegde afbeeldingen: ${images.join(", ")}`);
+  const source =
+    images.length > 0
+      ? "Use only what the text and the attached images (the article's own images, in this order) say; read what the images show (text, times, places, instructions) as part of the article. Do not invent times, places or rules."
+      : "Use only what the text says. Do not invent times, places or rules.";
   return `You help the headquarters of a scouting group that plays Jotihunt, a weekend-long fox hunt game in Gelderland (the Netherlands). The organisation published this ${kind}. Summarise it for the team, in Dutch.
 
 - "summary": at most 2 short sentences with the facts that matter (what, when, deadline, points).
 
-Use only what the text says. Do not invent times, places or rules.
+${source}
 
 ${facts.join("\n")}
 Text:
@@ -65,15 +77,46 @@ function cleanSummary(output: unknown): ArticleSummary {
   return { summary };
 }
 
-/** Summarises one article with one Gemini call; retrying is the job's business */
-export function createArticleSummarizer({ model, timeoutMs = SUMMARY_TIMEOUT_MS }: { model: LanguageModel; timeoutMs?: number }): ArticleSummarizer {
+/** The article's images that could be downloaded; never throws (a summary without images beats none) */
+async function attachedImages(content: string, fetchImages: (images: ArticleImage[]) => Promise<FetchedImage[]>): Promise<FetchedImage[]> {
+  const images = articleImages(content);
+  if (images.length === 0) return [];
+  try {
+    return await fetchImages(images);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Summarises one article with one Gemini call, its images attached (downloaded first, with their own limits; the
+ * timeout covers the Gemini call only); retrying is the job's business
+ */
+export function createArticleSummarizer({
+  model,
+  timeoutMs = SUMMARY_TIMEOUT_MS,
+  fetchImages = (images) => downloadImages(images),
+}: {
+  model: LanguageModel;
+  timeoutMs?: number;
+  fetchImages?: (images: ArticleImage[]) => Promise<FetchedImage[]>;
+}): ArticleSummarizer {
   return {
     async summarize(article) {
+      const images = await attachedImages(article.content, fetchImages);
       let output: unknown;
       try {
         const result = await generateText({
           model,
-          prompt: buildSummaryPrompt(article),
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: buildSummaryPrompt(article, images.map((image) => image.name)) },
+                ...images.map((image) => ({ type: "file" as const, data: image.data, mediaType: image.mediaType, filename: image.name })),
+              ],
+            },
+          ],
           output: Output.object({ schema: jsonSchema(SUMMARY_SCHEMA) }),
           temperature: 0.2,
           maxRetries: 0,
@@ -93,10 +136,16 @@ export interface PendingArticle extends SummaryInput {
   contentHash: string;
 }
 
-/** News and assignments whose current content has no summary yet, newest first */
+/** Version of the summaries: v2 summaries were made with the article's images (v1 ones are made again once) */
+const SUMMARY_VERSION = "v2";
+
+/** The summaryHash of a summary of this content made by the current version */
+export const summaryKey = (contentHash: string) => `${contentHash}:${SUMMARY_VERSION}`;
+
+/** News and assignments whose current content has no summary (of the current version) yet, newest first */
 export async function findPendingSummaries(limit: number): Promise<PendingArticle[]> {
   const articles = await Article.find(
-    { ...publicArticlesFilter(), type: { $in: ["news", "assignment"] }, contentHash: { $type: "string" }, $expr: { $ne: ["$summaryHash", "$contentHash"] } },
+    { ...publicArticlesFilter(), type: { $in: ["news", "assignment"] }, contentHash: { $type: "string" }, $expr: { $ne: ["$summaryHash", { $concat: ["$contentHash", `:${SUMMARY_VERSION}`] }] } },
     { _id: 0, id: 1, title: 1, type: 1, content: 1, publishAt: 1, endTime: 1, maxPoints: 1, contentHash: 1 },
   )
     .sort({ publishAt: -1 })
@@ -109,7 +158,7 @@ export async function findPendingSummaries(limit: number): Promise<PendingArticl
 export async function storeSummary(article: { id: number; contentHash: string }, summary: ArticleSummary): Promise<void> {
   await Article.updateOne(
     { id: article.id, contentHash: article.contentHash },
-    { $set: { summary: summary.summary, summaryHash: article.contentHash }, $unset: { summaryPoints: 1 } },
+    { $set: { summary: summary.summary, summaryHash: summaryKey(article.contentHash) }, $unset: { summaryPoints: 1 } },
     // summaryPoints is no longer in the schema; strict mode would drop the $unset
     { strict: false },
   );

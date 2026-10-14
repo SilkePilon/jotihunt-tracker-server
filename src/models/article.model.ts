@@ -43,7 +43,7 @@ const ArticleSchema = new mongoose.Schema({
     type: String,
     required: false,
   },
-  /** contentHash the summary was made from: a changed article gets a new summary */
+  /** `${contentHash}:v2` of the content the summary was made from (summaryKey): a changed article, or one summarised by an older version, gets a new summary */
   summaryHash: {
     type: String,
     required: false,

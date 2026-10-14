@@ -4,12 +4,14 @@ import { Article } from "../models/article.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { mockModel } from "../test/ai";
 import { GeminiError } from "./ai/gemini-error";
+import type { ArticleImage, FetchedImage } from "./article-media";
 import {
   buildSummaryPrompt,
   createArticleSummarizer,
   createSummaryJob,
   findPendingSummaries,
   storeSummary,
+  summaryKey,
   SUMMARY_MAX_PAUSE_MS,
   SUMMARY_PAUSE_MS,
   SUMMARY_TIMEOUT_MS,
@@ -103,25 +105,99 @@ describe("createArticleSummarizer", () => {
   });
 });
 
+describe("createArticleSummarizer with images", () => {
+  const html =
+    `<div>Zie de afbeeldingen.<img src="https://cdn.jotihunt.net/a.png" alt="Kaart"></div>` +
+    `<figure data-trix-attachment="{&quot;contentType&quot;:&quot;image/png&quot;,&quot;filename&quot;:&quot;Route.png&quot;,&quot;url&quot;:&quot;https://cdn.jotihunt.net/b.png&quot;}"><img src="https://cdn.jotihunt.net/b.png"></figure>` +
+    `<figure data-trix-attachment="{&quot;contentType&quot;:&quot;application/zip&quot;,&quot;filename&quot;:&quot;alpha.zip&quot;}"><a href="https://cdn.jotihunt.net/alpha.zip"></a></figure>`;
+  const input = { title: "Plaatjes", type: "news", content: html };
+  const textOf = (call: { prompt: { content: unknown }[] }) => (call.prompt[0].content as { type: string; text: string }[])[0].text;
+
+  test("sends the images as file parts in order, with a names line; other files only by name", async () => {
+    const model = mockModel(() => JSON.stringify({ summary: "s" }));
+    let asked: unknown;
+    const fetchImages = async (images: ArticleImage[]): Promise<FetchedImage[]> => {
+      asked = images;
+      return [
+        { data: new Uint8Array([1]), mediaType: "image/png", name: "Kaart" },
+        { data: new Uint8Array([2, 2]), mediaType: "image/jpeg", name: "Route.png" },
+      ];
+    };
+    await createArticleSummarizer({ model, fetchImages }).summarize(input);
+    expect(asked).toEqual([
+      { url: "https://cdn.jotihunt.net/a.png", name: "Kaart" },
+      { url: "https://cdn.jotihunt.net/b.png", name: "Route.png" },
+    ]);
+    const [call] = model.doGenerateCalls;
+    expect(call.prompt).toHaveLength(1);
+    expect(call.prompt[0].role).toBe("user");
+    const parts = call.prompt[0].content as { type: string; mediaType?: string; data?: unknown }[];
+    expect(parts.map((part) => part.type)).toEqual(["text", "file", "file"]);
+    expect(parts.slice(1).map((part) => part.mediaType)).toEqual(["image/png", "image/jpeg"]);
+    expect(parts[1].data).toEqual({ type: "data", data: new Uint8Array([1]) });
+    expect(parts[2].data).toEqual({ type: "data", data: new Uint8Array([2, 2]) });
+    const text = textOf(call);
+    expect(text).toContain("Bijgevoegde afbeeldingen: Kaart, Route.png");
+    expect(text).toContain("Bijlagen: alpha.zip");
+    expect(text).toContain("images");
+  });
+
+  test("without images: no file parts and no names line", async () => {
+    const model = mockModel(() => JSON.stringify({ summary: "s" }));
+    let called = false;
+    await createArticleSummarizer({
+      model,
+      fetchImages: async () => {
+        called = true;
+        return [];
+      },
+    }).summarize({ title: "t", type: "news", content: "<div>alleen tekst</div>" });
+    const [call] = model.doGenerateCalls;
+    expect((call.prompt[0].content as { type: string }[]).map((part) => part.type)).toEqual(["text"]);
+    expect(textOf(call)).not.toContain("Bijgevoegde afbeeldingen");
+    expect(textOf(call)).not.toContain("Bijlagen");
+    expect(called).toBe(false);
+  });
+
+  test("images that could not be downloaded are left out; a throwing download never fails the summary", async () => {
+    const model = mockModel(() => JSON.stringify({ summary: "s" }));
+    const result = await createArticleSummarizer({
+      model,
+      fetchImages: async () => {
+        throw new Error("kapot");
+      },
+    }).summarize(input);
+    expect(result).toEqual({ summary: "s" });
+    const [call] = model.doGenerateCalls;
+    expect((call.prompt[0].content as { type: string }[]).map((part) => part.type)).toEqual(["text"]);
+    expect(textOf(call)).not.toContain("Bijgevoegde afbeeldingen");
+    expect(textOf(call)).toContain("Bijlagen: alpha.zip");
+  });
+});
+
 describe("findPendingSummaries and storeSummary", () => {
   test("pending: news and assignments without a summary of their current content, newest first, never hints or seeded test articles", async () => {
     await article(1, "news");
     await article(2, "assignment");
     await article(3, "hint");
-    await article(4, "news", { summary: "klaar", summaryHash: "hash-4" });
-    await article(5, "news", { summary: "oud", summaryHash: "eerdere-hash" });
+    await article(4, "news", { summary: "klaar", summaryHash: "hash-4:v2" });
+    await article(5, "news", { summary: "oud", summaryHash: "eerdere-hash:v2" });
+    // Made before images were sent (no version): summarised once more
+    await article(7, "news", { summary: "zonder plaatjes", summaryHash: "hash-7" });
     await article(900001, "news");
     await article(6, "news", { contentHash: undefined });
-    expect((await findPendingSummaries(10)).map((pending) => pending.id)).toEqual([5, 2, 1]);
-    expect((await findPendingSummaries(2)).map((pending) => pending.id)).toEqual([5, 2]);
-    expect((await findPendingSummaries(1))[0].publishAt).toEqual(new Date("2026-10-17T15:00:00Z"));
+    expect((await findPendingSummaries(10)).map((pending) => pending.id)).toEqual([7, 5, 2, 1]);
+    expect((await findPendingSummaries(2)).map((pending) => pending.id)).toEqual([7, 5]);
+    expect((await findPendingSummaries(1))[0].publishAt).toEqual(new Date("2026-10-17T17:00:00Z"));
   });
 
   test("storeSummary stores for the content it was made from, and not for content that changed meanwhile", async () => {
     await article(1, "news");
     await Article.collection.updateOne({ id: 1 }, { $set: { summaryPoints: ["oud"] } });
     await storeSummary({ id: 1, contentHash: "hash-1" }, { summary: "kort" });
-    expect(await Article.findOne({ id: 1 }).lean()).toMatchObject({ summary: "kort", summaryHash: "hash-1" });
+    expect(await Article.findOne({ id: 1 }).lean()).toMatchObject({ summary: "kort", summaryHash: "hash-1:v2" });
+    expect(summaryKey("hash-1")).toBe("hash-1:v2");
+    expect(await findPendingSummaries(10)).toEqual([]);
     expect(await Article.findOne({ id: 1 }).lean()).not.toHaveProperty("summaryPoints");
     await storeSummary({ id: 1, contentHash: "andere-hash" }, { summary: "fout" });
     expect((await Article.findOne({ id: 1 }).lean())?.summary).toBe("kort");
