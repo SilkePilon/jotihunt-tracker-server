@@ -133,7 +133,7 @@ describe("admin user management", () => {
 
 });
 
-describe("hints page: assignments, read state and presence", () => {
+describe("intel: assignments and read state", () => {
   const makeArticle = (id: number, type: string) => Article.create({ id, title: `Artikel ${id}`, type, publishAt: new Date("2026-10-17T12:00:00Z"), content: "<div>tekst</div>" });
 
   test("without a token every route answers 401", async () => {
@@ -170,20 +170,22 @@ describe("hints page: assignments, read state and presence", () => {
     expect(((await taken.json()) as { owner?: unknown }).owner ?? null).toBeNull();
   });
 
-  test("a status someone else set is a 409 with the conflict; overwrite: true goes through", async () => {
+  test("anyone may change a status someone else set; the last write wins and records who", async () => {
     const [a, b] = [await createUser({ name: "Sanne" }), await createUser({ name: "Daan" })];
     await makeArticle(7, "assignment");
     expect((await request("/assignments/7/status", { method: "POST", token: tokenFor(a), json: { status: "busy" } })).status).toBe(200);
+    const changed = await request("/assignments/7/status", { method: "POST", token: tokenFor(b), json: { status: "skipped" } });
+    expect(changed.status).toBe(200);
+    expect((await changed.json()) as { status: string; statusBy: { name: string } }).toMatchObject({ status: "skipped", statusBy: { name: "Daan" } });
+  });
 
-    const refused = await request("/assignments/7/status", { method: "POST", token: tokenFor(b), json: { status: "skipped" } });
-    expect(refused.status).toBe(409);
-    const body = (await refused.json()) as { message: string; conflict: { kind: string; value: string; by: { name: string } } };
-    expect(body.conflict).toMatchObject({ kind: "status", value: "busy", by: { _id: String(a._id), name: "Sanne" } });
-    expect(typeof body.message).toBe("string");
-
-    const forced = await request("/assignments/7/status", { method: "POST", token: tokenFor(b), json: { status: "skipped", overwrite: true } });
-    expect(forced.status).toBe(200);
-    expect((await forced.json()) as { status: string; statusBy: { name: string } }).toMatchObject({ status: "skipped", statusBy: { name: "Daan" } });
+  test("anyone may take over an owned assignment", async () => {
+    const [a, b] = [await createUser({ name: "Sanne" }), await createUser({ name: "Daan" })];
+    await makeArticle(7, "assignment");
+    await request("/assignments/7/owner", { method: "POST", token: tokenFor(a), json: { owner: String(a._id) } });
+    const taken = await request("/assignments/7/owner", { method: "POST", token: tokenFor(b), json: { owner: String(b._id) } });
+    expect(taken.status).toBe(200);
+    expect(((await taken.json()) as { owner: { name: string } }).owner.name).toBe("Daan");
   });
 
   test("presence: a heartbeat lists the caller, an array as itemId is a 400, leaving is a 204", async () => {

@@ -40,32 +40,12 @@ describe("setAssignmentStatus", () => {
     await expectError(setAssignmentStatus(8, AssignmentStatus.Busy, user._id), 404);
   });
 
-  test("changing a status someone else set is a conflict; overwrite goes through", async () => {
+  test("anyone may change a status someone else set; the last write wins", async () => {
     const [a, b] = await Promise.all([makeUser("sanne"), makeUser("daan"), makeArticle()]);
     await setAssignmentStatus(7, AssignmentStatus.Busy, a._id);
-    const error = await expectError(setAssignmentStatus(7, AssignmentStatus.Skipped, b._id), 409);
-    expect(error.message).toBe("De status is al gezet door iemand anders");
-    expect(error.details.conflict).toMatchObject({ kind: "status", value: "busy", by: { name: "sanne" } });
-    const view = await setAssignmentStatus(7, AssignmentStatus.Skipped, b._id, true);
+    const view = await setAssignmentStatus(7, AssignmentStatus.Skipped, b._id);
     expect(view.status).toBe(AssignmentStatus.Skipped);
     expect((view.statusBy as unknown as { name: string }).name).toBe("daan");
-  });
-
-  test("no conflict for your own status, for a status that is back to open, or when nothing changes", async () => {
-    const [a, b] = await Promise.all([makeUser("sanne"), makeUser("daan"), makeArticle()]);
-    await setAssignmentStatus(7, AssignmentStatus.Busy, a._id);
-    await setAssignmentStatus(7, AssignmentStatus.Submitted, a._id);
-    expect((await setAssignmentStatus(7, AssignmentStatus.Submitted, b._id)).status).toBe(AssignmentStatus.Submitted);
-    await setAssignmentStatus(7, AssignmentStatus.Open, a._id);
-    expect((await setAssignmentStatus(7, AssignmentStatus.Busy, b._id)).status).toBe(AssignmentStatus.Busy);
-  });
-
-  test("two users at once: one wins, the other gets the conflict", async () => {
-    const [a, b] = await Promise.all([makeUser("sanne"), makeUser("daan"), makeArticle()]);
-    const results = await Promise.allSettled([setAssignmentStatus(7, AssignmentStatus.Busy, a._id), setAssignmentStatus(7, AssignmentStatus.Skipped, b._id)]);
-    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-    expect(((results.find((result) => result.status === "rejected") as PromiseRejectedResult).reason as ServiceError).status).toBe(409);
-    expect(await Assignment.countDocuments()).toBe(1);
   });
 });
 
@@ -84,21 +64,11 @@ describe("setAssignmentOwner", () => {
     expect((await expectError(setAssignmentOwner(7, "64b7f0f0f0f0f0f0f0f0f0f0", a._id), 400)).message).toBe("Onbekende gebruiker");
   });
 
-  test("taking over from someone else is a conflict that names the owner; the owner may hand it back", async () => {
+  test("anyone may take over an owned assignment or hand it back", async () => {
     const [a, b] = await Promise.all([makeUser("sanne"), makeUser("daan"), makeArticle()]);
     await setAssignmentOwner(7, String(a._id), a._id);
-    const error = await expectError(setAssignmentOwner(7, String(b._id), b._id), 409);
-    expect(error.message).toBe("Deze opdracht is al van iemand anders");
-    expect(error.details.conflict).toMatchObject({ kind: "owner", value: "sanne", by: { name: "sanne" } });
-    expect(((await setAssignmentOwner(7, String(b._id), b._id, true)).owner as unknown as { name: string }).name).toBe("daan");
-    // daan owns it now (assigned by daan): sanne assigned nothing, so she needs overwrite; daan himself does not
-    expect((await setAssignmentOwner(7, null, b._id)).owner ?? null).toBeNull();
-  });
-
-  test("someone assigned by another user may hand the assignment back without confirmation", async () => {
-    const [a, b] = await Promise.all([makeUser("sanne"), makeUser("daan"), makeArticle()]);
-    await setAssignmentOwner(7, String(b._id), a._id);
-    expect((await setAssignmentOwner(7, null, b._id)).owner ?? null).toBeNull();
+    expect(((await setAssignmentOwner(7, String(b._id), b._id)).owner as unknown as { name: string }).name).toBe("daan");
+    expect((await setAssignmentOwner(7, null, a._id)).owner ?? null).toBeNull();
   });
 });
 
