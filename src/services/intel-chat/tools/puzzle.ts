@@ -1,7 +1,7 @@
 import { google } from "@ai-sdk/google";
 import { generateText, jsonSchema, tool, type LanguageModel } from "ai";
 import { toGeminiError } from "../../ai/gemini-error";
-import { safely, ToolInputError, type IntelToolContext } from "./context";
+import { BUDGET_EXHAUSTED, createTurnBudget, safely, spend, ToolInputError, type IntelToolContext } from "./context";
 
 export const RUN_CODE_TIMEOUT_MS = 60_000;
 const MAX_TASK = 4000;
@@ -43,11 +43,12 @@ export async function runCode(model: LanguageModel, task: string, abortSignal?: 
 }
 
 export function puzzleTools(ctx: IntelToolContext) {
+  const budget = ctx.budget ?? createTurnBudget();
   return {
     runCode: tool({
       description: "Laat een precieze rekentaak uitvoeren met Python: ciphers decoderen (Caesar met alle shifts, binair, morse-tabellen), letters tellen, stapeltellen, rekenwerk. Beschrijf de taak volledig met alle invoer.",
       inputSchema: jsonSchema<{ task: string }>({ type: "object", properties: { task: { type: "string", description: "De volledige taak met alle gegevens" } }, required: ["task"] }),
-      execute: ({ task }, { abortSignal }) => safely("runCode", () => runCode(ctx.toolModel, task, abortSignal)),
+      execute: ({ task }, { abortSignal }) => (spend(budget, "runCode") ? safely("runCode", () => runCode(ctx.toolModel, task, abortSignal)) : { error: BUDGET_EXHAUSTED }),
     }),
   };
 }

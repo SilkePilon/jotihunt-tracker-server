@@ -16,6 +16,23 @@ export interface IntelToolContext {
   fetch?: (url: string, init: RequestInit) => Promise<Response>;
   /** DNS lookup for readWebPage's address check (tests pass a fake) */
   lookup?: (hostname: string) => Promise<string[]>;
+  /** Paid/limited sub-calls used this turn (createIntelTools starts a fresh one per turn) */
+  budget?: TurnBudget;
+}
+
+/** Paid or rate-limited sub-calls per turn (one question) */
+export const TURN_LIMITS = { webSearch: 6, runCode: 4, walkingRoute: 5 } as const;
+export type TurnBudget = Record<keyof typeof TURN_LIMITS, number>;
+export const BUDGET_EXHAUSTED = "Limiet voor deze vraag bereikt";
+
+/** A budget for one turn: nothing used yet */
+export const createTurnBudget = (): TurnBudget => ({ webSearch: 0, runCode: 0, walkingRoute: 0 });
+
+/** Use one call of `kind`; false (nothing used) when this turn's limit is reached */
+export function spend(budget: TurnBudget, kind: keyof typeof TURN_LIMITS): boolean {
+  if (budget[kind] >= TURN_LIMITS[kind]) return false;
+  budget[kind]++;
+  return true;
 }
 
 /** A tool's failure as the model sees it */

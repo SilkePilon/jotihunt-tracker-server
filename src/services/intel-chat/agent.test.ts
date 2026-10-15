@@ -1,6 +1,6 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import type { UIMessage } from "ai";
-import { convertReadableStreamToArray } from "ai/test";
+import { convertReadableStreamToArray, MockLanguageModelV4 } from "ai/test";
 import mongoose from "mongoose";
 import { Article } from "../../models/article.model";
 import { HintCell, HintCellStatus } from "../../models/hint-cell.model";
@@ -134,5 +134,36 @@ describe("streamIntelChat", () => {
     expect(chunks.find((chunk) => chunk.type === "error")).toBeUndefined();
     expect(chat.doStreamCalls).toHaveLength(1);
     expect(chat.doStreamCalls[0].prompt.some((message) => message.role === "tool")).toBe(true);
+  });
+
+  test("a failing model is not dumped to the console (the raw error holds the prompt and images)", async () => {
+    const failing = new MockLanguageModelV4({
+      doStream: async () => {
+        throw new Error("raw-boom requestBodyValues secret prompt");
+      },
+    });
+    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const stream = await streamIntelChat({
+        models: { chat: failing, deep: failing, tool: mockModel(() => "") },
+        item: (await loadItemView(10))!,
+        article: { id: 10, content: CONTENT, contentHash: "h" },
+        conversation: [question],
+        web: false,
+        deep: false,
+        now: NOW,
+        abortSignal: new AbortController().signal,
+        onEnd: () => {},
+        downloadImages: async () => [],
+      });
+      const chunks = await convertReadableStreamToArray(stream);
+      const error = chunks.find((chunk) => chunk.type === "error") as { errorText: string } | undefined;
+      expect(error?.errorText).toBeDefined();
+      expect(error?.errorText).not.toContain("raw-boom");
+      const printed = consoleError.mock.calls.flat().map((arg) => (arg instanceof Error ? `${arg.message}` : String(arg)));
+      expect(printed.some((text) => text.includes("raw-boom"))).toBe(false);
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 });

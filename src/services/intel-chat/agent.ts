@@ -1,4 +1,5 @@
 import { convertToModelMessages, generateId, isStepCount, streamText, toUIMessageStream, type LanguageModel, type UIMessage, type UIMessageChunk } from "ai";
+import { logger } from "../../logger";
 import { toGeminiError } from "../ai/gemini-error";
 import type { ArticleImage, FetchedImage } from "../article-media";
 import { loadItemImages } from "./item-images";
@@ -59,6 +60,8 @@ export async function streamIntelChat(turn: IntelChatTurn): Promise<ReadableStre
     providerOptions: { google: { thinkingConfig: turn.deep ? { thinkingLevel: "high", includeThoughts: true } : { includeThoughts: true } } },
     maxRetries: 1,
     abortSignal: AbortSignal.any([turn.abortSignal, AbortSignal.timeout(turn.deep ? DEEP_TURN_TIMEOUT_MS : TURN_TIMEOUT_MS)]),
+    // Never the raw error (the SDK default prints it, request body with prompt and images included)
+    onError: ({ error }) => logger.warn(`Intel chat turn failed: ${toGeminiError(error).message}`),
   });
   return toUIMessageStream({
     stream: result.stream,

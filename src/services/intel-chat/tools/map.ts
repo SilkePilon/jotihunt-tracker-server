@@ -5,7 +5,7 @@ import { straightLineSeconds } from "../../prediction/straight-line.router";
 import { bearingBetween, coordinateAt, formatCoordinate, groupsWithin, insideNl, metresBetween, parseCoordinate, projectFrom, type ParsedCoordinate } from "../geo";
 import { geocode, reverseGeocode } from "../pdok.client";
 import { checkPointResult } from "../point";
-import { safely, ToolInputError, type IntelToolContext } from "./context";
+import { createTurnBudget, safely, spend, ToolInputError, type IntelToolContext } from "./context";
 
 /** Description of a `point` argument, shared by every tool that takes one */
 export const POINT_DESCRIPTION = 'Coördinaat als tekst: RD ("1884 4407" of "188362 440722"), decimaal ("51.95392, 5.87252") of graden-minuten ("N 51° 57.235 E 5° 52.351")';
@@ -30,13 +30,13 @@ const MAX_RADIUS_M = 20_000;
 const MAX_NEARBY = 25;
 const MAX_PROJECT_M = 100_000;
 
-/** Straight line, bearing and (optionally) walking time between two points */
+/** Straight line, bearing and (optionally) walking time between two points; a straight-line estimate without ORS or over this turn's route budget */
 export async function measure(ctx: IntelToolContext, fromText: string, toText: string, walking: boolean) {
   const from = readPoint(fromText, "from").latLng;
   const to = readPoint(toText, "to").latLng;
   const result: { distanceM: number; bearingDeg: number; walkMinutes?: number; walkEstimate?: boolean } = { distanceM: metresBetween(from, to), bearingDeg: bearingBetween(from, to) };
   if (!walking) return result;
-  if (ctx.walkMinutes) {
+  if (ctx.walkMinutes && (!ctx.budget || spend(ctx.budget, "walkingRoute"))) {
     const { minutes, estimate } = await ctx.walkMinutes([from.lng, from.lat], [[to.lng, to.lat]]);
     return { ...result, walkMinutes: minutes[0], walkEstimate: estimate };
   }
@@ -51,7 +51,8 @@ export function project(fromText: string, bearing: number, metres: number) {
   const target = coordinateAt(projectFrom(from, ((bearing % 360) + 360) % 360, metres));
   return { latLng: target.latLng, rd: { x: Math.round(target.rd.x), y: Math.round(target.rd.y) }, formatted: formatCoordinate(target), insideNl: insideNl(target.latLng) };
 }
-export function mapTools(ctx: IntelToolContext) {
+export function mapTools(turn: IntelToolContext) {
+  const ctx: IntelToolContext = { ...turn, budget: turn.budget ?? createTurnBudget() };
   return {
     convertCoordinates: tool({
       description: "Zet een coördinaat om (RD in 4/5/6 cijfers, decimale graden of graden-minuten-seconden). Geeft RD, lat/lng en alle notaties, waaronder het 8-cijferige Jotihunt-antwoord (rd8).",

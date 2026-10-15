@@ -2,7 +2,7 @@ import { google } from "@ai-sdk/google";
 import { generateText, jsonSchema, tool, type LanguageModel } from "ai";
 import { toGeminiError } from "../../ai/gemini-error";
 import { readWebPage } from "../web-fetch";
-import { safely, ToolInputError, type IntelToolContext } from "./context";
+import { BUDGET_EXHAUSTED, createTurnBudget, safely, spend, ToolInputError, type IntelToolContext } from "./context";
 
 /** Tools that reach the internet; only active when the user switched "Web" on */
 export const WEB_TOOL_NAMES = ["webSearch", "readWebPage"] as const;
@@ -55,11 +55,12 @@ export async function webSearch(model: LanguageModel, query: string, abortSignal
 }
 
 export function webTools(ctx: IntelToolContext) {
+  const budget = ctx.budget ?? createTurnBudget();
   return {
     webSearch: tool({
       description: "Zoek op internet (Google). Voor feiten, plaatsen, namen, trivia en codes die je niet zeker weet. Geeft een kort antwoord met bronnen.",
       inputSchema: jsonSchema<{ query: string }>({ type: "object", properties: { query: { type: "string", description: "Zoekvraag, zo specifiek mogelijk" } }, required: ["query"] }),
-      execute: ({ query }, { abortSignal }) => safely("webSearch", () => webSearch(ctx.toolModel, query, abortSignal)),
+      execute: ({ query }, { abortSignal }) => (spend(budget, "webSearch") ? safely("webSearch", () => webSearch(ctx.toolModel, query, abortSignal)) : { error: BUDGET_EXHAUSTED }),
     }),
     readWebPage: tool({
       description: "Lees een openbare webpagina als platte tekst (max 20 000 tekens), bv. een bron uit webSearch of een link uit een hint.",

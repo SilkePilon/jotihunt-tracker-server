@@ -7,7 +7,7 @@ import { initPredictionSetting, isPredictionEnabled, resetPredictionSetting, set
 const infoLogs: string[] = [];
 mock.module("../logger", () => ({ logger: { info: (message: string) => infoLogs.push(message), error() {}, warn() {}, debug() {} } }));
 const recomputeDue = mock(async () => ({ recomputed: ["alpha"], failed: [] as { area: string; error: unknown }[] }));
-mock.module("../services/prediction/instance", () => ({ predictionService: { recomputeDue, recomputeArea: mock(async () => {}) } }));
+mock.module("../services/prediction/instance", () => ({ predictionService: { recomputeDue, recomputeArea: mock(async () => {}) }, walkMinutes: mock(async () => ({ minutes: [], estimate: true })) }));
 const { getPredictions } = await import("../controllers/predictions.controller");
 const { getVisits, putVisit } = await import("../controllers/visits.controller");
 const { putPredictionSetting, getPredictionSetting } = await import("./settings.controller");

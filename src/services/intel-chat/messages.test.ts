@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ModelMessage, UIMessage } from "ai";
 import { clearItemImageCache, loadItemImages } from "./item-images";
-import { appendMessage, DROPPED_IMAGE_TEXT, forStorage, MAX_HISTORY_TO_MODEL, modelWindow, parseIncomingMessage, withItemImages, withoutNullPartFields } from "./messages";
+import { appendMessage, DROPPED_IMAGE_TEXT, forStorage, MAX_HISTORY_TO_MODEL, MAX_STORED_BYTES, MAX_STORED_TOOL_TEXT, modelWindow, parseIncomingMessage, withItemImages, withoutNullPartFields } from "./messages";
 import { buildSystemPrompt, dutchDateTime } from "./prompt";
 import type { ItemView } from "./tools/app-data";
 
@@ -65,6 +65,34 @@ describe("forStorage", () => {
     expect(stored[2].parts[1]).toEqual(image(3));
     expect(stored[3].parts[1]).toEqual({ type: "text", text: "half", state: "done" });
   });
+
+  test("long strings in tool outputs are cut to 4 KB with an ellipsis; input and short strings stay", () => {
+    expect(MAX_STORED_TOOL_TEXT).toBe(4096);
+    const page = "p".repeat(20_000);
+    const tool = { type: "tool-readWebPage", toolCallId: "c1", state: "output-available", input: { url: "x".repeat(5000) }, output: { url: "https://a.nl", text: page, nested: [{ deep: page }], n: 3 } };
+    const [, stored] = forStorage([user("u1"), { id: "a1", role: "assistant", parts: [{ type: "step-start" }, tool as UIMessage["parts"][number]] }]);
+    const part = stored.parts[1] as unknown as typeof tool;
+    expect(part.output.text).toBe(`${"p".repeat(4096)}…`);
+    expect(part.output.nested[0].deep).toBe(`${"p".repeat(4096)}…`);
+    expect(part.output.url).toBe("https://a.nl");
+    expect(part.output.n).toBe(3);
+    expect(part.input).toEqual(tool.input);
+    expect(tool.output.text).toBe(page);
+  });
+
+  test("drops the oldest messages while the chat is over ~8 MB, starting at a user message", () => {
+    expect(MAX_STORED_BYTES).toBe(8 * 1024 * 1024);
+    const big = "x".repeat(1_500_000);
+    const messages: UIMessage[] = [];
+    for (let i = 0; i < 4; i++) messages.push(user(`u${i}`, big), assistant(`a${i}`, big));
+    const stored = forStorage(messages);
+    expect(Buffer.byteLength(JSON.stringify(stored))).toBeLessThanOrEqual(MAX_STORED_BYTES);
+    expect(stored[0].role).toBe("user");
+    expect(stored.at(-1)?.id).toBe("a3");
+    expect(stored.map((m) => m.id)).toEqual(["u2", "a2", "u3", "a3"]);
+    // Small chats are untouched
+    expect(forStorage([user("u1"), assistant("a1")]).map((m) => m.id)).toEqual(["u1", "a1"]);
+  });
 });
 
 describe("modelWindow", () => {
@@ -115,6 +143,27 @@ describe("loadItemImages", () => {
     expect(calls).toBe(2);
     expect(await loadItemImages({ ...article, contentHash: "h2" }, async () => Promise.reject(new Error("down")), 0)).toEqual([]);
     expect(await loadItemImages({ id: 2, content: "<p>geen plaatjes</p>" }, download, 0)).toEqual([]);
+  });
+
+  test("a failed or empty download is not cached", async () => {
+    clearItemImageCache();
+    let calls = 0;
+    const failing = async () => {
+      calls++;
+      throw new Error("down");
+    };
+    expect(await loadItemImages(article, failing, 0)).toEqual([]);
+    const empty = async () => {
+      calls++;
+      return [];
+    };
+    expect(await loadItemImages(article, empty, 1_000)).toEqual([]);
+    const working = async () => {
+      calls++;
+      return [{ name: "a.png", mediaType: "image/png", data: new Uint8Array([1]) }];
+    };
+    expect(await loadItemImages(article, working, 2_000)).toHaveLength(1);
+    expect(calls).toBe(3);
   });
 });
 

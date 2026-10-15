@@ -7,6 +7,7 @@ import { Article } from "../models/article.model";
 import { HintCell, HintCellStatus } from "../models/hint-cell.model";
 import { IntelChat } from "../models/intel-chat.model";
 import { User } from "../models/user.model";
+import { activeWorkCount } from "../demo/demo-mode";
 import { setIntelChatModels } from "../services/intel-chat/instance";
 import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import { mockModel, mockStreamModel, type StreamStep } from "../test/ai";
@@ -54,6 +55,26 @@ function request(path: string, init: RequestInit & { token?: string; json?: unkn
   if (init.token) headers.set("Authorization", `Bearer ${init.token}`);
   if (init.json !== undefined) headers.set("Content-Type", "application/json");
   return fetch(`${base}${path}`, { ...init, headers, body: init.json !== undefined ? JSON.stringify(init.json) : init.body });
+}
+
+const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } };
+/** A model that streams 40 words, one per 50 ms (2 s in total) */
+function useSlowModel() {
+  const slow = new MockLanguageModelV4({
+    doStream: async () => ({
+      stream: simulateReadableStream({
+        chunkDelayInMs: 50,
+        chunks: [
+          { type: "stream-start", warnings: [] },
+          { type: "text-start", id: "t" },
+          ...Array.from({ length: 40 }, (_, i) => ({ type: "text-delta" as const, id: "t", delta: `w${i} ` })),
+          { type: "text-end", id: "t" },
+          { type: "finish", usage, finishReason: { unified: "stop", raw: undefined } },
+        ],
+      }),
+    }),
+  });
+  setIntelChatModels({ chat: slow, deep: slow, tool: mockModel(() => "") });
 }
 
 const question = (id: string, text = "Los Alpha op"): UIMessage => ({ id, role: "user", parts: [{ type: "text", text }] });
@@ -188,22 +209,7 @@ describe("/intel-chat", () => {
   });
 
   test("a question the client walks away from is saved with what was produced", async () => {
-    const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } };
-    const slow = new MockLanguageModelV4({
-      doStream: async () => ({
-        stream: simulateReadableStream({
-          chunkDelayInMs: 50,
-          chunks: [
-            { type: "stream-start", warnings: [] },
-            { type: "text-start", id: "t" },
-            ...Array.from({ length: 40 }, (_, i) => ({ type: "text-delta" as const, id: "t", delta: `w${i} ` })),
-            { type: "text-end", id: "t" },
-            { type: "finish", usage, finishReason: { unified: "stop", raw: undefined } },
-          ],
-        }),
-      }),
-    });
-    setIntelChatModels({ chat: slow, deep: slow, tool: mockModel(() => "") });
+    useSlowModel();
     const user = await createUser();
     const abort = new AbortController();
     const res = await request("/intel-chat/10", { method: "POST", token: tokenFor(user), json: { message: question("m1"), web: false, deep: false }, signal: abort.signal });
@@ -216,6 +222,57 @@ describe("/intel-chat", () => {
     expect(text.text).toStartWith("w0 ");
     expect(text.text.length).toBeLessThan(40 * 4);
     expect(text.state).toBe("done");
+  });
+
+  test("Nieuw gesprek during a turn stops it and the chat stays empty; a second question meanwhile is 409 busy", async () => {
+    useSlowModel();
+    const user = await createUser();
+    const token = tokenFor(user);
+    const res = await ask(token, question("m1"));
+    const reader = res.body!.getReader();
+    await reader.read();
+    const busy = await ask(token, question("m2"));
+    expect(busy.status).toBe(409);
+    expect(await busy.json()).toEqual({ error: "busy" });
+    // Another user is not blocked
+    const other = await ask(tokenFor(await createUser()), question("m1"));
+    expect(other.status).toBe(200);
+    await other.body!.cancel();
+
+    expect((await request("/intel-chat/10", { method: "DELETE", token })).status).toBe(204);
+    while (!(await reader.read()).done);
+    await Bun.sleep(200);
+    expect(await IntelChat.findOne({ userId: user._id, articleId: 10 })).toBeNull();
+    // The key is free again
+    useSteps([{ text: "Hallo!" }]);
+    await (await ask(token, question("m3"))).text();
+    expect((await savedMessages(user._id, 2))[0].id).toBe("m3");
+  });
+
+  test("a streaming answer does not hold up a demo database switch", async () => {
+    useSlowModel();
+    const before = activeWorkCount();
+    const abort = new AbortController();
+    const res = await request("/intel-chat/10", { method: "POST", token: tokenFor(await createUser()), json: { message: question("m1"), web: false, deep: false }, signal: abort.signal });
+    const reader = res.body!.getReader();
+    await reader.read();
+    expect(activeWorkCount()).toBe(before);
+    abort.abort();
+    await Bun.sleep(200);
+  });
+
+  test("a failure before the stream starts is 500 chat_failed (only the error name logged) and frees the chat", async () => {
+    const user = await createUser();
+    const token = tokenFor(user);
+    // A stored chat the server can't read
+    await IntelChat.collection.insertOne({ userId: user._id, articleId: 10, messages: [{ id: "x", role: "assistant", parts: null }], updatedAt: new Date() });
+    const res = await ask(token, question("m1"));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "chat_failed" });
+    await IntelChat.deleteMany({});
+    const ok = await ask(token, question("m1"));
+    expect(ok.status).toBe(200);
+    await ok.text();
   });
 
   test("429 rate_limited after 30 questions in 10 minutes", async () => {

@@ -54,6 +54,8 @@ let generator: DemoWorldGenerator = async () => {};
 const listeners = new Set<DemoSwitchListener>();
 /** Serialises switches; also what the gate waits for */
 let switching: Promise<unknown> | null = null;
+/** The gate's release of each counted response (see releaseDemoWork) */
+const gateReleases = new WeakMap<object, () => void>();
 
 // --- Public API -------------------------------------------------------------------------------------------------
 
@@ -157,6 +159,7 @@ export function demoGate(req: Request, res: Response, next: NextFunction) {
       clearTimeout(abandonedTimer);
       finish();
     };
+    gateReleases.set(res, release);
     res.on("finish", release);
     res.on("close", () => {
       if (released || abandonedTimer) return;
@@ -183,6 +186,14 @@ export function demoGate(req: Request, res: Response, next: NextFunction) {
   };
   if (!switching) return start();
   waitForSwitch().then(start, next);
+}
+
+/**
+ * A long-lived response (the Intel chat stream) stops delaying a demo switch from here on. Whatever its handler writes
+ * later must be counted on its own (beginWork) and check the database generation it started in.
+ */
+export function releaseDemoWork(res: Response) {
+  gateReleases.get(res)?.();
 }
 
 /** Express middleware for the /demo routes themselves: waits for a running switch, not counted by it. */

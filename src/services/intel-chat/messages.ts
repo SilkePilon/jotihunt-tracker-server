@@ -11,6 +11,10 @@ export const MAX_USER_IMAGE_BYTES = 2 * 1024 * 1024;
 export const USER_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
 export const MAX_USER_TEXT = 4000;
 export const DROPPED_IMAGE_TEXT = "[eerder gestuurde afbeelding, niet meer bewaard]";
+/** Longer strings in stored tool outputs (a read web page) are cut to this many characters plus "…" */
+export const MAX_STORED_TOOL_TEXT = 4096;
+/** A stored chat stays below this JSON size (MongoDB documents max out at 16 MB); the oldest messages go first */
+export const MAX_STORED_BYTES = 8 * 1024 * 1024;
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -59,10 +63,21 @@ export function appendMessage(history: UIMessage[], message: UIMessage): UIMessa
 
 const hasContent = (message: UIMessage) => message.parts.some((part) => part.type !== "step-start");
 
+/** A copy of a tool output with every string over MAX_STORED_TOOL_TEXT cut */
+function capStrings(value: unknown): unknown {
+  if (typeof value === "string") return value.length > MAX_STORED_TOOL_TEXT ? `${value.slice(0, MAX_STORED_TOOL_TEXT)}…` : value;
+  if (Array.isArray(value)) return value.map(capStrings);
+  if (isObject(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, capStrings(item)]));
+  return value;
+}
+
+const isToolPart = (part: UIMessage["parts"][number]) => part.type.startsWith("tool-") || part.type === "dynamic-tool";
+
 /**
  * The conversation as it is stored and sent: the newest MAX_STORED_MESSAGES, only the newest MAX_USER_IMAGES user
  * images (older ones replaced by a text note), streaming text marked done (an aborted turn), assistant messages without
- * content dropped.
+ * content dropped, long tool output strings cut; while over MAX_STORED_BYTES the oldest messages are dropped (the chat
+ * then starts at a user message).
  */
 export function forStorage(messages: UIMessage[]): UIMessage[] {
   let imagesLeft = MAX_USER_IMAGES;
@@ -78,12 +93,25 @@ export function forStorage(messages: UIMessage[]): UIMessage[] {
         return { type: "text" as const, text: DROPPED_IMAGE_TEXT };
       }
       if ((part.type === "text" || part.type === "reasoning") && part.state === "streaming") return { ...part, state: "done" as const };
+      if (isToolPart(part) && "output" in part && part.output !== undefined) return { ...part, output: capStrings(part.output) } as typeof part;
       return part;
     });
     kept.push({ ...message, parts });
     if (kept.length >= MAX_STORED_MESSAGES) break;
   }
-  return kept.reverse();
+  return withinByteBudget(kept.reverse());
+}
+
+/** Drop the oldest messages while the chat is over MAX_STORED_BYTES, then up to the next user message; the newest message always stays */
+function withinByteBudget(messages: UIMessage[]): UIMessage[] {
+  const sizes = messages.map((message) => Buffer.byteLength(JSON.stringify(message)));
+  // The array's brackets and commas
+  let total = sizes.reduce((sum, size) => sum + size + 1, 1);
+  if (total <= MAX_STORED_BYTES) return messages;
+  let start = 0;
+  while (total > MAX_STORED_BYTES && start < messages.length - 1) total -= sizes[start++] + 1;
+  while (start < messages.length - 1 && messages[start].role !== "user") start++;
+  return messages.slice(start);
 }
 
 /**

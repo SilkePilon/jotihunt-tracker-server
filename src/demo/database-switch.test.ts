@@ -14,6 +14,7 @@ import {
   getDemoState,
   initDemoMode,
   mongoUriDbName,
+  releaseDemoWork,
   setDemoWorldGenerator,
   switchDemoMode,
 } from "./database-switch";
@@ -270,6 +271,38 @@ describe("switching between the real and the demo database", () => {
       await Bun.sleep(50);
       expect(activeWorkCount()).toBe(before);
     } finally {
+      server.close();
+    }
+  });
+
+  test("a streaming response that released its count (the Intel chat) does not hold up a switch", async () => {
+    let endStream!: () => void;
+    const streamEnd = new Promise<void>((resolve) => (endStream = resolve));
+    const app = express();
+    app.use(demoGate);
+    app.post("/stream", async (_req, res) => {
+      releaseDemoWork(res);
+      res.write("first chunk");
+      await streamEnd;
+      res.end();
+    });
+    const server = app.listen(0);
+    try {
+      const port = (server.address() as { port: number }).port;
+      const before = activeWorkCount();
+      const res = await fetch(`http://127.0.0.1:${port}/stream`, { method: "POST" });
+      const reader = res.body!.getReader();
+      await reader.read();
+      expect(activeWorkCount()).toBe(before);
+      setDemoWorldGenerator(async () => {});
+      await switchDemoMode(true);
+      expect(isDemoMode()).toBe(true);
+      endStream();
+      while (!(await reader.read()).done);
+      expect(activeWorkCount()).toBe(before);
+      await switchDemoMode(false);
+    } finally {
+      endStream();
       server.close();
     }
   });
