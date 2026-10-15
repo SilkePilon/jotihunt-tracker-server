@@ -113,6 +113,7 @@ TELEGRAM_API_HASH=
 TELEGRAM_SESSION_KEY= # openssl rand -base64 32
 TELEGRAM_BOT_USERNAME= # Optioneel, standaard Jotihunt_bot
 LIFE360_SESSION_KEY= # Optioneel, Life360-laag (openssl rand -base64 32, zie configuratie)
+JOTIBOARD_SESSION_KEY= # Optioneel, Jotiboard-sync (openssl rand -base64 32, zie configuratie)
 
 # Inloggen (passkeys)
 WEBAUTHN_RP_ID=jotihunt.jouwscoutinggroep.nl # Hostnaam van de website, zonder https:// en poort (lokaal: localhost)
@@ -206,6 +207,13 @@ Teamleden zonder onze app kunnen hun locatie delen via een Life360-kring. De ser
 3. Een admin koppelt het account in de kaart "Life360": e-mailadres invullen, de code uit de mail invoeren en eventueel de kring kiezen. Lukt dat niet, dan kan de cookie `LIFE360_AUTH_TOKEN` van life360.com geplakt worden.
 
 De server vraagt één keer per 30 seconden de leden van de kring op en bewaart alleen de laatste posities in het geheugen (geen geschiedenis, geen adressen). Bij een rate limit van Life360 wacht de server tot Life360 weer verzoeken toelaat (minstens 5 minuten); als het token verloopt, staat de kaart op "Uitgelogd" en moet een admin opnieuw een code laten sturen. Profielfoto's lopen via de server (`/life360/avatar/:id`), zodat browsers Life360 nooit zelf benaderen. Zonder key staat dit uit.
+
+#### `JOTIBOARD_SESSION_KEY` (optioneel)
+Hunters zetten ook pins en hint-oplossingen op [Jotiboard](https://jotiboard.nl). De server kan die automatisch overnemen.
+1. Zet `JOTIBOARD_SESSION_KEY` op 32 willekeurige bytes in base64 (`openssl rand -base64 32`). Hiermee wordt de Jotiboard-sessie versleuteld opgeslagen; verander je de key, dan moet een admin opnieuw inloggen. Op k3s komt de key met de hand in de Secret `jotihunt-secret`.
+2. Een admin koppelt het Jotiboard-account in de kaart "Jotiboard" (gebruikersnaam + wachtwoord). Het wachtwoord wordt niet bewaard, alleen het refresh-token.
+
+Zolang "Automatisch synchroniseren" aan staat, leest de server elke 20 seconden `manualLocations` en `hintSolves` (alleen lezen). Pins worden markers (hint/hunt/spot) en opgeloste hints vullen open hint-vakken; staat er al een eigen marker van hetzelfde type in hetzelfde deelgebied binnen 15 minuten en 300 meter, of is het vak al opgelost, dan wordt het overgeslagen. Een pin die van Jotiboard verdwijnt, verdwijnt ook hier. "Data verwijderen" haalt alles weg wat van Jotiboard kwam en zet de sync uit. In demomodus wordt niet gesynchroniseerd.
 
 #### `JWT_SECRET`
 Genereer een willekeurige, veilige string van minimaal 32 tekens. Deze wordt gebruikt om JWT tokens te ondertekenen voor de authenticatie.

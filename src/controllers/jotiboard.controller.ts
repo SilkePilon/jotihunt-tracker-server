@@ -1,0 +1,29 @@
+import { Request, Response } from "express";
+import { respond, ServiceError } from "../http/service-error";
+import { getJotiboardService, type JotiboardService } from "../services/jotiboard.service";
+
+function requireService(): JotiboardService {
+  const service = getJotiboardService();
+  if (!service) throw new ServiceError(503, "Jotiboard is niet ingesteld op de server.");
+  return service;
+}
+
+export async function getStatus(_req: Request, res: Response) {
+  return respond(res, 200, async () => (await getJotiboardService()?.status()) ?? { state: "unavailable" });
+}
+
+export async function link(req: Request, res: Response) {
+  return respond(res, 200, () => requireService().link(String(req.body.username), String(req.body.password), req.user!.name ?? null));
+}
+
+export async function unlink(_req: Request, res: Response) {
+  return respond(res, 200, () => requireService().unlink());
+}
+
+export async function setSync(req: Request, res: Response) {
+  return respond(res, 200, () => requireService().setSyncEnabled(req.body.syncEnabled === true));
+}
+
+export async function purge(_req: Request, res: Response) {
+  return respond(res, 200, () => requireService().purge());
+}

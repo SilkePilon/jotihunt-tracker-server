@@ -15,6 +15,9 @@ import { isTraccarConfigured, usesLegacyTraccarEnv } from "./services/traccar-ht
 import { setTelegramService, telegramConfigFromEnv, TelegramService } from "./services/telegram.service";
 import { createMtcuteGateway } from "./services/telegram.gateway";
 import { HappyHourService } from "./services/happy-hour.service";
+import { JotiboardClient } from "./services/jotiboard.client";
+import { jotiboardConfigFromEnv } from "./services/jotiboard.helpers";
+import { JotiboardService, setJotiboardService } from "./services/jotiboard.service";
 import { Life360Client } from "./services/life360.client";
 import { life360ConfigFromEnv } from "./services/life360.helpers";
 import { Life360Service, setLife360Service } from "./services/life360.service";
@@ -127,6 +130,13 @@ if (!process.env.LIFE360_SESSION_KEY?.trim()) logger.warn("LIFE360_SESSION_KEY n
 const life360 = new Life360Service({ config: life360Config, connection: getDemoStateStore().connection, client: new Life360Client(), logger: serviceLogger });
 setLife360Service(life360);
 life360.start().catch((error) => logger.error("Could not start the Life360 sync", error));
+// Jotiboard: fox pins and hint solutions from jotiboard.nl are imported while an admin has sync on. The link lives in the
+// real database like Life360's; the sync starts in the background
+const jotiboardConfig = jotiboardConfigFromEnv(process.env, (message) => logger.warn(message));
+if (!process.env.JOTIBOARD_SESSION_KEY?.trim()) logger.warn("JOTIBOARD_SESSION_KEY not set, the Jotiboard sync is off");
+const jotiboard = new JotiboardService({ config: jotiboardConfig, connection: getDemoStateStore().connection, client: new JotiboardClient(), logger: serviceLogger });
+setJotiboardService(jotiboard);
+jotiboard.start().catch((error) => logger.error("Could not start the Jotiboard sync", error));
 
 // 3D buildings: z15 vector tiles from 3DBAG, cached in the real database on first view
 const buildings = new BuildingsService({ connection: getDemoStateStore().connection, client: new BagWfsClient(), logger: serviceLogger });

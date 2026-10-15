@@ -3,6 +3,7 @@ import * as adminController from "../controllers/admin.controller";
 import * as adminAuthController from "../auth/admin-auth.controller";
 import { INVITE_EXPIRY_KEYS, INVITE_MAX_USES } from "../auth/invites";
 import * as buildingsController from "../controllers/buildings.controller";
+import * as jotiboardController from "../controllers/jotiboard.controller";
 import * as life360Controller from "../controllers/life360.controller";
 import * as notificationsController from "../controllers/notifications.controller";
 import * as telegramController from "../controllers/telegram.controller";
@@ -106,6 +107,23 @@ router.post(
 );
 router.post("/life360/refresh", [verifyToken, isAdmin], life360Controller.refresh);
 router.delete("/life360/link", [verifyToken, isAdmin], life360Controller.unlink);
+// Jotiboard (jotiboard.nl): fox pins and hint solutions are imported every 20 s while sync is on
+router.get("/jotiboard", [verifyToken, isAdmin], jotiboardController.getStatus);
+router.post(
+  "/jotiboard/link",
+  [
+    verifyToken,
+    isAdmin,
+    validate([
+      body("username").isString().withMessage("Vul gebruikersnaam en wachtwoord in.").bail().trim().notEmpty().withMessage("Vul gebruikersnaam en wachtwoord in."),
+      body("password").isString().withMessage("Vul gebruikersnaam en wachtwoord in.").bail().notEmpty().withMessage("Vul gebruikersnaam en wachtwoord in."),
+    ]),
+  ],
+  jotiboardController.link,
+);
+router.delete("/jotiboard/link", [verifyToken, isAdmin], jotiboardController.unlink);
+router.patch("/jotiboard", [verifyToken, isAdmin, validate([body("syncEnabled").isBoolean({ strict: true }).withMessage("syncEnabled moet true of false zijn.")])], jotiboardController.setSync);
+router.delete("/jotiboard/imports", [verifyToken, isAdmin], jotiboardController.purge);
 // 3D buildings: the tile cache (3DBAG) and the jobs that fill it
 router.get("/buildings", [verifyToken, isAdmin], buildingsController.getStatus);
 router.post("/buildings/refresh", [verifyToken, isAdmin], buildingsController.refresh);
