@@ -153,6 +153,7 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("1884 4407");
     expect(prompt).toContain("webSearch");
     expect(prompt).toContain("checkPoint");
+    expect(prompt).toContain("Denk in het Nederlands; ook je gedachten/overwegingen schrijf je in het Nederlands.");
   });
 
   test("web off tells the model to suggest switching Web on", () => {

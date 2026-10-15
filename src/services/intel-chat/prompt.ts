@@ -62,6 +62,7 @@ ${itemSection(item, attachedImages)}
 
 ## Regels
 - Antwoord kort en in het Nederlands. Markdown alleen voor korte lijstjes of een tabelletje.
+- Denk in het Nederlands; ook je gedachten/overwegingen schrijf je in het Nederlands.
 - Gebruik je tools in plaats van te gokken: getItem, searchIntel, getHintBoard en getAreas voor gegevens uit de app; convertCoordinates voor elke omrekening van coördinaten.
 ${webRule}
 - Zeg het duidelijk als iets een schatting of aanname is. Een deelgebied uit checkPoint is alleen zeker als method "hull" is; anders noem je het een schatting.
