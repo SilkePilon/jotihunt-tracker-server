@@ -1,9 +1,10 @@
 import { createModels } from "../ai/model";
+import { walkMinutes } from "../prediction/instance";
 import type { IntelChatModels } from "./agent";
 import type { IntelToolContext } from "./tools";
 
 let models: IntelChatModels | null | undefined;
-let toolDeps: Partial<Pick<IntelToolContext, "walkMinutes" | "fetch" | "lookup">> = {};
+let toolDeps: Partial<Pick<IntelToolContext, "walkMinutes" | "fetch" | "lookup">> = { walkMinutes };
 
 /** The chat's models (purpose chat; "Denk diep" uses the prediction model); null without GEMINI_API_KEY */
 export function getIntelChatModels(): IntelChatModels | null {

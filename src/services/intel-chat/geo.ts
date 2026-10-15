@@ -1,4 +1,5 @@
-import { distanceM } from "../prediction/geo";
+import destination from "@turf/destination";
+import { bearingDeg, distanceM } from "../prediction/geo";
 import { formatRdAnswer, fromRd, toRd } from "../rd-answer";
 
 export type LatLng = { lat: number; lng: number };
@@ -260,4 +261,15 @@ export function estimateArea(point: LatLng, groups: AreaGroup[]): AreaEstimate {
   const inside = [...byArea].filter(([, points]) => distanceToHull(p, convexHull(points)) <= HULL_BUFFER_M).map(([area]) => area);
   if (inside.length === 1) return { area: inside[0], method: "hull" };
   return { area: nearestGroups(point, withArea, 1)[0].area, method: "nearest-group" };
+}
+
+/** Compass bearing from a to b, 0-360 degrees (0 = north), rounded to 0.1 */
+export function bearingBetween(a: LatLng, b: LatLng): number {
+  return Math.round(((bearingDeg([a.lng, a.lat], [b.lng, b.lat]) + 360) % 360) * 10) / 10;
+}
+
+/** The point `distanceM` metres from `from` in compass direction `bearing` (degrees, 0 = north; great circle) */
+export function projectFrom(from: LatLng, bearing: number, metres: number): LatLng {
+  const [lng, lat] = destination([from.lng, from.lat], metres, bearing, { units: "meters" }).geometry.coordinates;
+  return { lat, lng };
 }

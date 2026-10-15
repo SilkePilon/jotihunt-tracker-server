@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { toRd } from "../rd-answer";
-import { convexHull, distanceToHull, estimateArea, formatCoordinate, groupsWithin, insideNl, nearestGroups, parseCoordinate, type AreaGroup } from "./geo";
+import { bearingBetween, convexHull, distanceToHull, estimateArea, formatCoordinate, groupsWithin, insideNl, nearestGroups, parseCoordinate, projectFrom, type AreaGroup } from "./geo";
 
 /** HQ Jotihunt, Stikkerstraat Arnhem (RD 188362 440722) */
 const HQ = { lat: 51.95392, lng: 5.87252 };
@@ -144,5 +144,20 @@ describe("nearestGroups / groupsWithin", () => {
 
   test("groupsWithin keeps only groups inside the radius", () => {
     expect(groupsWithin(pointAt(6500, 1200), GROUPS, 4000).map((group) => group.name)).toEqual(["E3", "E1", "E2"]);
+  });
+});
+
+describe("projectFrom / bearingBetween", () => {
+  test("7.31 km at 262 degrees from HQ (the 2025 'One Ring' hint) lands about 7.2 km west, 1 km south", () => {
+    const target = projectFrom(HQ, 262, 7310);
+    const hq = toRd(HQ.lng, HQ.lat);
+    const rd = toRd(target.lng, target.lat);
+    expect(Math.abs(rd.x - hq.x - -7239)).toBeLessThan(100);
+    expect(Math.abs(rd.y - hq.y - -1017)).toBeLessThan(100);
+    expect(bearingBetween(HQ, target)).toBeCloseTo(262, 0);
+  });
+
+  test("bearing is 0-360", () => {
+    expect(bearingBetween(HQ, projectFrom(HQ, 350, 1000))).toBeCloseTo(350, 0);
   });
 });

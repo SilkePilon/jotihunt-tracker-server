@@ -7,8 +7,11 @@ import { createWalkMinutes } from "./walking";
 
 const models = createModels();
 
+/** Walking minutes via ORS (one daily quota and circuit breaker, shared by the prediction and the Intel chat) */
+export const walkMinutes = createWalkMinutes({ walking: createOrsRouter(process.env.ORS_API_KEY || undefined), fallback: straightLineRouter });
+
 // Real clients for the running server. Tests build their own service with mocks.
 export const predictionService = createPredictionService({
   predictor: models ? createGeminiPredictor({ model: models("prediction") }) : null,
-  walkMinutes: createWalkMinutes({ walking: createOrsRouter(process.env.ORS_API_KEY || undefined), fallback: straightLineRouter }),
+  walkMinutes,
 });
