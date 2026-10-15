@@ -56,3 +56,9 @@ export function formatRdAnswer(lng: number, lat: number): string {
   const part = (value: number) => String(Math.round(value / 100)).padStart(4, "0");
   return `${part(x)} ${part(y)}`;
 }
+
+/** WGS84 position of RD coordinates (metres). */
+export function fromRd(x: number, y: number): { lng: number; lat: number } {
+  const [lng, lat] = proj4("RD", "WGS84", [x, y]);
+  return { lng, lat };
+}
