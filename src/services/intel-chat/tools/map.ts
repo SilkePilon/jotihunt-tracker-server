@@ -3,6 +3,7 @@ import { AREAS, knownAreaName } from "../../../constants/areas";
 import { loadGroups, loadSolvedHintPoints, loadTrackers } from "../data";
 import { straightLineSeconds } from "../../prediction/straight-line.router";
 import { bearingBetween, coordinateAt, formatCoordinate, groupsWithin, insideNl, metresBetween, parseCoordinate, projectFrom, type ParsedCoordinate } from "../geo";
+import { geocode, reverseGeocode } from "../pdok.client";
 import { checkPointResult } from "../point";
 import { safely, ToolInputError, type IntelToolContext } from "./context";
 
@@ -113,6 +114,19 @@ export function mapTools(ctx: IntelToolContext) {
         required: ["from", "bearingDeg", "distanceM"],
       }),
       execute: ({ from, bearingDeg, distanceM }) => safely("projectPoint", async () => project(from, Number(bearingDeg), Number(distanceM))),
+    }),
+    geocode: tool({
+      description: "Zoek een adres, straat, plaats of postcode in Nederland (PDOK). Geeft max 5 treffers met coördinaten.",
+      inputSchema: jsonSchema<{ query: string }>({ type: "object", properties: { query: { type: "string", description: "Bijvoorbeeld 'Stikkerstraat 10 Arnhem' of '6842CW'" } }, required: ["query"] }),
+      execute: ({ query }, { abortSignal }) =>
+        safely("geocode", async () => ({
+          results: (await geocode(query, { fetch: ctx.fetch, signal: abortSignal })).map((hit) => ({ ...hit, rdText: formatCoordinate(coordinateAt(hit.latLng)).rd8 })),
+        })),
+    }),
+    reverseGeocode: tool({
+      description: "De dichtstbijzijnde adressen bij een punt in Nederland (PDOK), met afstand in meters.",
+      inputSchema: jsonSchema<{ point: string }>({ type: "object", properties: { point: { type: "string", description: POINT_DESCRIPTION } }, required: ["point"] }),
+      execute: ({ point }, { abortSignal }) => safely("reverseGeocode", async () => ({ results: await reverseGeocode(readPoint(point).latLng, { fetch: ctx.fetch, signal: abortSignal }) })),
     }),
   };
 }
