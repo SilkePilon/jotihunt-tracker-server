@@ -15,6 +15,10 @@ const NS_STATIONS_TTL_MS = 24 * 60 * 60_000;
 const LIVE_TTL_MS = 45_000;
 /** OVapi's /journey answered [] or 404 (it does for every journey since 2026): skip it for this long */
 const JOURNEY_EMPTY_SKIP_MS = 10 * 60_000;
+/** Most entries the OV cache holds; the oldest go first */
+export const OV_CACHE_MAX = 2000;
+/** NS departures asked per request (maxJourneys) */
+export const NS_MAX_JOURNEYS = 40;
 
 export const OV_MODES = ["BUS", "TRAM", "METRO", "BOAT", "TRAIN"] as const;
 export type OvMode = (typeof OV_MODES)[number];
@@ -71,11 +75,18 @@ export function parseOvTime(value: unknown): Date | null {
   if (typeof value !== "string") return null;
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/.exec(value.trim());
   if (!match) return null;
-  const asUtc = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), Number(match[5]), Number(match[6] ?? 0));
+  const [year, month, day, hour, minute, second] = match.slice(1, 7).map((part) => Number(part ?? 0));
+  // Date.UTC would roll "2026-02-30" or "25:00" over into another moment
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  if (month < 1 || month > 12 || day < 1 || day > daysInMonth || hour > 23 || minute > 59 || second > 59) return null;
+  const asUtc = Date.UTC(year, month - 1, day, hour, minute, second);
   if (!Number.isFinite(asUtc)) return null;
   const zone = match[7];
   if (zone) {
-    const offset = zone === "Z" ? 0 : (zone[0] === "-" ? -1 : 1) * (Number(zone.slice(1, 3)) * 60 + Number(zone.slice(-2)));
+    const zoneHours = zone === "Z" ? 0 : Number(zone.slice(1, 3));
+    const zoneMinutes = zone === "Z" ? 0 : Number(zone.slice(-2));
+    if (zoneHours > 14 || zoneMinutes > 59) return null;
+    const offset = zone === "Z" ? 0 : (zone[0] === "-" ? -1 : 1) * (zoneHours * 60 + zoneMinutes);
     return new Date(asUtc - offset * 60_000);
   }
   // Local Amsterdam: the offset of the guessed instant, checked once more around a DST switch
@@ -97,12 +108,25 @@ export function resetOvCaches() {
   journeyEmptyUntil = 0;
 }
 
+/** Tests only */
+export const ovCacheSize = () => cache.size;
+
 function cached<T>(s: OvSession, key: string): T | undefined {
   const hit = cache.get(key);
   return hit && hit.until > s.now().getTime() ? (hit.value as T) : undefined;
 }
 
-const store = (s: OvSession, key: string, value: unknown, ttlMs: number) => cache.set(key, { until: s.now().getTime() + ttlMs, value });
+/** Cache a value; expired entries are dropped first and the oldest go when over OV_CACHE_MAX */
+function store(s: OvSession, key: string, value: unknown, ttlMs: number) {
+  const now = s.now().getTime();
+  for (const [entryKey, entry] of cache) if (entry.until <= now) cache.delete(entryKey);
+  cache.delete(key);
+  cache.set(key, { until: now + ttlMs, value });
+  for (const oldest of cache.keys()) {
+    if (cache.size <= OV_CACHE_MAX) break;
+    cache.delete(oldest);
+  }
+}
 
 /** The JSON body; `missing` is returned for a 404 when given (OVapi answers 404 for journeys it does not know) */
 async function getJson(s: OvSession, source: "OVapi" | "NS-API", url: string, missing?: unknown): Promise<unknown> {
@@ -296,10 +320,10 @@ export interface NsDeparture {
   date: string;
 }
 
-/** Departures of a station from a time (default now), max 40 (cached 45 s) */
+/** Departures of a station from a time (default now), max NS_MAX_JOURNEYS (cached 45 s) */
 export async function nsDepartures(s: OvSession, code: string, from?: Date): Promise<NsDeparture[]> {
   if (!s.nsKey) return [];
-  const url = `${NS_BASE_URL}/departures?station=${encodeURIComponent(code)}&maxJourneys=40${from ? `&dateTime=${encodeURIComponent(isoAmsterdam(from))}` : ""}`;
+  const url = `${NS_BASE_URL}/departures?station=${encodeURIComponent(code)}&maxJourneys=${NS_MAX_JOURNEYS}${from ? `&dateTime=${encodeURIComponent(isoAmsterdam(from))}` : ""}`;
   const hit = cached<NsDeparture[]>(s, url);
   if (hit) return hit;
   const body = await getJson(s, "NS-API", url);

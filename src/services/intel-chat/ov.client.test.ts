@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { fakeOvFetch, NS, OVAPI, PASSES, stopAreaBody, ovapiPass } from "../../test/ov-fixtures";
-import { isoAmsterdam, loadNsStations, loadStopAreas, nsDepartures, nsJourney, ovapiJourneyStops, ovapiPasses, parseOvTime, resetOvCaches, type OvSession } from "./ov.client";
+import { isoAmsterdam, loadNsStations, loadStopAreas, nsDepartures, nsJourney, OV_CACHE_MAX, ovapiJourneyStops, ovapiPasses, ovCacheSize, parseOvTime, resetOvCaches, type OvSession } from "./ov.client";
 
 const NOW = new Date("2026-10-15T14:25:00+02:00");
 
@@ -27,6 +27,33 @@ describe("OV times", () => {
   test("garbage is null", () => {
     expect(parseOvTime("morgen")).toBeNull();
     expect(parseOvTime(null)).toBeNull();
+  });
+
+  test("out-of-range parts are null instead of being rolled over", () => {
+    expect(parseOvTime("2026-13-15T14:00:00+02:00")).toBeNull();
+    expect(parseOvTime("2026-00-15T14:00:00+02:00")).toBeNull();
+    expect(parseOvTime("2026-02-30T14:00:00+02:00")).toBeNull();
+    expect(parseOvTime("2026-10-00T14:00:00")).toBeNull();
+    expect(parseOvTime("2026-10-15T24:00:00")).toBeNull();
+    expect(parseOvTime("2026-10-15T14:60:00")).toBeNull();
+    expect(parseOvTime("2026-10-15T14:00:60")).toBeNull();
+    expect(parseOvTime("2026-10-15T14:00:00+25:00")).toBeNull();
+    expect(parseOvTime("2026-10-15T14:00:00+02:75")).toBeNull();
+    expect(isoAmsterdam(parseOvTime("2028-02-29T23:59:59")!)).toBe("2028-02-29T23:59:59+01:00");
+  });
+
+  test("DST: the doubled hour on the last Sunday of October is read as winter time (the later one)", () => {
+    // 2026-10-25 03:00 CEST -> 02:00 CET; 02:30 local happens twice, parseOvTime picks the second (+01:00)
+    expect(isoAmsterdam(parseOvTime("2026-10-25T02:30:00")!)).toBe("2026-10-25T02:30:00+01:00");
+    expect(parseOvTime("2026-10-25T02:30:00")!.toISOString()).toBe("2026-10-25T01:30:00.000Z");
+    expect(isoAmsterdam(parseOvTime("2026-10-25T01:59:00")!)).toBe("2026-10-25T01:59:00+02:00");
+    expect(isoAmsterdam(parseOvTime("2026-10-25T03:00:00")!)).toBe("2026-10-25T03:00:00+01:00");
+  });
+
+  test("DST: a local time in the spring gap (2026-03-29 02:xx does not exist) moves an hour forward", () => {
+    expect(isoAmsterdam(parseOvTime("2026-03-29T02:30:00")!)).toBe("2026-03-29T03:30:00+02:00");
+    expect(isoAmsterdam(parseOvTime("2026-03-29T01:59:00")!)).toBe("2026-03-29T01:59:00+01:00");
+    expect(isoAmsterdam(parseOvTime("2026-03-29T03:00:00")!)).toBe("2026-03-29T03:00:00+02:00");
   });
 });
 
@@ -106,6 +133,25 @@ describe("OVapi", () => {
     const { s } = session(fetch, { spend: () => false });
     await expect(loadStopAreas(s)).rejects.toThrow("Limiet voor deze vraag bereikt");
     expect(calls).toHaveLength(0);
+  });
+
+  test("the cache drops expired entries when storing and keeps at most OV_CACHE_MAX, oldest first", async () => {
+    const { fetch, calls } = fakeOvFetch({ passes: {} });
+    let now = NOW;
+    const { s } = session(fetch, { now: () => now, spend: () => true });
+    const codes = Array.from({ length: OV_CACHE_MAX + 1 }, (_, index) => `c${index}`);
+    await ovapiPasses(s, codes);
+    expect(ovCacheSize()).toBe(OV_CACHE_MAX);
+    // The oldest (c0) was evicted, the newest is still cached
+    await ovapiPasses(s, [codes[OV_CACHE_MAX]]);
+    expect(calls).toHaveLength(1);
+    await ovapiPasses(s, ["c0"]);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].url).toBe(`${OVAPI}/stopareacode/c0`);
+    // 45 s later all passes expired: the next store sweeps them
+    now = new Date(NOW.getTime() + 60_000);
+    await ovapiPasses(s, ["fresh"]);
+    expect(ovCacheSize()).toBe(1);
   });
 
   test("a pass without position falls back to its stop", async () => {

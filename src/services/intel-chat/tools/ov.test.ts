@@ -3,7 +3,7 @@ import { Team } from "../../../models/team.model";
 import { formatRdAnswer } from "../../rd-answer";
 import { mockModel } from "../../../test/ai";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../../../test/db";
-import { fakeOvFetch, NS, OVAPI, type OvFakeData } from "../../../test/ov-fixtures";
+import { fakeOvFetch, NS, nsDeparture, OVAPI, ovapiPass, STOP_AREAS, type OvFakeData } from "../../../test/ov-fixtures";
 import { runTool } from "../../../test/tools";
 import { resetOvCaches } from "../ov.client";
 import { createTurnBudget, type IntelToolContext, type TurnBudget } from "./context";
@@ -83,6 +83,27 @@ describe("ovStopsNear", () => {
     const { tools } = setup({ status: 503 });
     expect(await runTool(tools.ovStopsNear, { near: ZUTPHEN_STATION })).toEqual({ error: "OVapi gaf HTTP 503" });
   });
+
+  test("modes that could not be learned (budget) are noted", async () => {
+    const { tools, budget } = setup();
+    budget.ov = 23;
+    const result = (await runTool(tools.ovStopsNear, { near: ZUTPHEN_STATION })) as { stops: Stop[]; note: string };
+    expect(result.stops.map((stop) => [stop.id, stop.modes])).toEqual([
+      ["ZpBus", []],
+      ["224", []],
+      ["NS:ZP", ["TRAIN"]],
+    ]);
+    expect(result.note).toBe("Vervoerswijzen van bushaltes onbekend: limiet voor deze vraag bereikt");
+  });
+
+  test("modes that could not be learned (passes unavailable) are noted", async () => {
+    const fake = fakeOvFetch();
+    const fetch = async (url: string, init: RequestInit) => (url.startsWith(`${OVAPI}/stopareacode/`) ? new Response("nee", { status: 503 }) : fake.fetch(url, init));
+    const { tools } = setup({}, { fetch });
+    const result = (await runTool(tools.ovStopsNear, { near: ZUTPHEN_STATION })) as { stops: Stop[]; note: string };
+    expect(result.stops[0].modes).toEqual([]);
+    expect(result.note).toBe("Vervoerswijzen van bushaltes onbekend: OVapi gaf HTTP 503");
+  });
 });
 
 type Departure = { mode: string; line: string; destination: string; planned: string; expected: string; delayMin: number; status: string; journeyId: string | null; platform?: string };
@@ -123,6 +144,26 @@ describe("ovDepartures", () => {
     expect(result.stop).toMatchObject({ id: "GslDrp", name: "Dorp", town: "Gorssel" });
     expect(result.stop.distanceM).toBeLessThan(50);
     expect(result.departures).toEqual([expect.objectContaining({ line: "81", expected: "2026-10-15T14:57:00+02:00", journeyId: "OVAPI:NL_20261015_8081_1035_0@GslDrp" })]);
+  });
+
+  test("NS gave its maximum of 40 departures ending before the window end: a note", async () => {
+    const minute = (offset: number) => `14:${String(offset).padStart(2, "0")}`;
+    const forty = { payload: { departures: Array.from({ length: 40 }, (_, index) => nsDeparture(String(30000 + index), "Oldenzaal", minute(index))) } };
+    const { tools } = setup({ nsDepartures: { ZP: forty } });
+    const result = (await runTool(tools.ovDepartures, { stop: "NS:ZP", fromTime: "2026-10-15T14:00:00+02:00", windowMin: 60 })) as { departures: Departure[]; note: string };
+    expect(result.note).toContain("NS gaf maximaal 40 treinvertrekken (tot 14:39); latere treinen binnen het venster ontbreken");
+    // Fewer than 40: the list is complete, no such note
+    resetOvCaches();
+    const { tools: few } = setup();
+    const complete = (await runTool(few.ovDepartures, { stop: "NS:ZP", fromTime: "2026-10-15T14:00:00+02:00", windowMin: 60 })) as { note?: string };
+    expect(complete.note ?? "").not.toContain("maximaal 40");
+  });
+
+  test("a garbage fromTime is a Dutch error", async () => {
+    const { tools } = setup();
+    const error = { error: "fromTime moet een tijd zijn (ISO 8601, bv. 2026-10-17T14:05:00+02:00)" };
+    expect(await runTool(tools.ovDepartures, { stop: "NS:ZP", fromTime: "2026-10-15T25:00:00+02:00" })).toEqual(error);
+    expect(await runTool(tools.ovDepartures, { stop: "NS:ZP", fromTime: "2026-02-31T14:00:00+02:00" })).toEqual(error);
   });
 
   test("a train station without NS_API_KEY is an error", async () => {
@@ -173,6 +214,34 @@ describe("ovJourney", () => {
     expect(result.stops[2].expected).toMatch(/^2026-10-15T15:\d{2}:00\+02:00$/);
     expect(result.current).toMatchObject({ between: ["Station Zutphen", "Dorp Gorssel"], note: "tussen Station Zutphen en Dorp Gorssel, ~12 min tot Dorp Gorssel (geschat)" });
     expect(result.note).toContain("geschat");
+  });
+
+  test("journey ids of OVapi stop areas with spaces, '&' and '+' round-trip from ovDepartures", async () => {
+    for (const code of ["Bd CS", "W&aAnj", "purp+r", "MttP&R"]) {
+      resetOvCaches();
+      const key = "NL_20261015_8081_1037_0";
+      const zp = STOP_AREAS.ZpBus;
+      const stop = { Longitude: zp.Longitude, Latitude: zp.Latitude, TimingPointTown: zp.TimingPointTown, TimingPointName: zp.TimingPointName, TimingPointCode: "1", StopAreaCode: code };
+      const passes = { [code]: { [code]: { "1": { Stop: stop, Passes: { [key]: ovapiPass({ StopAreaCode: code }) } } } } };
+      const { tools } = setup({ stopAreas: { [code]: { ...zp, StopAreaCode: code } }, passes });
+      const departures = (await runTool(tools.ovDepartures, { stop: code })) as { departures: Departure[] };
+      const journeyId = departures.departures.find((departure) => departure.mode === "BUS")!.journeyId!;
+      expect(journeyId).toBe(`OVAPI:${key}@${code}`);
+      const journey = (await runTool(tools.ovJourney, { journeyId })) as JourneyResult;
+      expect(journey).toMatchObject({ mode: "BUS", line: "81", destination: "Deventer" });
+      expect(journey.stops[0]).toMatchObject({ name: "Station", town: "Zutphen" });
+    }
+  });
+
+  test("a bus journey still works when NS is down (destination lookup skips the stations)", async () => {
+    const pass = ovapiPass({ DestinationName50: "Lochem", ExpectedDepartureTime: "2026-10-15T14:38:00", TargetDepartureTime: "2026-10-15T14:38:00" });
+    const stop = { Longitude: 6.1934443, Latitude: 52.144203, TimingPointTown: "Zutphen", TimingPointName: "Station", TimingPointCode: "41640171", StopAreaCode: "ZpBus" };
+    const fake = fakeOvFetch({ passes: { ZpBus: { ZpBus: { "41640171": { Stop: stop, Passes: { K_1: pass } } } } } });
+    const fetch = async (url: string, init: RequestInit) => (url.startsWith(NS) ? new Response("nee", { status: 503 }) : fake.fetch(url, init));
+    const { tools } = setup({}, { fetch });
+    const result = (await runTool(tools.ovJourney, { journeyId: "OVAPI:K_1@ZpBus" })) as JourneyResult;
+    expect(result).toMatchObject({ mode: "BUS", line: "81", destination: "Lochem" });
+    expect(result.stops.map((stop) => stop.name)).toEqual(["Station"]);
   });
 
   test("unknown ids are errors", async () => {
@@ -253,6 +322,7 @@ describe("predictOvMovement", () => {
   test("bad input", async () => {
     const { tools } = setup();
     expect(await runTool(tools.predictOvMovement, { from: ZUTPHEN_STATION, seenAt: "gisteren" })).toEqual({ error: "seenAt moet een tijd zijn (ISO 8601, bv. 2026-10-17T14:05:00+02:00)" });
+    expect(await runTool(tools.predictOvMovement, { from: ZUTPHEN_STATION, seenAt: "2026-10-15T13:75:00+02:00" })).toEqual({ error: "seenAt moet een tijd zijn (ISO 8601, bv. 2026-10-17T14:05:00+02:00)" });
     expect(await runTool(tools.predictOvMovement, { from: ZUTPHEN_STATION, seenAt: "2026-10-15T15:00:00+02:00" })).toEqual({ error: "seenAt ligt in de toekomst" });
     expect(await runTool(tools.predictOvMovement, { from: ZUTPHEN_STATION, seenAt: "2026-10-15T14:00:00+02:00", modes: ["FIETS"] })).toEqual({ error: "Onbekende vervoerswijze: FIETS" });
   });

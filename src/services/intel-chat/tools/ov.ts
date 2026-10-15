@@ -9,6 +9,7 @@ import {
   knownModes,
   loadNsStations,
   loadStopAreas,
+  NS_MAX_JOURNEYS,
   nsDepartures,
   nsJourney,
   OV_MODES,
@@ -123,14 +124,16 @@ const within = (stops: OvStopInfo[], center: LatLng, radiusM: number) =>
     .filter((entry) => entry.distanceM <= radiusM)
     .sort((a, b) => a.distanceM - b.distanceM);
 
-/** Fill the modes of OVapi stops from their passes (one request; failures leave the modes unknown) */
-async function learnModes(s: OvSession, stops: OvStopInfo[]) {
+/** Fill the modes of OVapi stops from their passes (one request); a failure leaves them unknown and gives a note */
+async function learnModes(s: OvSession, stops: OvStopInfo[]): Promise<string | null> {
   const codes = stops.filter((stop) => stop.source === "OVAPI").map((stop) => stop.id);
-  if (codes.length === 0) return;
+  if (codes.length === 0) return null;
   try {
     await ovapiPasses(s, codes);
-  } catch {
-    // modes stay unknown
+    return null;
+  } catch (error) {
+    const reason = error instanceof OvBudgetError ? "limiet voor deze vraag bereikt" : error instanceof ToolInputError ? error.message : "OVapi niet bereikbaar";
+    return `Vervoerswijzen van bushaltes onbekend: ${reason}`;
   }
 }
 
@@ -142,10 +145,11 @@ export async function ovStopsNear(ctx: IntelToolContext, budget: TurnBudget, inp
   const s = session(ctx, budget, signal);
   const { stops, notes } = await allStops(s);
   const near = within(stops, center, radiusM).slice(0, MAX_STOPS);
-  await learnModes(
+  const modesNote = await learnModes(
     s,
     near.map((entry) => entry.stop),
   );
+  if (modesNote) notes.push(modesNote);
   return { stops: near.map((entry) => toOvStop(entry.stop, entry.distanceM)), ...(notes.length > 0 ? { note: notes.join(". ") } : {}) };
 }
 
@@ -300,6 +304,10 @@ export async function ovDepartures(
     .slice(0, MAX_DEPARTURES)
     .map(toOvDeparture);
   const allNotes = [...notes, ...result.notes];
+  // NS answers at most NS_MAX_JOURNEYS departures: then later trains in the window may be missing
+  const trains = result.deps.filter((dep) => dep.train);
+  const lastTrain = Math.max(...trains.map((dep) => dep.planned.getTime()));
+  if (trains.length >= NS_MAX_JOURNEYS && lastTrain < end) allNotes.push(`NS gaf maximaal ${NS_MAX_JOURNEYS} treinvertrekken (tot ${hhmm(new Date(lastTrain))}); latere treinen binnen het venster ontbreken`);
   if (ovapiStops.length > 0 && from.getTime() < now.getTime() - 2 * MIN) allNotes.push(OVAPI_PAST_NOTE);
   return { stop: toOvStop(chosen, distanceM), departures, ...(allNotes.length > 0 ? { note: allNotes.join(". ") } : {}) };
 }
@@ -312,8 +320,14 @@ function readJourneyId(input: unknown): JourneyRef {
   const id = String(input ?? "").trim();
   const ns = /^NS:(\d{1,6}):(\d{4}-\d{2}-\d{2})$/.exec(id);
   if (ns) return { kind: "ns", train: ns[1], date: ns[2] };
-  const ovapi = /^OVAPI:([\w:.-]{3,80}?)(?:@([\w.-]{1,40}))?$/.exec(id);
-  if (ovapi) return { kind: "ovapi", key: ovapi[1], code: ovapi[2] ?? null };
+  if (id.startsWith("OVAPI:")) {
+    // Stop area codes may hold spaces, '&' or '+' ("Bd CS", "W&aAnj"): split on the last '@'
+    const rest = id.slice("OVAPI:".length);
+    const at = rest.lastIndexOf("@");
+    const key = at < 0 ? rest : rest.slice(0, at);
+    const code = at < 0 ? null : rest.slice(at + 1);
+    if (/^[\w:.-]{3,80}$/.test(key) && (code === null || /^[\x20-\x7e]{1,40}$/.test(code))) return { kind: "ovapi", key, code };
+  }
   throw new ToolInputError("Onbekende journeyId; gebruik er een uit ovDepartures of predictOvMovement");
 }
 
@@ -344,7 +358,12 @@ async function resolveDestination(ctx: IntelToolContext, s: OvSession, destinati
     .filter((entry) => entry.score > 0)
     .sort((a, b) => b.score - a.score || metresBetween(near, a.area.latLng) - metresBetween(near, b.area.latLng));
   if (scored[0]) return { name: scored[0].area.name, town: scored[0].area.town, latLng: scored[0].area.latLng };
-  const station = (await loadNsStations(s)).find((candidate) => normalise(candidate.name) === wanted && close(candidate.latLng));
+  // NS being down must not break a bus journey: then no stations
+  const stations = await loadNsStations(s).catch((error) => {
+    if (error instanceof OvBudgetError) throw error;
+    return [] as OvStopInfo[];
+  });
+  const station = stations.find((candidate) => normalise(candidate.name) === wanted && close(candidate.latLng));
   if (station) return { name: station.name, town: null, latLng: station.latLng };
   const hit = (await geocode(destination, { fetch: ctx.fetch, signal: s.signal }).catch(() => []))[0];
   return hit && close(hit.latLng) ? { name: destination, town: null, latLng: hit.latLng } : null;
