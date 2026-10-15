@@ -29,4 +29,16 @@ describe("articleTextHash", () => {
     const file = (name: string) => `<div>Zie bijlage</div><figure data-trix-attachment="{&quot;filename&quot;:&quot;${name}&quot;,&quot;contentType&quot;:&quot;application/pdf&quot;}"><a href="https://cdn.jotihunt.net/${name}">x</a></figure>`;
     expect(articleTextHash(file("route.pdf"))).not.toBe(articleTextHash(file("kaart.pdf")));
   });
+
+  test("image refs are hashed by file name: signature and host changes keep the hash", () => {
+    const img = (ref: string) => `<div>Kaart</div><img src="${ref}">`;
+    const a = articleTextHash(img("https://jotihunt.nl/bericht-afbeeldingen/digitalocean/abc.png?signature=aaaa"));
+    expect(articleTextHash(img("https://jotihunt.nl/bericht-afbeeldingen/digitalocean/abc.png?signature=bbbb"))).toBe(a);
+    expect(articleTextHash(img("https://cdn.jotihunt.net/bericht-afbeeldingen/digitalocean/ABC.png?signature=cccc"))).toBe(a);
+    expect(articleTextHash(img("https://jotihunt.nl/bericht-afbeeldingen/digitalocean/def.png?signature=aaaa"))).not.toBe(a);
+  });
+
+  test("zero-width characters do not change the hash", () => {
+    expect(articleTextHash("<div>Wis\u200bsel om 23:00\ufeff</div>")).toBe(articleTextHash("<div>Wissel om 23:00</div>"));
+  });
 });

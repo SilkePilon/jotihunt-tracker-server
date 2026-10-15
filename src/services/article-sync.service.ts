@@ -84,10 +84,13 @@ export async function syncArticles(apiArticles: ApiArticle[], { now = () => new 
       if (isNaN(publishAt.getTime())) throw new Error(`Invalid publish_at: ${apiArticle.publish_at}`);
 
       const textHash = articleTextHash(content);
-      const previous = await Article.findOne({ id: apiArticle.id }, { _id: 0, contentHash: 1, textHash: 1, summaryHash: 1 }).lean();
+      const previous = await Article.findOne({ id: apiArticle.id }, { _id: 0, contentHash: 1, content: 1, textHash: 1, summaryHash: 1 }).lean();
       const time = now();
-      // Stored by the version before textHash, with a summary of this very content: still current, so re-key it
-      const rekey = Boolean(previous?.contentHash) && previous?.contentHash === contentHash && previous?.summaryHash === legacySummaryKey(contentHash);
+      // Stored by the version before textHash, with a summary of this very content: still current (same HTML or same text), so re-key it
+      const rekey =
+        Boolean(previous?.contentHash) &&
+        previous?.summaryHash === legacySummaryKey(previous?.contentHash ?? "") &&
+        (previous?.contentHash === contentHash || (!previous?.textHash && typeof previous?.content === "string" && articleTextHash(previous.content) === textHash));
       const textFields =
         previous?.textHash === textHash ? {} : { textHash, textChangedAt: rekey && !previous?.textHash ? new Date(time.getTime() - SUMMARY_DEBOUNCE_MS - 1) : time };
 

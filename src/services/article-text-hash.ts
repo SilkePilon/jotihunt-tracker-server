@@ -7,6 +7,16 @@ export function hashContent(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
+/** Signed image URLs rotate (signature, host): identify an image by its lower-cased file name */
+function imageKey(ref: string): string {
+  try {
+    const name = new URL(ref).pathname.split("/").filter(Boolean).pop();
+    return (name ? decodeURIComponent(name) : ref).toLowerCase();
+  } catch {
+    return ref;
+  }
+}
+
 /**
  * Hash of what a summary is made from: the readable text (all whitespace collapsed) plus the article's images (by URL)
  * and other attached files (by name), sorted and once each. Re-saving an article in the organisation's (Trix) editor
@@ -14,7 +24,7 @@ export function hashContent(content: string): string {
  * change and drives the hint flags).
  */
 export function articleTextHash(content: string): string {
-  const text = htmlToText(content).replace(/\s+/g, " ").trim();
-  const files = [...new Set([...articleImages(content).map((image) => image.url), ...articleAttachments(content).map((name) => `bijlage:${name}`)])].sort();
+  const text = htmlToText(content).replace(/[\u200b-\u200d\ufeff]/g, "").replace(/\s+/g, " ").trim();
+  const files = [...new Set([...articleImages(content).map((image) => imageKey(image.url)), ...articleAttachments(content).map((name) => `bijlage:${name}`)])].sort();
   return createHash("sha256").update(`${text}\n${files.join("\n")}`).digest("hex");
 }

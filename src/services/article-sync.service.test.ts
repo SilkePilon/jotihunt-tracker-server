@@ -186,6 +186,19 @@ describe("syncArticles", () => {
     expect(article.textChangedAt!.getTime()).toBeLessThan(LATER.getTime() - SUMMARY_DEBOUNCE_MS);
   });
 
+  test("a markup-only re-save of a legacy v2 article (no text hash) keeps and re-keys its summary", async () => {
+    const oldContent = "<div>Wissel om 23:00</div>";
+    const newContent = '<div class="trix-content">Wissel  om <strong>23:00</strong></div>';
+    const oldHash = createHash("sha256").update(oldContent).digest("hex");
+    await Article.collection.insertOne({ id: 25, title: "Article 25", type: "news", publishAt: NOW, content: oldContent, contentHash: oldHash, summary: "Wissel om 23:00.", summaryHash: legacySummaryKey(oldHash) });
+
+    await syncArticles([apiArticle(25, "news", newContent)], { now: () => LATER });
+
+    const article = await stored(25);
+    expect(article).toMatchObject({ summary: "Wissel om 23:00.", summaryHash: summaryKey(articleTextHash(newContent)) });
+    expect(article.textChangedAt!.getTime()).toBeLessThan(LATER.getTime() - SUMMARY_DEBOUNCE_MS);
+  });
+
   test("a v2 summary of other content is not re-keyed; the old summary stays visible", async () => {
     await Article.collection.insertOne({ id: 24, title: "Article 24", type: "news", publishAt: NOW, content: "<div>oud</div>", contentHash: "oude-hash", summary: "Oud.", summaryHash: legacySummaryKey("oude-hash") });
 
