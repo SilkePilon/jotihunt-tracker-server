@@ -5,6 +5,8 @@ import type { LatLng } from "./geo";
 export const PDOK_BASE_URL = "https://api.pdok.nl/bzk/locatieserver/search/v3_1";
 export const PDOK_TIMEOUT_MS = 10_000;
 const ROWS = 5;
+/** Asked from PDOK for a free search, so a hit in the named town further down can still be ranked up */
+const SEARCH_ROWS = 10;
 
 type Fetch = (url: string, init: RequestInit) => Promise<Response>;
 
@@ -39,15 +41,43 @@ export function parseWktPoint(value: unknown): LatLng | null {
   return match ? { lng: Number(match[1]), lat: Number(match[2]) } : null;
 }
 
-/** Up to 5 places for a free-text query (address, street, place, postcode) */
+const normalise = (value: string) =>
+  value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+/** Higher for a doc in a town the query names (its woonplaats over its gemeente), plus more for an address/street there when the query asks more than the town */
+function townScore(query: string, doc: Record<string, unknown>): number {
+  const padded = ` ${query} `;
+  const named = (field: unknown) => {
+    const town = typeof field === "string" ? normalise(field) : "";
+    return town && padded.includes(` ${town} `) ? town : null;
+  };
+  const town = named(doc.woonplaatsnaam);
+  const municipality = town ? null : named(doc.gemeentenaam);
+  const matched = town ?? municipality;
+  if (!matched) return 0;
+  const rest = padded.replace(` ${matched} `, " ").trim();
+  return (town ? 2 : 1) + (rest && (doc.type === "adres" || doc.type === "weg") ? 2 : 0);
+}
+
+/** Up to 5 places for a free-text query (address, street, place, postcode); results in a town named in the query first */
 export async function geocode(query: string, { fetch: fetchFn = fetch, signal }: { fetch?: Fetch; signal?: AbortSignal } = {}): Promise<GeocodeHit[]> {
   const q = String(query ?? "").trim();
   if (!q || q.length > 200) throw new ToolInputError("Zoekterm moet 1 tot 200 tekens zijn");
-  const docs = await pdokDocs(fetchFn, `${PDOK_BASE_URL}/free?q=${encodeURIComponent(q)}&rows=${ROWS}&fl=weergavenaam,type,centroide_ll`, signal);
-  return docs.flatMap((doc) => {
-    const latLng = parseWktPoint(doc.centroide_ll);
-    return latLng && typeof doc.weergavenaam === "string" ? [{ name: doc.weergavenaam, type: String(doc.type ?? ""), latLng }] : [];
-  });
+  const docs = await pdokDocs(fetchFn, `${PDOK_BASE_URL}/free?q=${encodeURIComponent(q)}&rows=${SEARCH_ROWS}&fl=weergavenaam,type,centroide_ll,woonplaatsnaam,gemeentenaam`, signal);
+  const wanted = normalise(q);
+  return docs
+    .map((doc, index) => ({ doc, index, score: townScore(wanted, doc) }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .flatMap(({ doc }) => {
+      const latLng = parseWktPoint(doc.centroide_ll);
+      return latLng && typeof doc.weergavenaam === "string" ? [{ name: doc.weergavenaam, type: String(doc.type ?? ""), latLng }] : [];
+    })
+    .slice(0, ROWS);
 }
 
 /** Up to 5 addresses nearest to a point, nearest first */

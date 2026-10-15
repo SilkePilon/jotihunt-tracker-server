@@ -3,7 +3,7 @@ import { Team } from "../../../models/team.model";
 import { formatRdAnswer } from "../../rd-answer";
 import { mockModel } from "../../../test/ai";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../../../test/db";
-import { fakeOvFetch, NS, nsDeparture, OVAPI, ovapiPass, STOP_AREAS, type OvFakeData } from "../../../test/ov-fixtures";
+import { fakeOvFetch, NS, nsDeparture, OVAPI, PDOK, ovapiPass, STOP_AREAS, type OvFakeData } from "../../../test/ov-fixtures";
 import { runTool } from "../../../test/tools";
 import { resetOvCaches } from "../ov.client";
 import { createTurnBudget, type IntelToolContext, type TurnBudget } from "./context";
@@ -77,6 +77,20 @@ describe("ovStopsNear", () => {
   test("an unknown place is an error", async () => {
     const { tools } = setup();
     expect(await runTool(tools.ovStopsNear, { near: "Nergenshuizen" })).toEqual({ error: 'Plaats "Nergenshuizen" niet gevonden' });
+  });
+
+  test("a station name matches an OVapi stop area or NS station before PDOK", async () => {
+    const pdok = (calls: { url: string }[]) => calls.filter((call) => call.url.startsWith(PDOK));
+    const zutphen = setup();
+    const atZutphen = (await runTool(zutphen.tools.ovStopsNear, { near: "Station Zutphen" })) as { stops: Stop[] };
+    expect(atZutphen.stops[0]).toMatchObject({ name: "Station", town: "Zutphen", distanceM: 0 });
+    // "Deventer, Station" in Deventer, written the other way round
+    const deventer = (await runTool(zutphen.tools.ovStopsNear, { near: "station deventer" })) as { stops: Stop[] };
+    expect(deventer.stops[0]).toMatchObject({ id: "dvtbus", distanceM: 0 });
+    // No OVapi stop area named so: the NS station "Lochem"
+    const lochem = (await runTool(zutphen.tools.ovStopsNear, { near: "Station Lochem" })) as { stops: Stop[] };
+    expect(lochem.stops[0]).toMatchObject({ id: "NS:LC", distanceM: 0 });
+    expect(pdok(zutphen.calls)).toHaveLength(0);
   });
 
   test("OVapi down is a Dutch error", async () => {
@@ -310,6 +324,19 @@ describe("predictOvMovement", () => {
     expect(result.candidates.length).toBeGreaterThan(0);
     expect(result.candidates.every((candidate) => candidate.via.startsWith("bus"))).toBe(true);
     expect(calls.some((call) => call.url.startsWith(NS))).toBe(false);
+  });
+
+  test("from can be a place name: a station name, else PDOK", async () => {
+    const { tools, calls } = setup();
+    const byName = (await runTool(tools.predictOvMovement, { from: "Station Zutphen", seenAt: "2026-10-15T14:00:00+02:00" })) as Prediction;
+    expect(byName.candidates.some((candidate) => candidate.journeyId === "NS:31241:2026-10-15")).toBe(true);
+    const askedPdok = (q: string) => calls.some((call) => call.url.startsWith(PDOK) && new URL(call.url).searchParams.get("q") === q);
+    expect(askedPdok("Station Zutphen")).toBe(false);
+    const gorssel = (await runTool(tools.predictOvMovement, { from: "Gorssel", seenAt: "2026-10-15T14:00:00+02:00" })) as Prediction;
+    expect(gorssel).toHaveProperty("candidates");
+    expect(askedPdok("Gorssel")).toBe(true);
+    expect(await runTool(tools.predictOvMovement, { from: "Nergenshuizen", seenAt: "2026-10-15T14:00:00+02:00" })).toEqual({ error: 'Plaats "Nergenshuizen" niet gevonden' });
+    expect(await runTool(tools.predictOvMovement, { from: " ", seenAt: "2026-10-15T14:00:00+02:00" })).toEqual({ error: "Geef bij from een punt of plaatsnaam" });
   });
 
   test("no stop within walking distance", async () => {

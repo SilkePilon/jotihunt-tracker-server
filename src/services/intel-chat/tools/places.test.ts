@@ -4,7 +4,7 @@ import { geminiReply, localGoogle, mockModel } from "../../../test/ai";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../../../test/db";
 import { runTool } from "../../../test/tools";
 import { createTurnBudget, type IntelToolContext } from "./context";
-import { OVERPASS_URL, aerialPhotoUrl, placesTools } from "./places";
+import { OVERPASS_URL, OVERPASS_URLS, aerialPhotoUrl, placesTools, resetOverpassEndpoint } from "./places";
 
 const HQ = "188362 440722";
 const hq = fromRd(188_362, 440_722);
@@ -37,6 +37,7 @@ const queryOf = (call: Call) =>
   );
 
 describe("findPlaces", () => {
+  beforeEach(resetOverpassEndpoint);
   const ELEMENTS = {
     elements: [
       { type: "node", id: 1, ...north(500), tags: { amenity: "place_of_worship", religion: "christian", name: "Eusebiuskerk" } },
@@ -126,12 +127,54 @@ describe("findPlaces", () => {
     expect(result.places).toHaveLength(25);
   });
 
-  test("Overpass failures become a Dutch { error }", async () => {
-    expect(await runTool(tools({ fetch: fakeFetch({}, 429).fetch }).findPlaces, { near: HQ, kinds: ["church"] })).toEqual({ error: "Overpass (OpenStreetMap) is druk (HTTP 429); probeer het later" });
+  test("every endpoint busy or down becomes one Dutch { error }", async () => {
+    const busy = fakeFetch({}, 429);
+    expect(await runTool(tools({ fetch: busy.fetch }).findPlaces, { near: HQ, kinds: ["church"] })).toEqual({ error: "OpenStreetMap (Overpass) is nu overbelast, probeer het zo opnieuw" });
+    expect(busy.calls.map((call) => call.url)).toEqual(OVERPASS_URLS);
     const down = async () => {
       throw new TypeError("fetch failed");
     };
-    expect(await runTool(tools({ fetch: down }).findPlaces, { near: HQ, kinds: ["church"] })).toEqual({ error: "Overpass (OpenStreetMap) niet bereikbaar" });
+    expect(await runTool(tools({ fetch: down }).findPlaces, { near: HQ, kinds: ["church"] })).toEqual({ error: "OpenStreetMap (Overpass) is nu overbelast, probeer het zo opnieuw" });
+  });
+
+  test("a busy, failing or unreachable endpoint falls over to the next; one budget unit; the working one is tried first next time", async () => {
+    const calls: Call[] = [];
+    const answers: (() => Response)[] = [() => new Response("at capacity", { status: 504 }), () => new Response("busy", { status: 429 }), () => { throw new TypeError("fetch failed"); }, () => Response.json(ELEMENTS)];
+    const fetch = async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      const answer = answers.shift();
+      return answer ? answer() : Response.json(ELEMENTS);
+    };
+    const budget = createTurnBudget();
+    const turn = placesTools({ articleId: 1, now: () => new Date(), toolModel: mockModel(() => ""), budget, fetch });
+    const result = (await runTool(turn.findPlaces, { near: HQ, kinds: ["windmill"] })) as { places: Record<string, unknown>[] };
+    expect(result.places.map((place) => place.name)).toEqual(["De Kroon"]);
+    expect(calls.map((call) => call.url)).toEqual(OVERPASS_URLS);
+    for (const call of calls) expect(call.init.headers).toMatchObject({ "User-Agent": "jotihunt-tracker/1.0 (Intel chat; +https://jotihunt.silkepilon.dev)", Accept: "application/json" });
+    expect(budget.findPlaces).toBe(1);
+    await runTool(turn.findPlaces, { near: HQ, kinds: ["windmill"] });
+    expect(calls[4].url).toBe(OVERPASS_URLS[3]);
+  });
+
+  test("a bad query (other 4xx) is not retried elsewhere", async () => {
+    const { fetch, calls } = fakeFetch({}, 400);
+    expect(await runTool(tools({ fetch }).findPlaces, { near: HQ, kinds: ["church"] })).toEqual({ error: "Overpass (OpenStreetMap) gaf HTTP 400" });
+    expect(calls).toHaveLength(1);
+  });
+
+  test("a cancelled request stops trying other endpoints", async () => {
+    const controller = new AbortController();
+    const calls: string[] = [];
+    const fetch = async (url: string) => {
+      calls.push(url);
+      controller.abort();
+      throw new DOMException("aborted", "AbortError");
+    };
+    const budget = createTurnBudget();
+    const turn = placesTools({ articleId: 1, now: () => new Date(), toolModel: mockModel(() => ""), budget, fetch });
+    const result = await (turn.findPlaces.execute!({ near: HQ, kinds: ["church"] }, { abortSignal: controller.signal, toolCallId: "1", messages: [], context: {} as never }) as Promise<unknown>);
+    expect(result).toHaveProperty("error");
+    expect(calls).toHaveLength(1);
   });
 
   test("at most 4 searches per turn", async () => {

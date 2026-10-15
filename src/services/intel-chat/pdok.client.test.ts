@@ -27,7 +27,29 @@ describe("PDOK client", () => {
   test("geocode asks /free with the fields we need and skips docs without a point", async () => {
     const { fetch, urls } = fakeFetch(FREE);
     expect(await geocode("Stikkerstraat 10 Arnhem", { fetch })).toEqual([{ name: "Mr D.U. Stikkerstraat 10, 6842CW Arnhem", type: "adres", latLng: { lat: 51.95386777, lng: 5.87232125 } }]);
-    expect(urls[0]).toBe("https://api.pdok.nl/bzk/locatieserver/search/v3_1/free?q=Stikkerstraat%2010%20Arnhem&rows=5&fl=weergavenaam,type,centroide_ll");
+    expect(urls[0]).toBe("https://api.pdok.nl/bzk/locatieserver/search/v3_1/free?q=Stikkerstraat%2010%20Arnhem&rows=10&fl=weergavenaam,type,centroide_ll,woonplaatsnaam,gemeentenaam");
+  });
+
+  test("results in a town named in the query come first, its addresses/streets before the town itself; at most 5", async () => {
+    const doc = (weergavenaam: string, type: string, woonplaatsnaam: string, gemeentenaam: string) => ({ weergavenaam, type, woonplaatsnaam, gemeentenaam, centroide_ll: "POINT(6 52)" });
+    const { fetch } = fakeFetch({
+      response: {
+        docs: [
+          doc("Station, Vlodrop", "weg", "Vlodrop", "Roerdalen"),
+          doc("Stationsweg, Beek", "weg", "Beek", "Montferland"),
+          doc("Zutphen", "woonplaats", "Zutphen", "Zutphen"),
+          doc("Stationsplein, Zutphen", "weg", "Zutphen", "Zutphen"),
+          doc("Station, Venlo", "weg", "Venlo", "Venlo"),
+          doc("Stationsstraat, Warnsveld", "weg", "Warnsveld", "Zutphen"),
+          doc("Station, Lent", "weg", "Lent", "Nijmegen"),
+        ],
+      },
+    });
+    expect((await geocode("Station Zutphen", { fetch })).map((hit) => hit.name)).toEqual(["Stationsplein, Zutphen", "Stationsstraat, Warnsveld", "Zutphen", "Station, Vlodrop", "Stationsweg, Beek"]);
+    // Only the town asked: PDOK's order (the town itself first)
+    expect((await geocode("Zutphen", { fetch })).map((hit) => hit.name).slice(0, 3)).toEqual(["Zutphen", "Stationsplein, Zutphen", "Stationsstraat, Warnsveld"]);
+    // No town in the query: PDOK's order
+    expect((await geocode("Stationsweg", { fetch })).map((hit) => hit.name)[0]).toBe("Station, Vlodrop");
   });
 
   test("reverseGeocode asks /reverse and rounds the distance", async () => {

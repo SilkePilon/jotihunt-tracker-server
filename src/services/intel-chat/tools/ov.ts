@@ -27,7 +27,7 @@ import { geocode } from "../pdok.client";
 import { pointResult, type PointResult } from "../point";
 import { areasOverview } from "./app-data";
 import { createTurnBudget, safely, spend, ToolInputError, type IntelToolContext, type TurnBudget } from "./context";
-import { POINT_DESCRIPTION, readArea, readPoint } from "./map";
+import { POINT_DESCRIPTION, readArea } from "./map";
 
 const NO_KEY_NOTE = "Geen NS_API_KEY ingesteld: treinen en treinstations ontbreken, alleen bus/tram/metro/boot (OVapi)";
 const NS_DOWN_NOTE = "NS-API niet bereikbaar: treinen en treinstations ontbreken";
@@ -78,12 +78,34 @@ const walkMinutes = (distanceM: number) => Math.max(1, Math.round((distanceM * D
 const delayMin = (planned: Date, expected: Date) => Math.round((expected.getTime() - planned.getTime()) / MIN);
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
-/** A point, or the first PDOK hit for a place name */
-async function resolveNear(ctx: IntelToolContext, input: unknown, signal?: AbortSignal): Promise<LatLng> {
+const normalise = (value: string) =>
+  value
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+const wordsOf = (value: string) => new Set(normalise(value).split(" ").filter(Boolean));
+const sameWords = (a: Set<string>, b: Set<string>) => a.size === b.size && [...a].every((word) => b.has(word));
+
+/** A stop named like the text: an OVapi stop area by its words with the town in any order ("Station Zutphen" = "Zutphen, Station"), else an NS station ("Station Zutphen" = "Zutphen") */
+function stopNamed(stops: OvStopInfo[], text: string): OvStopInfo | null {
+  const wanted = wordsOf(text);
+  if (wanted.size < 2) return null;
+  const area = stops.find((stop) => stop.source === "OVAPI" && sameWords(wanted, wordsOf(`${stop.town ?? ""} ${stop.name}`)));
+  if (area) return area;
+  const withoutStation = new Set([...wanted].filter((word) => word !== "station"));
+  return stops.find((stop) => stop.source === "NS" && (sameWords(wanted, wordsOf(stop.name)) || (withoutStation.size < wanted.size && sameWords(withoutStation, wordsOf(stop.name))))) ?? null;
+}
+
+/** A point, a stop or station named so, else the first PDOK hit for a place name */
+async function resolveNear(ctx: IntelToolContext, input: unknown, stops: OvStopInfo[], signal?: AbortSignal, field?: string): Promise<LatLng> {
   const nearText = String(input ?? "").trim();
-  if (!nearText) throw new ToolInputError("Geef een punt of plaatsnaam");
+  if (!nearText) throw new ToolInputError(field ? `Geef bij ${field} een punt of plaatsnaam` : "Geef een punt of plaatsnaam");
   const parsed = parseCoordinate(nearText);
   if (parsed) return parsed.latLng;
+  const stop = stopNamed(stops, nearText);
+  if (stop) return stop.latLng;
   const hit = (await geocode(nearText, { fetch: ctx.fetch, signal }))[0];
   if (!hit) throw new ToolInputError(`Plaats "${nearText.slice(0, 60)}" niet gevonden`);
   return hit.latLng;
@@ -141,9 +163,9 @@ async function learnModes(s: OvSession, stops: OvStopInfo[]): Promise<string | n
 
 export async function ovStopsNear(ctx: IntelToolContext, budget: TurnBudget, input: { near: string; radiusM?: number }, signal?: AbortSignal): Promise<{ stops: OvStop[]; note?: string }> {
   const radiusM = Math.round(clamp(Number(input.radiusM) || 1000, 50, 5000));
-  const center = await resolveNear(ctx, input.near, signal);
   const s = session(ctx, budget, signal);
   const { stops, notes } = await allStops(s);
+  const center = await resolveNear(ctx, input.near, stops, signal);
   const near = within(stops, center, radiusM).slice(0, MAX_STOPS);
   const modesNote = await learnModes(
     s,
@@ -285,7 +307,7 @@ export async function ovDepartures(
   let distanceM = 0;
   if (!chosen) {
     if (id.startsWith("NS:")) throw new ToolInputError(`Station ${id.slice(3, 20)} niet gevonden`);
-    const center = await resolveNear(ctx, id, signal);
+    const center = await resolveNear(ctx, id, stops, signal);
     const nearest = within(stops, center, 5000)[0];
     if (!nearest) throw new ToolInputError("Geen halte of station binnen 5 km");
     chosen = nearest.stop;
@@ -331,13 +353,6 @@ function readJourneyId(input: unknown): JourneyRef {
   throw new ToolInputError("Onbekende journeyId; gebruik er een uit ovDepartures of predictOvMovement");
 }
 
-const normalise = (value: string) =>
-  value
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
 
 /** Where a destination sign ("Deventer", "Arnhem Centraal", "Warnsveld") is: an OVapi stop area, an NS station, else PDOK */
 async function resolveDestination(ctx: IntelToolContext, s: OvSession, destination: string, near: LatLng): Promise<{ name: string; town: string | null; latLng: LatLng } | null> {
@@ -577,7 +592,8 @@ export async function predictOvMovement(
   input: { from: string; seenAt: string; maxWalkM?: number; area?: string; modes?: string[] },
   signal?: AbortSignal,
 ): Promise<{ candidates: OvCandidate[]; assumptions: string[]; note?: string }> {
-  const from = readPoint(input.from, "from").latLng;
+  const fromText = String(input.from ?? "").trim();
+  if (!fromText) throw new ToolInputError("Geef bij from een punt of plaatsnaam");
   const seen = parseOvTime(input.seenAt);
   if (!seen) throw new ToolInputError("seenAt moet een tijd zijn (ISO 8601, bv. 2026-10-17T14:05:00+02:00)");
   const now = ctx.now();
@@ -592,6 +608,7 @@ export async function predictOvMovement(
   if (modes.size < OV_MODES.length) assumptions.push(`Alleen ${[...modes].map((mode) => MODE_WORD[mode]).join(", ")}`);
 
   const { stops, notes } = await allStops(s);
+  const from = await resolveNear(ctx, fromText, stops, signal, "from");
   const near = within(stops, from, maxWalkM)
     .filter((entry) => (entry.stop.source === "NS" ? modes.has("TRAIN") : [...modes].some((mode) => mode !== "TRAIN")))
     .slice(0, MAX_NEAR_STOPS);
@@ -791,7 +808,7 @@ export function ovTools(turn: IntelToolContext) {
       inputSchema: jsonSchema<{ from: string; seenAt: string; maxWalkM?: number; area?: string; modes?: string[] }>({
         type: "object",
         properties: {
-          from: { type: "string", description: `Waar het team gezien is. ${POINT_DESCRIPTION}` },
+          from: { type: "string", description: `Waar het team gezien is. ${POINT_DESCRIPTION}, of een plaatsnaam/station (bv. "Station Zutphen")` },
           seenAt: { type: "string", description: "Wanneer (ISO 8601, bv. 2026-10-17T14:05:00+02:00)" },
           maxWalkM: { type: "number", description: "Maximale loopafstand naar een halte in meters (standaard 800, 100-3000)" },
           area: { type: "string", enum: [...AREAS], description: "Deelgebied van het vossenteam: kandidaten daarbinnen scoren hoger" },

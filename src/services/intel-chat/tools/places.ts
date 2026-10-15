@@ -13,8 +13,24 @@ type Fetch = (url: string, init: RequestInit) => Promise<Response>;
 
 // --- findPlaces (OpenStreetMap via Overpass) --------------------------------------------------------------------
 
-export const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
+/** Public Overpass instances, tried in order when one is busy or down */
+export const OVERPASS_URLS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.private.coffee/api/interpreter",
+  "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+];
+export const OVERPASS_URL = OVERPASS_URLS[0];
+/** Total time for one search over all endpoints, and at most per endpoint */
 const OVERPASS_TIMEOUT_MS = 20_000;
+const OVERPASS_ENDPOINT_TIMEOUT_MS = 8_000;
+const OVERPASS_HEADERS = { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json", "User-Agent": "jotihunt-tracker/1.0 (Intel chat; +https://jotihunt.silkepilon.dev)" };
+const OVERPASS_BUSY = "OpenStreetMap (Overpass) is nu overbelast, probeer het zo opnieuw";
+/** The endpoint that answered last (tried first next time) */
+let lastOverpassUrl = OVERPASS_URL;
+export const resetOverpassEndpoint = () => {
+  lastOverpassUrl = OVERPASS_URL;
+};
 const OVERPASS_MAX_BYTES = 5 * 1024 * 1024;
 const DEFAULT_RADIUS_M = 3000;
 const MIN_RADIUS_M = 50;
@@ -81,21 +97,31 @@ interface OverpassElement {
   members?: { type: string; ref: number; role?: string }[];
 }
 
-async function askOverpass(fetchFn: Fetch, query: string, signal?: AbortSignal): Promise<OverpassElement[]> {
-  const timeout = AbortSignal.timeout(OVERPASS_TIMEOUT_MS);
-  let response: Response;
-  try {
-    response = await fetchFn(OVERPASS_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json", "User-Agent": "jotihunt-tracker (Intel chat)" },
-      body: `data=${encodeURIComponent(query)}`,
-      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-    });
-  } catch {
-    throw new ToolInputError("Overpass (OpenStreetMap) niet bereikbaar");
+/** POST the query to the endpoints in turn (last working first) until one answers; network errors, timeouts, 429 and 5xx go to the next */
+async function postOverpass(fetchFn: Fetch, query: string, signal?: AbortSignal): Promise<Response> {
+  const total = AbortSignal.timeout(OVERPASS_TIMEOUT_MS);
+  const overall = signal ? AbortSignal.any([signal, total]) : total;
+  for (const url of [lastOverpassUrl, ...OVERPASS_URLS.filter((candidate) => candidate !== lastOverpassUrl)]) {
+    if (overall.aborted) break;
+    let response: Response;
+    try {
+      response = await fetchFn(url, { method: "POST", headers: OVERPASS_HEADERS, body: `data=${encodeURIComponent(query)}`, signal: AbortSignal.any([overall, AbortSignal.timeout(OVERPASS_ENDPOINT_TIMEOUT_MS)]) });
+    } catch {
+      continue;
+    }
+    if (response.status === 429 || response.status >= 500) {
+      await response.body?.cancel().catch(() => {});
+      continue;
+    }
+    if (!response.ok) throw new ToolInputError(`Overpass (OpenStreetMap) gaf HTTP ${response.status}`);
+    lastOverpassUrl = url;
+    return response;
   }
-  if (response.status === 429 || response.status === 504) throw new ToolInputError(`Overpass (OpenStreetMap) is druk (HTTP ${response.status}); probeer het later`);
-  if (!response.ok) throw new ToolInputError(`Overpass (OpenStreetMap) gaf HTTP ${response.status}`);
+  throw new ToolInputError(OVERPASS_BUSY);
+}
+
+async function askOverpass(fetchFn: Fetch, query: string, signal?: AbortSignal): Promise<OverpassElement[]> {
+  const response = await postOverpass(fetchFn, query, signal);
   const bytes = await readCapped(response, OVERPASS_MAX_BYTES).catch(() => {
     throw new ToolInputError("Overpass (OpenStreetMap) niet bereikbaar");
   });
