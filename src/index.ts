@@ -18,6 +18,8 @@ import { HappyHourService } from "./services/happy-hour.service";
 import { Life360Client } from "./services/life360.client";
 import { life360ConfigFromEnv } from "./services/life360.helpers";
 import { Life360Service, setLife360Service } from "./services/life360.service";
+import { BagWfsClient } from "./services/buildings.client";
+import { BuildingsService, setBuildingsService } from "./services/buildings.service";
 
 // A forgotten promise rejection is logged and the server keeps running; after an uncaught exception the process state
 // is unknown, so log it and exit (docker restarts the server in a second or two)
@@ -108,6 +110,10 @@ if (!process.env.LIFE360_SESSION_KEY?.trim()) logger.warn("LIFE360_SESSION_KEY n
 const life360 = new Life360Service({ config: life360Config, connection: getDemoStateStore().connection, client: new Life360Client(), logger: serviceLogger });
 setLife360Service(life360);
 life360.start().catch((error) => logger.error("Could not start the Life360 sync", error));
+
+// 3D buildings: z15 vector tiles from 3DBAG, cached in the real database on first view
+const buildings = new BuildingsService({ connection: getDemoStateStore().connection, client: new BagWfsClient(), logger: serviceLogger });
+setBuildingsService(buildings);
 
 // Index maintenance of the real database runs in initDemoMode (and again whenever demo mode is switched off)
 

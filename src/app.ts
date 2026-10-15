@@ -30,6 +30,7 @@ import appRoute from "./routes/app.route";
 import settingsRoute from "./routes/settings.route";
 import telegramRoute from "./routes/telegram.route";
 import life360Route from "./routes/life360.route";
+import buildingsRoute from "./routes/buildings.route";
 import counterHuntRoute from "./routes/counter-hunt.route";
 import happyHourRoute from "./routes/happy-hour.route";
 import sentryTunnelRoute from "./routes/sentry-tunnel.route";
@@ -96,6 +97,8 @@ app.use("/push", pushRoute);
 app.use("/telegram", telegramRoute);
 // Members of the team's Life360 circle (memory only) and their avatars; the link itself is in the real database
 app.use("/life360", life360Route);
+// 3D building vector tiles (3DBAG), cached in the real database
+app.use("/buildings", buildingsRoute);
 app.use("/counter-hunt", counterHuntRoute);
 app.use("/happy-hour", happyHourRoute);
 // After the demo gate: verifyToken reads the users of the default connection. The setting itself is global (real database).

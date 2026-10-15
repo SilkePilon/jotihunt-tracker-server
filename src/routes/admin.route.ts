@@ -2,6 +2,7 @@ import express from "express";
 import * as adminController from "../controllers/admin.controller";
 import * as adminAuthController from "../auth/admin-auth.controller";
 import { INVITE_EXPIRY_KEYS, INVITE_MAX_USES } from "../auth/invites";
+import * as buildingsController from "../controllers/buildings.controller";
 import * as life360Controller from "../controllers/life360.controller";
 import * as notificationsController from "../controllers/notifications.controller";
 import * as telegramController from "../controllers/telegram.controller";
@@ -105,6 +106,23 @@ router.post(
 );
 router.post("/life360/refresh", [verifyToken, isAdmin], life360Controller.refresh);
 router.delete("/life360/link", [verifyToken, isAdmin], life360Controller.unlink);
+// 3D buildings: the tile cache (3DBAG) and the jobs that fill it
+router.get("/buildings", [verifyToken, isAdmin], buildingsController.getStatus);
+router.post("/buildings/refresh", [verifyToken, isAdmin], buildingsController.refresh);
+router.post(
+  "/buildings/prefetch",
+  [
+    verifyToken,
+    isAdmin,
+    validate([
+      body("lat").isFloat({ min: -90, max: 90 }).withMessage("Ongeldige locatie."),
+      body("lon").isFloat({ min: -180, max: 180 }).withMessage("Ongeldige locatie."),
+      body("radiusKm").isFloat({ min: 1, max: 25 }).withMessage("Straal moet tussen 1 en 25 km liggen."),
+    ]),
+  ],
+  buildingsController.prefetch,
+);
+router.delete("/buildings", [verifyToken, isAdmin], buildingsController.clear);
 router.delete("/users/:id", [verifyToken, isAdmin, validate(deleteValidator)], adminController.deleteUser);
 router.put("/users/:id", [verifyToken, isAdmin, validate(updateValidator)], adminController.updateUser);
 router.put(
