@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { Article } from "../models/article.model";
+import { createHash } from "node:crypto";
+import { Article, hintSplitKey, TEXT_DEBOUNCE_MS } from "../models/article.model";
 import { HintCell, HintCellStatus } from "../models/hint-cell.model";
 import { mockModel } from "../test/ai";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { GeminiError } from "./ai/gemini-error";
 import { getBoardJson, invalidateBoardCache } from "./hint-board.service";
+import { articleTextHash } from "./article-text-hash";
 import { DEFAULT_AREAS } from "./hint-parser";
 import {
   applyHintSplit,
@@ -12,6 +14,7 @@ import {
   createHintSplitJob,
   createHintSplitter,
   findPendingHintSplits,
+  migrateHintSplitKeys,
   HINT_SPLIT_MAX_PAUSE_MS,
   HINT_SPLIT_PAUSE_MS,
   hintBlocks,
@@ -192,22 +195,28 @@ describe("snippetFor", () => {
   });
 });
 
+
+/** Long before the debounce of any test run */
+const STABLE = new Date("2026-01-01T00:00:00Z");
+
 describe("applyHintSplit", () => {
   const content = SAMPLE;
   const slotTime = new Date("2026-10-17T12:00:00.000Z");
   const cell = (area: string, status: HintCellStatus, extra: Record<string, unknown> = {}) =>
     HintCell.create({ articleId: 1, area, publishAt: slotTime, slotTime, status, ...extra });
-  const makeArticle = (contentHash = "h1") => Article.create({ id: 1, title: "Hint", type: "hint", publishAt: slotTime, content, contentHash });
+  const makeArticle = (textHash = "t1", extra: Record<string, unknown> = {}) =>
+    Article.create({ id: 1, title: "Hint", type: "hint", publishAt: slotTime, content, contentHash: "h1", textHash, textChangedAt: STABLE, ...extra });
   const find = async (area: string) => (await HintCell.findOne({ articleId: 1, area }).lean())!;
 
   test("an open cell becomes none (snippet unset); a none cell becomes open with its snippet", async () => {
     await makeArticle();
     await cell("alpha", HintCellStatus.None);
     await cell("bravo", HintCellStatus.Open, { snippet: "Bravo: -" });
-    const { changed } = await applyHintSplit({ id: 1, content, contentHash: "h1" }, [
+    const { changed, stored } = await applyHintSplit({ id: 1, content, textHash: "t1" }, [
       { area: "alpha", none: false, blocks: [1] },
       { area: "bravo", none: true, blocks: [] },
     ]);
+    expect(stored).toBe(true);
     expect(changed.sort()).toEqual(["alpha", "bravo"]);
     const alpha = await find("alpha");
     expect(alpha.status).toBe(HintCellStatus.Open);
@@ -220,7 +229,7 @@ describe("applyHintSplit", () => {
   test("a solved cell is untouched", async () => {
     await makeArticle();
     await cell("alpha", HintCellStatus.Solved, { answer: "1234 5678", snippet: "oud" });
-    const { changed } = await applyHintSplit({ id: 1, content, contentHash: "h1" }, [{ area: "alpha", none: true, blocks: [] }]);
+    const { changed } = await applyHintSplit({ id: 1, content, textHash: "t1" }, [{ area: "alpha", none: true, blocks: [] }]);
     expect(changed).toEqual([]);
     expect(await find("alpha")).toMatchObject({ status: HintCellStatus.Solved, answer: "1234 5678", snippet: "oud" });
   });
@@ -229,7 +238,7 @@ describe("applyHintSplit", () => {
     await makeArticle();
     await cell("alpha", HintCellStatus.Open, { snippet: "Alpha: <img src='/x/a.png' alt='A'><br>" });
     await cell("charlie", HintCellStatus.Open, { snippet: "c" });
-    const { changed } = await applyHintSplit({ id: 1, content, contentHash: "h1" }, [{ area: "alpha", none: false, blocks: [1] }]);
+    const { changed } = await applyHintSplit({ id: 1, content, textHash: "t1" }, [{ area: "alpha", none: false, blocks: [1] }]);
     expect(changed).toEqual([]);
     expect(await find("charlie")).toMatchObject({ status: HintCellStatus.Open, snippet: "c" });
   });
@@ -247,7 +256,7 @@ describe("applyHintSplit", () => {
       },
     })) as unknown as typeof HintCell.findOne);
     try {
-      const { changed } = await applyHintSplit({ id: 1, content, contentHash: "h1" }, [{ area: "alpha", none: false, blocks: [1] }]);
+      const { changed } = await applyHintSplit({ id: 1, content, textHash: "t1" }, [{ area: "alpha", none: false, blocks: [1] }]);
       expect(spy).toHaveBeenCalled();
       expect(changed).toEqual([]);
     } finally {
@@ -258,22 +267,35 @@ describe("applyHintSplit", () => {
     expect(alpha).not.toHaveProperty("snippet");
   });
 
-  test("sets hintSplitHash, but not when the content changed meanwhile", async () => {
-    await makeArticle("h1");
-    await applyHintSplit({ id: 1, content, contentHash: "h1" }, []);
-    expect((await Article.findOne({ id: 1 }).lean())!.hintSplitHash).toBe("h1");
-    await Article.updateOne({ id: 1 }, { $set: { contentHash: "h2" } });
-    await applyHintSplit({ id: 1, content, contentHash: "h1-old" }, []);
-    expect((await Article.findOne({ id: 1 }).lean())!.hintSplitHash).toBe("h1");
+  test("sets hintSplitHash to the split key of the text, but not when the text changed meanwhile", async () => {
+    await makeArticle("t1");
+    expect((await applyHintSplit({ id: 1, content, textHash: "t1" }, [])).stored).toBe(true);
+    expect((await Article.findOne({ id: 1 }).lean())!.hintSplitHash).toBe(hintSplitKey("t1"));
+    await Article.updateOne({ id: 1 }, { $set: { textHash: "t2" } });
+    expect((await applyHintSplit({ id: 1, content, textHash: "t1-old" }, [])).stored).toBe(false);
+    expect((await Article.findOne({ id: 1 }).lean())!.hintSplitHash).toBe(hintSplitKey("t1"));
   });
 
-  test("writes no cells when the stored content changed since the split was made", async () => {
-    await makeArticle("h2");
+  test("writes no cells and stores nothing when the stored text changed since the split was made", async () => {
+    await makeArticle("t2");
     await cell("alpha", HintCellStatus.None);
-    const { changed } = await applyHintSplit({ id: 1, content, contentHash: "h1" }, [{ area: "alpha", none: false, blocks: [1] }]);
+    const { changed, stored } = await applyHintSplit({ id: 1, content, textHash: "t1" }, [{ area: "alpha", none: false, blocks: [1] }]);
+    expect(stored).toBe(false);
     expect(changed).toEqual([]);
     expect(await find("alpha")).toMatchObject({ status: HintCellStatus.None });
     expect((await Article.findOne({ id: 1 }).lean())!.hintSplitHash).toBeUndefined();
+  });
+
+  test("a markup-only re-save during the split: the split is applied with the snippets of the current HTML", async () => {
+    // Same text and blocks, rotated (signed) image URL
+    const current = "intro<br>Alpha: <img src='/y/a.png?sig=2' alt='A'><br>Bravo: -";
+    await makeArticle("t1", { content: current, contentHash: "h2" });
+    await cell("alpha", HintCellStatus.None);
+    const { changed, stored } = await applyHintSplit({ id: 1, content, textHash: "t1" }, [{ area: "alpha", none: false, blocks: [1] }]);
+    expect(stored).toBe(true);
+    expect(changed).toEqual(["alpha"]);
+    expect((await find("alpha")).snippet).toContain("/y/a.png?sig=2");
+    expect((await Article.findOne({ id: 1 }).lean())!.hintSplitHash).toBe(hintSplitKey("t1"));
   });
 
   test("invalidates the board cache when something changed", async () => {
@@ -281,33 +303,67 @@ describe("applyHintSplit", () => {
     await cell("alpha", HintCellStatus.None);
     invalidateBoardCache();
     expect(JSON.parse(await getBoardJson()).cells[0].status).toBe(HintCellStatus.None);
-    await applyHintSplit({ id: 1, content, contentHash: "h1" }, [{ area: "alpha", none: false, blocks: [1] }]);
+    await applyHintSplit({ id: 1, content, textHash: "t1" }, [{ area: "alpha", none: false, blocks: [1] }]);
     expect(JSON.parse(await getBoardJson()).cells[0].status).toBe(HintCellStatus.Open);
   });
 });
 
 describe("findPendingHintSplits", () => {
-  test("hint articles whose current content has no split yet, newest first, never seeded test hints", async () => {
-    const at = (hour: number) => new Date(`2026-10-17T${hour}:00:00Z`);
+  const at = (hour: number) => new Date(`2026-10-17T${hour}:00:00Z`);
+
+  test("hint articles whose current text has no split yet, newest first, never seeded test hints", async () => {
+    const hint = (id: number, hour: number, extra: Record<string, unknown> = {}) => ({ id, title: `Hint ${id}`, type: "hint", publishAt: at(hour), content: `c${id}`, contentHash: `h${id}`, textHash: `t${id}`, textChangedAt: STABLE, ...extra });
     await Article.create([
-      { id: 1, title: "Oud", type: "hint", publishAt: at(10), content: "a", contentHash: "h1" },
-      { id: 2, title: "Nieuw", type: "hint", publishAt: at(12), content: "b", contentHash: "h2" },
-      { id: 3, title: "Gesplitst", type: "hint", publishAt: at(13), content: "c", contentHash: "h3", hintSplitHash: "h3" },
-      { id: 4, title: "Gewijzigd", type: "hint", publishAt: at(11), content: "d", contentHash: "h4b", hintSplitHash: "h4" },
-      { id: 5, title: "Nieuws", type: "news", publishAt: at(14), content: "e", contentHash: "h5" },
-      { id: 6, title: "Zonder hash", type: "hint", publishAt: at(15), content: "f" },
-      { id: 900001, title: "Testhint (seed)", type: "hint", publishAt: at(16), content: "g", contentHash: "h900001" },
+      hint(1, 10),
+      hint(2, 12),
+      hint(3, 13, { hintSplitHash: hintSplitKey("t3") }),
+      hint(4, 11, { hintSplitHash: hintSplitKey("t4-oud") }),
+      { ...hint(5, 14), type: "news" },
+      hint(6, 15, { textHash: undefined }),
+      hint(900001, 16),
     ]);
     const pending = await findPendingHintSplits(10);
     expect(pending.map((article) => article.id)).toEqual([2, 4, 1]);
-    expect(pending[0]).toEqual({ id: 2, title: "Nieuw", content: "b", contentHash: "h2" });
+    expect(pending[0]).toEqual({ id: 2, title: "Hint 2", content: "c2", textHash: "t2" });
     expect((await findPendingHintSplits(1)).map((article) => article.id)).toEqual([2]);
+  });
+
+  test("a changed text is pending only after it stayed the same for the debounce", async () => {
+    const now = new Date("2026-10-17T12:00:00Z");
+    await Article.create({ id: 1, title: "Hint", type: "hint", publishAt: at(10), content: "c", contentHash: "h", textHash: "t", textChangedAt: new Date(now.getTime() - TEXT_DEBOUNCE_MS + 1) });
+    expect(await findPendingHintSplits(10, now)).toEqual([]);
+    expect((await findPendingHintSplits(10, new Date(now.getTime() + 1))).map((article) => article.id)).toEqual([1]);
+  });
+});
+
+describe("migrateHintSplitKeys", () => {
+  const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+  const raw = (id: number, content: string, extra: Record<string, unknown> = {}) =>
+    Article.collection.insertOne({ id, title: `Hint ${id}`, type: "hint", publishAt: new Date(`2026-10-17T1${id}:00:00Z`), content, contentHash: sha(content), textHash: articleTextHash(content), textChangedAt: STABLE, ...extra });
+
+  test("re-keys splits of the current content without asking Gemini; others stay pending; idempotent", async () => {
+    const content = (id: number) => `intro<br>Alpha: tekst ${id}<br>Bravo: -`;
+    // Split done for the current content (old key = contentHash)
+    await raw(1, content(1), { hintSplitHash: sha(content(1)) });
+    // Never split
+    await raw(2, content(2));
+    // Split of older content
+    await raw(3, content(3), { hintSplitHash: "oude-hash" });
+
+    expect(await migrateHintSplitKeys()).toBe(1);
+    expect((await Article.findOne({ id: 1 }).lean())!.hintSplitHash).toBe(hintSplitKey(articleTextHash(content(1))));
+    expect(await migrateHintSplitKeys()).toBe(0);
+
+    const seen: number[] = [];
+    const job = createHintSplitJob({ splitter: { split: async (article) => (seen.push(Number(article.title.split(" ")[1])), [{ area: "alpha", none: false, blocks: [1] }]) }, areas: async () => AREAS, batch: 10 });
+    expect((await job.run()).done.sort()).toEqual([2, 3]);
+    expect(seen.sort()).toEqual([2, 3]);
   });
 });
 
 describe("createHintSplitJob", () => {
   const publishAt = new Date("2026-10-17T12:00:00.000Z");
-  const hint = (id: number, contentHash = `h${id}`) => Article.create({ id, title: `Hint ${id}`, type: "hint", publishAt, content: SAMPLE, contentHash });
+  const hint = (id: number, textHash = `t${id}`) => Article.create({ id, title: `Hint ${id}`, type: "hint", publishAt, content: SAMPLE, contentHash: `h${id}`, textHash, textChangedAt: STABLE });
   const noneCell = (articleId: number, area = "alpha") => HintCell.create({ articleId, area, publishAt, slotTime: publishAt, status: HintCellStatus.None });
   const alphaOpen: HintSplit = [{ area: "alpha", none: false, blocks: [1] }];
   const splitter = (split: HintSplitter["split"]): HintSplitter => ({ split });
@@ -333,8 +389,44 @@ describe("createHintSplitJob", () => {
     expect(await job.run()).toEqual({ done: [1], failed: [] });
     expect(seen).toEqual([{ title: "Hint 1", areas: AREAS }]);
     expect((await HintCell.findOne({ articleId: 1, area: "alpha" }).lean())!.status).toBe(HintCellStatus.Open);
-    expect((await Article.findOne({ id: 1 }).lean())!.hintSplitHash).toBe("h1");
+    expect((await Article.findOne({ id: 1 }).lean())!.hintSplitHash).toBe(hintSplitKey("t1"));
     expect((await job.run()).done).toEqual([]);
+  });
+
+  test("a markup-only change of a split hint (same text) is not split again", async () => {
+    await hint(1);
+    let calls = 0;
+    const job = createHintSplitJob({ splitter: splitter(async () => (calls++, alphaOpen)), areas: async () => AREAS });
+    await job.run();
+    await Article.updateOne({ id: 1 }, { $set: { contentHash: "h1-opnieuw-opgeslagen", content: SAMPLE.replace("intro", "<div>intro</div>") } });
+    await job.run();
+    expect(calls).toBe(1);
+  });
+
+  test("a text edit during the split: nothing stored, not done and not a failed attempt", async () => {
+    await hint(1);
+    await noneCell(1);
+    let calls = 0;
+    const job = createHintSplitJob({
+      splitter: splitter(async () => {
+        calls++;
+        // The organisation edits the text while Gemini works (the sync stores the new text and textChangedAt)
+        if (calls === 1) await Article.updateOne({ id: 1 }, { $set: { textHash: "t1-nieuw", textChangedAt: new Date() } });
+        return alphaOpen;
+      }),
+      areas: async () => AREAS,
+      maxAttempts: 1,
+    });
+    expect(await job.run()).toEqual({ done: [], failed: [] });
+    expect((await HintCell.findOne({ articleId: 1, area: "alpha" }).lean())!.status).toBe(HintCellStatus.None);
+    expect((await Article.findOne({ id: 1 }).lean())!.hintSplitHash).toBeUndefined();
+    // Waiting for the debounce: not picked up yet
+    expect(await job.run()).toEqual({ done: [], failed: [] });
+    expect(calls).toBe(1);
+    // Stable again: split (not given up, although maxAttempts is 1)
+    await Article.updateOne({ id: 1 }, { $set: { textChangedAt: STABLE } });
+    expect((await job.run()).done).toEqual([1]);
+    expect((await Article.findOne({ id: 1 }).lean())!.hintSplitHash).toBe(hintSplitKey("t1-nieuw"));
   });
 
   test("areas default to the area names the cells are made for", async () => {
@@ -356,7 +448,7 @@ describe("createHintSplitJob", () => {
     expect((await createHintSplitJob({ splitter: ok, areas: async () => AREAS, batch: 5 }).run()).done).toHaveLength(2);
   });
 
-  test("a non-retryable failure is tried twice for the same content, then left alone; a content change resets", async () => {
+  test("a non-retryable failure is tried twice for the same text, then left alone; a text change resets", async () => {
     await hint(1);
     let calls = 0;
     const job = createHintSplitJob({
@@ -370,7 +462,11 @@ describe("createHintSplitJob", () => {
     await job.run();
     await job.run();
     expect(calls).toBe(2);
+    // A markup-only change does not reset
     await Article.updateOne({ id: 1 }, { $set: { contentHash: "nieuw" } });
+    await job.run();
+    expect(calls).toBe(2);
+    await Article.updateOne({ id: 1 }, { $set: { textHash: "nieuw" } });
     await job.run();
     expect(calls).toBe(3);
   });

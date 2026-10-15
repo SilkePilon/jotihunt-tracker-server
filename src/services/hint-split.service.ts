@@ -1,10 +1,11 @@
 import { generateText, jsonSchema, Output, type JSONSchema7, type LanguageModel } from "ai";
-import { Article, publicArticlesFilter } from "../models/article.model";
+import { Article, HINT_SPLIT_VERSION, hintSplitKey, publicArticlesFilter, TEXT_DEBOUNCE_MS } from "../models/article.model";
 import { HintCell, HintCellStatus } from "../models/hint-cell.model";
 import { invalidAnswer, toGeminiError } from "./ai/gemini-error";
 import { createGeminiJob, GEMINI_JOB_MAX_PAUSE_MS, GEMINI_JOB_PAUSE_MS, type Tracked } from "./ai/gemini-job";
 import { attribute, figureParts, fileName } from "./article-media";
 import { getAreaNames } from "./article-sync.service";
+import { articleTextHash, hashContent } from "./article-text-hash";
 import { invalidateBoardCache } from "./hint-board.service";
 import { htmlToText } from "./html-text";
 
@@ -188,17 +189,26 @@ export function snippetFor(blocks: HintBlock[], split: AreaSplit): string | unde
   return html || undefined;
 }
 
+/** The same blocks (same count, same text per number): a split of one holds for the other */
+const sameBlocks = (a: HintBlock[], b: HintBlock[]) => a.length === b.length && a.every((block, i) => block.text === b[i].text);
+
 /**
  * Correct the article's cells by the split: per area with an AI result, an open or none cell gets status
  * none/open and the snippet of its blocks (solved cells are never touched). Compare-and-set on the status read, so a
- * solve that lands meanwhile wins. Then marks the article as split, unless its content changed since.
+ * solve that lands meanwhile wins. Then marks the article's text as split.
+ *
+ * Nothing is applied (`stored: false`) when the article's text changed since the split was made. A markup-only re-save
+ * meanwhile (same text) keeps the split valid: the snippets come from the current HTML (rotated image URLs) when its
+ * blocks are the same, else from the HTML that was split.
  */
-export async function applyHintSplit(article: { id: number; content: string; contentHash: string }, split: HintSplit): Promise<{ changed: string[] }> {
+export async function applyHintSplit(article: { id: number; content: string; textHash: string }, split: HintSplit): Promise<{ stored: boolean; changed: string[] }> {
   const changed: string[] = [];
-  // The split was made from older content: leave the cells for the next split
-  const stored = await Article.findOne({ id: article.id }, { _id: 0, contentHash: 1 }).lean();
-  if (stored?.contentHash !== article.contentHash) return { changed };
-  const blocks = hintBlocks(article.content);
+  const current = await Article.findOne({ id: article.id }, { _id: 0, textHash: 1, content: 1 }).lean();
+  // The split was made from an older text: leave the cells for the next split
+  if (current?.textHash !== article.textHash) return { stored: false, changed };
+  const splitBlocks = hintBlocks(article.content);
+  const currentBlocks = typeof current.content === "string" && current.content !== article.content ? hintBlocks(current.content) : splitBlocks;
+  const blocks = sameBlocks(currentBlocks, splitBlocks) ? currentBlocks : splitBlocks;
   for (const areaSplit of split) {
     const cell = await HintCell.findOne({ articleId: article.id, area: areaSplit.area }, { status: 1, snippet: 1 }).lean();
     if (!cell || cell.status === HintCellStatus.Solved) continue;
@@ -209,28 +219,58 @@ export async function applyHintSplit(article: { id: number; content: string; con
     const result = await HintCell.updateOne({ _id: cell._id, status: cell.status }, update);
     if (result.modifiedCount > 0) changed.push(areaSplit.area);
   }
-  await Article.updateOne({ id: article.id, contentHash: article.contentHash }, { $set: { hintSplitHash: article.contentHash } });
+  const marked = await Article.updateOne({ id: article.id, textHash: article.textHash }, { $set: { hintSplitHash: hintSplitKey(article.textHash) } });
   if (changed.length > 0) invalidateBoardCache();
-  return { changed };
+  return { stored: marked.matchedCount > 0, changed };
 }
 
 export interface PendingHintSplit {
   id: number;
   title: string;
   content: string;
-  contentHash: string;
+  textHash: string;
 }
 
-/** Hint articles whose current content has not been split by the AI yet, newest first; never seeded test hints */
-export async function findPendingHintSplits(limit: number): Promise<PendingHintSplit[]> {
+/**
+ * Hint articles whose current text has not been split by the AI yet, newest first; never seeded test hints. A text
+ * that changed less than TEXT_DEBOUNCE_MS before `now` waits (the cells keep their split meanwhile).
+ */
+export async function findPendingHintSplits(limit: number, now = new Date()): Promise<PendingHintSplit[]> {
   const articles = await Article.find(
-    { ...publicArticlesFilter(), type: "hint", contentHash: { $type: "string" }, $expr: { $ne: ["$hintSplitHash", "$contentHash"] } },
-    { _id: 0, id: 1, title: 1, content: 1, contentHash: 1 },
+    {
+      ...publicArticlesFilter(),
+      type: "hint",
+      textHash: { $type: "string" },
+      textChangedAt: { $lte: new Date(now.getTime() - TEXT_DEBOUNCE_MS) },
+      $expr: { $ne: ["$hintSplitHash", { $concat: ["$textHash", `:${HINT_SPLIT_VERSION}`] }] },
+    },
+    { _id: 0, id: 1, title: 1, content: 1, textHash: 1 },
   )
     .sort({ publishAt: -1 })
     .limit(limit)
     .lean();
   return articles as PendingHintSplit[];
+}
+
+/**
+ * Hint articles split by the version keyed on the raw HTML (hintSplitHash = contentHash) whose stored content is the
+ * one split: re-key to the text (no new Gemini call). Run after migrateArticleTextHashes (needs textHash).
+ * Idempotent; returns how many were re-keyed.
+ */
+export async function migrateHintSplitKeys(): Promise<number> {
+  const articles = await Article.find(
+    { type: "hint", contentHash: { $type: "string" }, textHash: { $type: "string" }, $expr: { $eq: ["$hintSplitHash", "$contentHash"] } },
+    { _id: 1, content: 1, contentHash: 1, textHash: 1 },
+  ).lean();
+  let rekeyed = 0;
+  for (const article of articles) {
+    const { contentHash, textHash } = article as { contentHash: string; textHash: string };
+    if (contentHash !== hashContent(article.content) || textHash !== articleTextHash(article.content)) continue;
+    // Not when the sync stored other content meanwhile
+    const result = await Article.updateOne({ _id: article._id, contentHash, textHash, hintSplitHash: contentHash }, { $set: { hintSplitHash: hintSplitKey(textHash) } });
+    rekeyed += result.modifiedCount;
+  }
+  return rekeyed;
 }
 
 /** Pause of the job after a failure that says Gemini is down or busy; doubles on every next one in a row */
@@ -261,8 +301,9 @@ export function createHintSplitJob({
       return pending.map((article) => ({ ...article, areas: names }));
     },
     work: (article) => splitter.split({ title: article.title, content: article.content }, article.areas),
-    store: (article, split) => applyHintSplit(article, split),
-    hashOf: (article) => article.contentHash,
+    // false: the text changed during the call (not done, not a failed attempt)
+    store: async (article, split) => (await applyHintSplit(article, split)).stored,
+    hashOf: (article) => article.textHash,
     ...options,
   });
 }

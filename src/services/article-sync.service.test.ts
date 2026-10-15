@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { Article, legacySummaryKey, summaryKey } from "../models/article.model";
+import { Article, hintSplitKey, legacySummaryKey, summaryKey, TEXT_DEBOUNCE_MS } from "../models/article.model";
 import { Area } from "../models/area.model";
 import { HintCell, HintCellStatus } from "../models/hint-cell.model";
 import { ApiArticle } from "../types/api";
@@ -8,6 +8,7 @@ import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { floorToHour, syncArticles } from "./article-sync.service";
 import { SUMMARY_DEBOUNCE_MS } from "./article-summary.service";
 import { articleTextHash } from "./article-text-hash";
+import { findPendingHintSplits } from "./hint-split.service";
 
 function apiArticle(id: number, type: string, content: string, publishAt = "2026-10-17T12:05:00.000000Z"): ApiArticle {
   return { id, title: `Article ${id}`, type, publish_at: publishAt, message: { content } } as ApiArticle;
@@ -143,10 +144,54 @@ describe("syncArticles", () => {
     expect(article).toMatchObject({ textHash, textChangedAt: NOW, summary: "Wissel om 23:00.", summaryHash: summaryKey(textHash!) });
   });
 
-  test("a formatting-only change of a hint still flags its cells (hints follow the raw content)", async () => {
-    await syncArticles([apiArticle(32, "hint", hintHtml)]);
-    const result = await syncArticles([apiArticle(32, "hint", hintHtml.replace("<div>", "<div class='x'>"))]);
-    expect(result.changedHints).toEqual([32]);
+  test("a formatting-only re-save of a hint flags nothing and keeps its split current (no new Gemini split)", async () => {
+    const signed = hintHtml.replace("a.png", "https://cdn.example/a/a.png?sig=1");
+    await syncArticles([apiArticle(32, "hint", signed)], { now: () => NOW });
+    const { textHash } = await stored(32);
+    await Article.updateOne({ id: 32 }, { $set: { hintSplitHash: hintSplitKey(textHash!) } });
+
+    // Re-saved in the editor: other markup, a rotated signed image URL
+    const resaved = signed.replace("<div>", "<div class='x'>").replace("https://cdn.example/a/a.png?sig=1", "https://cdn2.example/b/a.png?sig=2");
+    const result = await syncArticles([apiArticle(32, "hint", resaved)], { now: () => LATER });
+
+    expect(result.changedHints).toEqual([]);
+    expect(await HintCell.countDocuments({ articleId: 32, articleChanged: true })).toBe(0);
+    expect(await stored(32)).toMatchObject({ textHash, textChangedAt: NOW, hintSplitHash: hintSplitKey(textHash!) });
+    expect(await findPendingHintSplits(10, new Date(LATER.getTime() + TEXT_DEBOUNCE_MS + 1))).toEqual([]);
+  });
+
+  test("a text change of a hint flags its cells and is split again only after the debounce", async () => {
+    await syncArticles([apiArticle(33, "hint", hintHtml)], { now: () => NOW });
+    const { textHash } = await stored(33);
+    await Article.updateOne({ id: 33 }, { $set: { hintSplitHash: hintSplitKey(textHash!) } });
+
+    const result = await syncArticles([apiArticle(33, "hint", hintHtml.replace("tekst", "andere tekst"))], { now: () => LATER });
+
+    expect(result.changedHints).toEqual([33]);
+    expect(await HintCell.countDocuments({ articleId: 33, articleChanged: true })).toBe(9);
+    expect(await findPendingHintSplits(10, new Date(LATER.getTime() + TEXT_DEBOUNCE_MS - 1))).toEqual([]);
+    expect((await findPendingHintSplits(10, new Date(LATER.getTime() + TEXT_DEBOUNCE_MS))).map((article) => article.id)).toEqual([33]);
+  });
+
+  test("a hint split with the old key (raw content hash) is re-keyed when the text is unchanged", async () => {
+    const oldContent = hintHtml;
+    const newContent = hintHtml.replace("<div>", "<div class='trix'>");
+    const oldHash = createHash("sha256").update(oldContent).digest("hex");
+    // Split by the previous version: hintSplitHash = contentHash (with or without a textHash stored)
+    await Article.collection.insertOne({ id: 34, title: "Article 34", type: "hint", publishAt: NOW, content: oldContent, contentHash: oldHash, hintSplitHash: oldHash });
+    await Article.collection.insertOne({ id: 35, title: "Article 35", type: "hint", publishAt: NOW, content: oldContent, contentHash: oldHash, textHash: articleTextHash(oldContent), textChangedAt: NOW, hintSplitHash: oldHash });
+
+    const result = await syncArticles([apiArticle(34, "hint", newContent), apiArticle(35, "hint", newContent)], { now: () => LATER });
+
+    expect(result.changedHints).toEqual([]);
+    for (const id of [34, 35]) expect((await stored(id)).hintSplitHash).toBe(hintSplitKey(articleTextHash(newContent)));
+    expect(await findPendingHintSplits(10, new Date(LATER.getTime() + TEXT_DEBOUNCE_MS + 1))).toEqual([]);
+  });
+
+  test("a hint split of older content is not re-keyed", async () => {
+    await Article.collection.insertOne({ id: 36, title: "Article 36", type: "hint", publishAt: NOW, content: "<div>oud</div>", contentHash: "oude-hash", hintSplitHash: "nog-oudere-hash" });
+    await syncArticles([apiArticle(36, "hint", "<div>oud</div>")], { now: () => LATER });
+    expect((await stored(36)).hintSplitHash).toBe("nog-oudere-hash");
   });
 
   test("a text change keeps the old summary until a new one is stored, and sets textChangedAt", async () => {

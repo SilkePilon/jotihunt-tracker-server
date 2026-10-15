@@ -43,7 +43,7 @@ const ArticleSchema = new mongoose.Schema({
     type: String,
     required: false,
   },
-  /** When textHash last changed (or the article was first stored); summaries wait until the text is stable (SUMMARY_DEBOUNCE_MS) */
+  /** When textHash last changed (or the article was first stored); summaries and AI hint splits wait until the text is stable (TEXT_DEBOUNCE_MS) */
   textChangedAt: {
     type: Date,
     required: false,
@@ -58,7 +58,7 @@ const ArticleSchema = new mongoose.Schema({
     type: String,
     required: false,
   },
-  /** contentHash the AI hint split was made from (hint articles only): a changed article is split again */
+  /** `${textHash}:s2` of the text the AI hint split was made from (hintSplitKey; hint articles only): a changed text is split again */
   hintSplitHash: {
     type: String,
     required: false,
@@ -84,8 +84,21 @@ export const SUMMARY_VERSION = "v3";
 /** The summaryHash of a summary of this text made by the current version */
 export const summaryKey = (textHash: string) => `${textHash}:${SUMMARY_VERSION}`;
 
-/** A changed text is summarised only after it stayed the same this long (the organisation edits in several saves) */
-export const SUMMARY_DEBOUNCE_MS = 120_000;
+/**
+ * A changed text is summarised (or a hint split) only after it stayed the same this long (the organisation edits in
+ * several saves)
+ */
+export const TEXT_DEBOUNCE_MS = 120_000;
+export const SUMMARY_DEBOUNCE_MS = TEXT_DEBOUNCE_MS;
+
+/**
+ * Version of the AI hint splits: s2 is keyed on textHash, so markup-only edits keep the split. Before, hintSplitHash
+ * was the contentHash (raw HTML); a split of the current content is re-keyed, not made again.
+ */
+export const HINT_SPLIT_VERSION = "s2";
+
+/** The hintSplitHash of a split of this text made by the current version */
+export const hintSplitKey = (textHash: string) => `${textHash}:${HINT_SPLIT_VERSION}`;
 
 /** The summaryHash a v2 summary of this raw content had (only to re-key those to v3) */
 export const legacySummaryKey = (contentHash: string) => `${contentHash}:v2`;

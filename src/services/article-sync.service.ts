@@ -1,4 +1,4 @@
-import { Article, legacySummaryKey, SUMMARY_DEBOUNCE_MS, summaryKey } from "../models/article.model";
+import { Article, hintSplitKey, legacySummaryKey, SUMMARY_DEBOUNCE_MS, summaryKey } from "../models/article.model";
 import { Area } from "../models/area.model";
 import { HintCell, HintCellStatus } from "../models/hint-cell.model";
 import { ApiArticle } from "../types/api";
@@ -68,10 +68,11 @@ export async function ensureHintCells(article: { id: number; publishAt: Date; co
 
 /**
  * Upsert articles from the Jotihunt API (never deletes, so older hints are kept),
- * create hint cells for new hint articles and flag cells of edited hint articles.
+ * create hint cells for new hint articles and flag cells of hint articles whose text changed.
  *
  * Summaries follow textHash (text and files, not markup): textChangedAt is set when it changes, and the old summary
- * stays until the summary job (after the debounce) stores a new one. A v2 summary of the unchanged content is re-keyed.
+ * stays until the summary job (after the debounce) stores a new one. A v2 summary of the unchanged content is re-keyed,
+ * and so is a hint split keyed on the raw HTML when the text is unchanged (hint splits follow textHash too).
  */
 export async function syncArticles(apiArticles: ApiArticle[], { now = () => new Date() }: { now?: () => Date } = {}): Promise<SyncResult> {
   const result: SyncResult = { upserted: 0, changedHints: [], cellsCreated: 0, failed: [] };
@@ -84,15 +85,21 @@ export async function syncArticles(apiArticles: ApiArticle[], { now = () => new 
       if (isNaN(publishAt.getTime())) throw new Error(`Invalid publish_at: ${apiArticle.publish_at}`);
 
       const textHash = articleTextHash(content);
-      const previous = await Article.findOne({ id: apiArticle.id }, { _id: 0, contentHash: 1, content: 1, textHash: 1, summaryHash: 1 }).lean();
+      const previous = await Article.findOne({ id: apiArticle.id }, { _id: 0, contentHash: 1, content: 1, textHash: 1, summaryHash: 1, hintSplitHash: 1 }).lean();
       const time = now();
+      // The text hash of the stored article (computed for one stored before textHash existed)
+      const previousTextHash = previous?.textHash ?? (typeof previous?.content === "string" ? articleTextHash(previous.content) : undefined);
       // Stored by the version before textHash, with a summary of this very content: still current (same HTML or same text), so re-key it
       const rekey =
         Boolean(previous?.contentHash) &&
         previous?.summaryHash === legacySummaryKey(previous?.contentHash ?? "") &&
-        (previous?.contentHash === contentHash || (!previous?.textHash && typeof previous?.content === "string" && articleTextHash(previous.content) === textHash));
+        (previous?.contentHash === contentHash || (!previous?.textHash && previousTextHash === textHash));
+      // Hint split by the version keyed on the raw HTML, of the stored content, and the text is the same: re-key it
+      const rekeySplit = Boolean(previous?.contentHash) && previous?.hintSplitHash === previous?.contentHash && previousTextHash === textHash;
       const textFields =
-        previous?.textHash === textHash ? {} : { textHash, textChangedAt: rekey && !previous?.textHash ? new Date(time.getTime() - SUMMARY_DEBOUNCE_MS - 1) : time };
+        previous?.textHash === textHash
+          ? {}
+          : { textHash, textChangedAt: (rekey || rekeySplit) && !previous?.textHash ? new Date(time.getTime() - SUMMARY_DEBOUNCE_MS - 1) : time };
 
       await Article.updateOne(
         { id: apiArticle.id },
@@ -108,13 +115,15 @@ export async function syncArticles(apiArticles: ApiArticle[], { now = () => new 
             contentHash,
             ...textFields,
             ...(rekey ? { summaryHash: summaryKey(textHash) } : {}),
+            ...(rekeySplit ? { hintSplitHash: hintSplitKey(textHash) } : {}),
           },
         },
         { upsert: true },
       );
       result.upserted++;
 
-      const changed = Boolean(previous?.contentHash) && previous?.contentHash !== contentHash;
+      // Only a changed text (or file) counts: a markup-only re-save in the organisation's editor flags nothing
+      const changed = Boolean(previous?.contentHash) && previousTextHash !== textHash;
 
       if (apiArticle.type !== "hint") continue;
 
