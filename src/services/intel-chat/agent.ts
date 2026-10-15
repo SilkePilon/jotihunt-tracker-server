@@ -40,7 +40,8 @@ export interface IntelChatTurn {
 }
 
 /**
- * One chat turn: the model (deep → pro model with high thinking) streams an answer, calling our tools (web tools only
+ * One chat turn: the model (deep → pro model with high thinking) streams its thought summaries (reasoning parts, stored
+ * with the message and sent back to Gemini next turn as signed thoughts) and an answer, calling our tools (web tools only
  * with `web`), at most MAX_STEPS steps. Returns the UI message stream for pipeUIMessageStreamToResponse.
  */
 export async function streamIntelChat(turn: IntelChatTurn): Promise<ReadableStream<UIMessageChunk>> {
@@ -54,7 +55,8 @@ export async function streamIntelChat(turn: IntelChatTurn): Promise<ReadableStre
     tools,
     activeTools: activeToolNames(tools, turn.web),
     stopWhen: isStepCount(MAX_STEPS),
-    providerOptions: turn.deep ? { google: { thinkingConfig: { thinkingLevel: "high" } } } : undefined,
+    // Thought summaries in both modes (streamed as reasoning); normal turns keep the model's default thinking level
+    providerOptions: { google: { thinkingConfig: turn.deep ? { thinkingLevel: "high", includeThoughts: true } : { includeThoughts: true } } },
     maxRetries: 1,
     abortSignal: AbortSignal.any([turn.abortSignal, AbortSignal.timeout(turn.deep ? DEEP_TURN_TIMEOUT_MS : TURN_TIMEOUT_MS)]),
   });
@@ -63,7 +65,7 @@ export async function streamIntelChat(turn: IntelChatTurn): Promise<ReadableStre
     tools,
     originalMessages: turn.conversation,
     generateMessageId: generateId,
-    sendReasoning: false,
+    sendReasoning: true,
     sendSources: false,
     // Only our own Dutch message: a raw API error holds the request (with the key)
     onError: (error) => toGeminiError(error).message,

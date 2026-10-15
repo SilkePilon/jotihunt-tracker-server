@@ -68,7 +68,18 @@ describe("streamIntelChat", () => {
     expect(names).toContain("getItem");
     expect(names).toContain("proposeHintAnswer");
     expect(names).not.toContain("webSearch");
-    expect(call.providerOptions?.google).toBeUndefined();
+    expect(call.providerOptions).toEqual({ google: { thinkingConfig: { includeThoughts: true } } });
+  });
+
+  test("streams the model's thought summaries as reasoning chunks and keeps them on the message", async () => {
+    const { chunks, saved } = await runTurn([{ reasoning: "Eerst de coördinaten.", signature: "sig-1", text: "Alpha staat klaar." }]);
+    const types = chunks.map((chunk) => chunk.type);
+    expect(types).toContain("reasoning-start");
+    expect(types).toContain("reasoning-end");
+    expect(types.indexOf("reasoning-end")).toBeLessThan(types.indexOf("text-start"));
+    expect(chunks.filter((chunk) => chunk.type === "reasoning-delta").map((chunk) => (chunk as { delta: string }).delta).join("")).toBe("Eerst de coördinaten.");
+    const reasoning = saved?.[1].parts.find((part) => part.type === "reasoning");
+    expect(reasoning).toMatchObject({ text: "Eerst de coördinaten.", providerMetadata: { google: { thoughtSignature: "sig-1" } } });
   });
 
   test("web on offers webSearch; deep uses the deep model with high thinking", async () => {
@@ -76,7 +87,7 @@ describe("streamIntelChat", () => {
     expect(chat.doStreamCalls).toHaveLength(0);
     const call = deep.doStreamCalls[0];
     expect(call.tools?.map((tool) => tool.name)).toContain("webSearch");
-    expect(call.providerOptions).toEqual({ google: { thinkingConfig: { thinkingLevel: "high" } } });
+    expect(call.providerOptions).toEqual({ google: { thinkingConfig: { thinkingLevel: "high", includeThoughts: true } } });
   });
 
   test("a follow-up after a tool turn works with the history as stored (undefined optional fields)", async () => {
@@ -92,6 +103,22 @@ describe("streamIntelChat", () => {
     // Stored without undefined → null, provider metadata kept
     const toolPart = stored[1].parts.find((part) => part.type === "tool-proposeHintAnswer") as Record<string, unknown>;
     expect(Object.values(toolPart)).not.toContain(null);
+  });
+
+  test("a follow-up on a stored history with reasoning sends it back as a signed thought", async () => {
+    const first = await runTurn([{ reasoning: "Eerst de coördinaten.", signature: "sig-1", text: "Alpha staat klaar." }]);
+    const userId = new mongoose.Types.ObjectId();
+    await saveChat(userId, 10, first.saved!);
+    const stored = await loadChat(userId, 10);
+    expect(stored[1].parts.some((part) => part.type === "reasoning")).toBe(true);
+    const followUp: UIMessage = { id: "u2", role: "user", parts: [{ type: "text", text: "En nu?" }] };
+    const { chunks, chat } = await runTurn([{ text: "Verder." }], { conversation: [...stored, followUp] });
+    expect(chunks.find((chunk) => chunk.type === "error")).toBeUndefined();
+    const assistant = chat.doStreamCalls[0].prompt.find((message) => message.role === "assistant")!;
+    expect(assistant.content).toEqual([
+      { type: "reasoning", text: "Eerst de coördinaten.", providerOptions: { google: { thoughtSignature: "sig-1" } } },
+      { type: "text", text: "Alpha staat klaar." },
+    ]);
   });
 
   test("history stored with nulls in optional part fields (older chats) still works", async () => {

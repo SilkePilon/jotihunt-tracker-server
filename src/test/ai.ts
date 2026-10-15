@@ -31,8 +31,11 @@ export function localGoogle(handler: (request: Request) => Response | Promise<Re
 /** A generateContent answer whose text is split over `parts` */
 export const geminiReply = (...parts: string[]) => Response.json({ candidates: [{ content: { role: "model", parts: parts.map((text) => ({ text })) }, finishReason: "STOP" }] });
 
-/** One model step of a scripted stream: text, and/or tool calls (input as an object) */
+/** One model step of a scripted stream: reasoning (thought summary, optionally signed), text, and/or tool calls (input as an object) */
 export interface StreamStep {
+  reasoning?: string;
+  /** Gemini thoughtSignature on the reasoning */
+  signature?: string;
   text?: string;
   toolCalls?: { id: string; name: string; input: unknown }[];
 }
@@ -47,6 +50,10 @@ export function mockStreamModel(steps: StreamStep[]) {
     doStream: async () => {
       const step = steps[Math.min(call++, steps.length - 1)];
       const parts: unknown[] = [{ type: "stream-start", warnings: [] }];
+      if (step.reasoning !== undefined) {
+        const providerMetadata = step.signature ? { google: { thoughtSignature: step.signature } } : undefined;
+        parts.push({ type: "reasoning-start", id: "r" }, { type: "reasoning-delta", id: "r", delta: step.reasoning, providerMetadata }, { type: "reasoning-end", id: "r" });
+      }
       if (step.text !== undefined) parts.push({ type: "text-start", id: "t" }, { type: "text-delta", id: "t", delta: step.text }, { type: "text-end", id: "t" });
       for (const toolCall of step.toolCalls ?? []) parts.push({ type: "tool-call", toolCallId: toolCall.id, toolName: toolCall.name, input: JSON.stringify(toolCall.input) });
       parts.push({ type: "finish", usage, finishReason: { unified: step.toolCalls?.length ? "tool-calls" : "stop", raw: undefined } });
