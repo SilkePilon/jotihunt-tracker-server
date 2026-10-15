@@ -12,21 +12,23 @@ export interface IntelToolContext {
   toolModel: LanguageModel;
   /** Walking minutes via ORS (distance tool); a straight-line estimate without it */
   walkMinutes?: WalkMinutes;
-  /** HTTP for PDOK, Overpass and readWebPage (tests pass a fake) */
+  /** HTTP for PDOK, Overpass, OVapi, NS and readWebPage (tests pass a fake) */
   fetch?: (url: string, init: RequestInit) => Promise<Response>;
   /** DNS lookup for readWebPage's address check (tests pass a fake) */
   lookup?: (hostname: string) => Promise<string[]>;
+  /** NS Reisinformatie key; undefined = process.env.NS_API_KEY, "" = none (train data skipped) */
+  nsApiKey?: string;
   /** Paid/limited sub-calls used this turn (createIntelTools starts a fresh one per turn) */
   budget?: TurnBudget;
 }
 
 /** Paid or rate-limited sub-calls per turn (one question) */
-export const TURN_LIMITS = { webSearch: 6, runCode: 4, walkingRoute: 5, findPlaces: 4, lookAtPoint: 3 } as const;
+export const TURN_LIMITS = { webSearch: 6, runCode: 4, walkingRoute: 5, findPlaces: 4, lookAtPoint: 3, ov: 25 } as const;
 export type TurnBudget = Record<keyof typeof TURN_LIMITS, number>;
 export const BUDGET_EXHAUSTED = "Limiet voor deze vraag bereikt";
 
 /** A budget for one turn: nothing used yet */
-export const createTurnBudget = (): TurnBudget => ({ webSearch: 0, runCode: 0, walkingRoute: 0, findPlaces: 0, lookAtPoint: 0 });
+export const createTurnBudget = (): TurnBudget => ({ webSearch: 0, runCode: 0, walkingRoute: 0, findPlaces: 0, lookAtPoint: 0, ov: 0 });
 
 /** Use one call of `kind`; false (nothing used) when this turn's limit is reached */
 export function spend(budget: TurnBudget, kind: keyof typeof TURN_LIMITS): boolean {

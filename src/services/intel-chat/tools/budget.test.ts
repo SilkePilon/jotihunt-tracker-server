@@ -33,8 +33,8 @@ function turnTools() {
 const LIMIT = { error: "Limiet voor deze vraag bereikt" };
 
 describe("per-turn budget for paid sub-calls", () => {
-  test("limits are 6 web searches, 4 code runs, 5 walking routes, 4 place searches and 3 aerial photos", () => {
-    expect(TURN_LIMITS).toEqual({ webSearch: 6, runCode: 4, walkingRoute: 5, findPlaces: 4, lookAtPoint: 3 });
+  test("limits are 6 web searches, 4 code runs, 5 walking routes, 4 place searches, 3 aerial photos and 25 OV requests", () => {
+    expect(TURN_LIMITS).toEqual({ webSearch: 6, runCode: 4, walkingRoute: 5, findPlaces: 4, lookAtPoint: 3, ov: 25 });
   });
 
   test("webSearch: the 7th call of a turn is refused without calling Gemini", async () => {
