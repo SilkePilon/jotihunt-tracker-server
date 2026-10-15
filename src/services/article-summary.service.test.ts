@@ -1,25 +1,32 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { APICallError } from "ai";
-import { Article, summaryKey } from "../models/article.model";
+import { createHash } from "node:crypto";
+import { Article, legacySummaryKey, summaryKey } from "../models/article.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { MockLanguageModelV4 } from "ai/test";
 import { mockModel } from "../test/ai";
 import { GeminiError } from "./ai/gemini-error";
+import { articleTextHash } from "./article-text-hash";
 import { fetchImages, type ArticleImage, type FetchedImage } from "./article-media";
 import {
   buildSummaryPrompt,
   createArticleSummarizer,
   createSummaryJob,
   findPendingSummaries,
+  migrateArticleTextHashes,
   storeSummary,
+  SUMMARY_DEBOUNCE_MS,
   SUMMARY_MAX_PAUSE_MS,
   SUMMARY_PAUSE_MS,
   SUMMARY_TIMEOUT_MS,
   type ArticleSummary,
 } from "./article-summary.service";
 
+/** Long before the debounce of any test run */
+const STABLE = new Date("2026-01-01T00:00:00Z");
+
 const article = (id: number, type: string, extra: Record<string, unknown> = {}) =>
-  Article.create({ id, title: `Titel ${id}`, type, publishAt: new Date(`2026-10-17T1${id % 10}:00:00Z`), content: `<div>Tekst ${id}</div>`, contentHash: `hash-${id}`, ...extra });
+  Article.create({ id, title: `Titel ${id}`, type, publishAt: new Date(`2026-10-17T1${id % 10}:00:00Z`), content: `<div>Tekst ${id}</div>`, contentHash: `hash-${id}`, textHash: `text-${id}`, textChangedAt: STABLE, ...extra });
 
 beforeAll(connectTestDb);
 beforeEach(clearTestDb);
@@ -252,31 +259,75 @@ describe("createArticleSummarizer with images", () => {
 });
 
 describe("findPendingSummaries and storeSummary", () => {
-  test("pending: news and assignments without a summary of their current content, newest first, never hints or seeded test articles", async () => {
+  test("pending: news and assignments without a summary of their current text, newest first, never hints or seeded test articles", async () => {
     await article(1, "news");
     await article(2, "assignment");
     await article(3, "hint");
-    await article(4, "news", { summary: "klaar", summaryHash: "hash-4:v2" });
-    await article(5, "news", { summary: "oud", summaryHash: "eerdere-hash:v2" });
-    // Made before images were sent (no version): summarised once more
-    await article(7, "news", { summary: "zonder plaatjes", summaryHash: "hash-7" });
+    await article(4, "news", { summary: "klaar", summaryHash: "text-4:v3" });
+    await article(5, "news", { summary: "oud", summaryHash: "eerdere-tekst:v3" });
+    // Made by an older version (keyed on the raw content): summarised once more
+    await article(7, "news", { summary: "v2", summaryHash: "text-7:v2" });
     await article(900001, "news");
-    await article(6, "news", { contentHash: undefined });
+    await article(6, "news", { textHash: undefined });
     expect((await findPendingSummaries(10)).map((pending) => pending.id)).toEqual([7, 5, 2, 1]);
     expect((await findPendingSummaries(2)).map((pending) => pending.id)).toEqual([7, 5]);
     expect((await findPendingSummaries(1))[0].publishAt).toEqual(new Date("2026-10-17T17:00:00Z"));
+    expect((await findPendingSummaries(1))[0].textHash).toBe("text-7");
   });
 
-  test("storeSummary stores for the content it was made from, and not for content that changed meanwhile", async () => {
+  test("the debounce is 2 minutes: an article is pending only once its text has not changed for that long", async () => {
+    expect(SUMMARY_DEBOUNCE_MS).toBe(120_000);
+    const now = new Date("2026-10-17T20:00:00Z");
+    await article(1, "news", { textChangedAt: new Date(now.getTime() - SUMMARY_DEBOUNCE_MS + 1) });
+    await article(2, "news", { textChangedAt: new Date(now.getTime() - SUMMARY_DEBOUNCE_MS) });
+    await article(3, "news", { textChangedAt: undefined });
+    expect((await findPendingSummaries(10, now)).map((pending) => pending.id)).toEqual([2]);
+    expect((await findPendingSummaries(10, new Date(now.getTime() + 1))).map((pending) => pending.id)).toEqual([2, 1]);
+  });
+
+  test("storeSummary stores for the text it was made from and says so; not for text that changed meanwhile", async () => {
     await article(1, "news");
     await Article.collection.updateOne({ id: 1 }, { $set: { summaryPoints: ["oud"] } });
-    await storeSummary({ id: 1, contentHash: "hash-1" }, { summary: "kort" });
-    expect(await Article.findOne({ id: 1 }).lean()).toMatchObject({ summary: "kort", summaryHash: "hash-1:v2" });
-    expect(summaryKey("hash-1")).toBe("hash-1:v2");
+    expect(await storeSummary({ id: 1, textHash: "text-1" }, { summary: "kort" })).toBe(true);
+    expect(await Article.findOne({ id: 1 }).lean()).toMatchObject({ summary: "kort", summaryHash: "text-1:v3" });
+    expect(summaryKey("text-1")).toBe("text-1:v3");
     expect(await findPendingSummaries(10)).toEqual([]);
     expect(await Article.findOne({ id: 1 }).lean()).not.toHaveProperty("summaryPoints");
-    await storeSummary({ id: 1, contentHash: "andere-hash" }, { summary: "fout" });
+    expect(await storeSummary({ id: 1, textHash: "andere-tekst" }, { summary: "fout" })).toBe(false);
     expect((await Article.findOne({ id: 1 }).lean())?.summary).toBe("kort");
+  });
+});
+
+describe("migrateArticleTextHashes", () => {
+  const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+  const raw = (id: number, content: string, extra: Record<string, unknown> = {}) =>
+    Article.collection.insertOne({ id, title: `Titel ${id}`, type: "news", publishAt: new Date(`2026-10-17T1${id}:00:00Z`), content, contentHash: sha(content), ...extra });
+
+  test("hashes the text of old articles, re-keys their current v2 summaries without asking Gemini, and is idempotent", async () => {
+    const now = new Date();
+    await raw(1, "<div>Een</div>", { summary: "Een.", summaryHash: legacySummaryKey(sha("<div>Een</div>")) });
+    await raw(2, "<div>Twee</div>");
+    // A v2 summary of older content: made again
+    await raw(3, "<div>Drie</div>", { summary: "Oud.", summaryHash: legacySummaryKey("oude-hash") });
+    // Already migrated: untouched
+    await raw(4, "<div>Vier</div>", { textHash: "al-gedaan", textChangedAt: now });
+
+    expect(await migrateArticleTextHashes(now)).toEqual({ hashed: 3, rekeyed: 1 });
+
+    const one = (await Article.findOne({ id: 1 }).lean())!;
+    expect(one).toMatchObject({ textHash: articleTextHash("<div>Een</div>"), summary: "Een.", summaryHash: summaryKey(articleTextHash("<div>Een</div>")) });
+    expect(one.textChangedAt!.getTime()).toBeLessThan(now.getTime() - SUMMARY_DEBOUNCE_MS);
+    expect((await Article.findOne({ id: 3 }).lean())).toMatchObject({ summary: "Oud.", textHash: articleTextHash("<div>Drie</div>") });
+    expect((await Article.findOne({ id: 4 }).lean())).toMatchObject({ textHash: "al-gedaan", textChangedAt: now });
+    expect(await migrateArticleTextHashes(now)).toEqual({ hashed: 0, rekeyed: 0 });
+
+    // Only the ones without a current summary are pending, right away (no debounce wait); the re-keyed one never is
+    expect((await findPendingSummaries(10, now)).map((pending) => pending.id)).toEqual([3, 2]);
+    const seen: number[] = [];
+    const job = createSummaryJob({ summarizer: { summarize: async (input) => (seen.push(Number(input.title.split(" ")[1])), { summary: "nieuw" }) }, batch: 10 });
+    expect((await job.run()).done.sort()).toEqual([2, 3]);
+    expect(seen.sort()).toEqual([2, 3]);
+    expect((await Article.findOne({ id: 1 }).lean())?.summary).toBe("Een.");
   });
 });
 
@@ -332,7 +383,7 @@ describe("createSummaryJob", () => {
     await job.run();
     expect(calls).toBe(2);
     // New content: tried again
-    await Article.updateOne({ id: 1 }, { $set: { contentHash: "nieuw" } });
+    await Article.updateOne({ id: 1 }, { $set: { textHash: "nieuw" } });
     await job.run();
     expect(calls).toBe(3);
   });
@@ -490,6 +541,41 @@ describe("createSummaryJob", () => {
     await job.run();
     await job.run();
     expect(calls).toBe(4);
+  });
+
+  test("text edited during the Gemini call: nothing stored, not done, not a failed attempt; summarised once the new text is stable", async () => {
+    await article(1, "news", { summary: "oud", summaryHash: "text-1:v2" });
+    await article(2, "news");
+    let calls = 0;
+    let edited = false;
+    const job = createSummaryJob({
+      summarizer: {
+        summarize: async (input) => {
+          calls++;
+          // The organisation saves the article again while Gemini works (what the sync would store)
+          if (input.title === "Titel 1" && !edited) {
+            edited = true;
+            await Article.updateOne({ id: 1 }, { $set: { textHash: "bewerkt", textChangedAt: new Date() } });
+          }
+          return { summary: `samenvatting ${calls}` };
+        },
+      },
+      batch: 2,
+      maxAttempts: 1,
+    });
+
+    const first = await job.run();
+    expect(first).toEqual({ done: [2], failed: [] });
+    expect(await Article.findOne({ id: 1 }).lean()).toMatchObject({ summary: "oud", summaryHash: "text-1:v2" });
+
+    // Still being edited: not asked again within the debounce
+    expect(await job.run()).toEqual({ done: [], failed: [] });
+    expect(calls).toBe(2);
+
+    // Stable for 2 minutes: summarised (it was not given up on, even with maxAttempts 1)
+    await Article.updateOne({ id: 1 }, { $set: { textChangedAt: new Date(Date.now() - SUMMARY_DEBOUNCE_MS) } });
+    expect(await job.run()).toEqual({ done: [1], failed: [] });
+    expect(await Article.findOne({ id: 1 }).lean()).toMatchObject({ summary: "samenvatting 3", summaryHash: "bewerkt:v3" });
   });
 
   test("a result is dropped when the tracked store is skipped (demo switch)", async () => {

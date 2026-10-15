@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
-import { Article, summaryKey } from "../models/article.model";
+import { Article, legacySummaryKey, SUMMARY_DEBOUNCE_MS, summaryKey } from "../models/article.model";
 import { Area } from "../models/area.model";
 import { HintCell, HintCellStatus } from "../models/hint-cell.model";
 import { ApiArticle } from "../types/api";
+import { articleTextHash, hashContent } from "./article-text-hash";
 import { DEFAULT_AREAS, parseHintArticle } from "./hint-parser";
 import { isDuplicateKeyError } from "../utils/mongo";
 
@@ -17,10 +17,6 @@ export function floorToHour(date: Date): Date {
   const floored = new Date(date);
   floored.setUTCMinutes(0, 0, 0);
   return floored;
-}
-
-function hashContent(content: string) {
-  return createHash("sha256").update(content).digest("hex");
 }
 
 /** Lowercase names of the known areas in the Area collection; all default areas when none is stored yet */
@@ -73,8 +69,11 @@ export async function ensureHintCells(article: { id: number; publishAt: Date; co
 /**
  * Upsert articles from the Jotihunt API (never deletes, so older hints are kept),
  * create hint cells for new hint articles and flag cells of edited hint articles.
+ *
+ * Summaries follow textHash (text and files, not markup): textChangedAt is set when it changes, and the old summary
+ * stays until the summary job (after the debounce) stores a new one. A v2 summary of the unchanged content is re-keyed.
  */
-export async function syncArticles(apiArticles: ApiArticle[]): Promise<SyncResult> {
+export async function syncArticles(apiArticles: ApiArticle[], { now = () => new Date() }: { now?: () => Date } = {}): Promise<SyncResult> {
   const result: SyncResult = { upserted: 0, changedHints: [], cellsCreated: 0, failed: [] };
 
   for (const apiArticle of apiArticles) {
@@ -84,7 +83,15 @@ export async function syncArticles(apiArticles: ApiArticle[]): Promise<SyncResul
       const publishAt = new Date(apiArticle.publish_at);
       if (isNaN(publishAt.getTime())) throw new Error(`Invalid publish_at: ${apiArticle.publish_at}`);
 
-      const previous = await Article.findOneAndUpdate(
+      const textHash = articleTextHash(content);
+      const previous = await Article.findOne({ id: apiArticle.id }, { _id: 0, contentHash: 1, textHash: 1, summaryHash: 1 }).lean();
+      const time = now();
+      // Stored by the version before textHash, with a summary of this very content: still current, so re-key it
+      const rekey = Boolean(previous?.contentHash) && previous?.contentHash === contentHash && previous?.summaryHash === legacySummaryKey(contentHash);
+      const textFields =
+        previous?.textHash === textHash ? {} : { textHash, textChangedAt: rekey && !previous?.textHash ? new Date(time.getTime() - SUMMARY_DEBOUNCE_MS - 1) : time };
+
+      await Article.updateOne(
         { id: apiArticle.id },
         {
           $set: {
@@ -96,17 +103,15 @@ export async function syncArticles(apiArticles: ApiArticle[]): Promise<SyncResul
             maxPoints: apiArticle.message.max_points,
             endTime: apiArticle.message.end_time,
             contentHash,
+            ...textFields,
+            ...(rekey ? { summaryHash: summaryKey(textHash) } : {}),
           },
         },
         { upsert: true },
-      ).lean();
+      );
       result.upserted++;
 
       const changed = Boolean(previous?.contentHash) && previous?.contentHash !== contentHash;
-      // A summary of the old content would be shown with the new text until the next summary is made
-      if (changed) {
-        await Article.updateOne({ id: apiArticle.id, summaryHash: { $ne: summaryKey(contentHash) } }, { $unset: { summary: 1, summaryPoints: 1, summaryHash: 1 } }, { strict: false });
-      }
 
       if (apiArticle.type !== "hint") continue;
 

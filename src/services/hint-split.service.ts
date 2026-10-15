@@ -262,6 +262,7 @@ export function createHintSplitJob({
     },
     work: (article) => splitter.split({ title: article.title, content: article.content }, article.areas),
     store: (article, split) => applyHintSplit(article, split),
+    hashOf: (article) => article.contentHash,
     ...options,
   });
 }

@@ -38,12 +38,22 @@ const ArticleSchema = new mongoose.Schema({
     type: String,
     required: false,
   },
+  /** articleTextHash of the content: its readable text and files, not its markup (what a summary is made from) */
+  textHash: {
+    type: String,
+    required: false,
+  },
+  /** When textHash last changed (or the article was first stored); summaries wait until the text is stable (SUMMARY_DEBOUNCE_MS) */
+  textChangedAt: {
+    type: Date,
+    required: false,
+  },
   /** Short Dutch summary made by Gemini (news and assignments only); empty until made */
   summary: {
     type: String,
     required: false,
   },
-  /** `${contentHash}:v2` of the content the summary was made from (summaryKey): a changed article, or one summarised by an older version, gets a new summary */
+  /** `${textHash}:v3` of the text the summary was made from (summaryKey): a changed text, or one summarised by an older version, gets a new summary */
   summaryHash: {
     type: String,
     required: false,
@@ -65,8 +75,17 @@ export function publicArticlesFilter() {
   return { id: { $lt: 900000 } };
 }
 
-/** Version of the summaries: v2 summaries were made with the article's images (older ones are made again once) */
-export const SUMMARY_VERSION = "v2";
+/**
+ * Version of the summaries: v2 summaries were made with the article's images (keyed on the raw HTML, contentHash);
+ * v3 is keyed on textHash, so markup-only edits keep the summary. Current v2 summaries are re-keyed, not made again.
+ */
+export const SUMMARY_VERSION = "v3";
 
-/** The summaryHash of a summary of this content made by the current version */
-export const summaryKey = (contentHash: string) => `${contentHash}:${SUMMARY_VERSION}`;
+/** The summaryHash of a summary of this text made by the current version */
+export const summaryKey = (textHash: string) => `${textHash}:${SUMMARY_VERSION}`;
+
+/** A changed text is summarised only after it stayed the same this long (the organisation edits in several saves) */
+export const SUMMARY_DEBOUNCE_MS = 120_000;
+
+/** The summaryHash a v2 summary of this raw content had (only to re-key those to v3) */
+export const legacySummaryKey = (contentHash: string) => `${contentHash}:v2`;

@@ -1,8 +1,9 @@
 import { generateText, jsonSchema, Output, type JSONSchema7, type LanguageModel } from "ai";
-import { Article, publicArticlesFilter, SUMMARY_VERSION, summaryKey } from "../models/article.model";
+import { Article, legacySummaryKey, publicArticlesFilter, SUMMARY_DEBOUNCE_MS, SUMMARY_VERSION, summaryKey } from "../models/article.model";
 import { GeminiError, invalidAnswer, toGeminiError } from "./ai/gemini-error";
 import { createGeminiJob, GEMINI_JOB_MAX_PAUSE_MS, GEMINI_JOB_PAUSE_MS, type Tracked } from "./ai/gemini-job";
 import { articleAttachments, articleImages, fetchImages as downloadImages, type ArticleImage, type FetchedImage } from "./article-media";
+import { articleTextHash, hashContent } from "./article-text-hash";
 import { htmlToText } from "./html-text";
 
 export interface ArticleSummary {
@@ -147,16 +148,27 @@ export function createArticleSummarizer({
   };
 }
 
+export { SUMMARY_DEBOUNCE_MS };
+
 export interface PendingArticle extends SummaryInput {
   id: number;
-  contentHash: string;
+  textHash: string;
 }
 
-/** News and assignments whose current content has no summary (of the current version) yet, newest first */
-export async function findPendingSummaries(limit: number): Promise<PendingArticle[]> {
+/**
+ * News and assignments whose current text has no summary (of the current version) yet, newest first. A text that
+ * changed less than SUMMARY_DEBOUNCE_MS before `now` waits (its old summary stays visible meanwhile).
+ */
+export async function findPendingSummaries(limit: number, now = new Date()): Promise<PendingArticle[]> {
   const articles = await Article.find(
-    { ...publicArticlesFilter(), type: { $in: ["news", "assignment"] }, contentHash: { $type: "string" }, $expr: { $ne: ["$summaryHash", { $concat: ["$contentHash", `:${SUMMARY_VERSION}`] }] } },
-    { _id: 0, id: 1, title: 1, type: 1, content: 1, publishAt: 1, endTime: 1, maxPoints: 1, contentHash: 1 },
+    {
+      ...publicArticlesFilter(),
+      type: { $in: ["news", "assignment"] },
+      textHash: { $type: "string" },
+      textChangedAt: { $lte: new Date(now.getTime() - SUMMARY_DEBOUNCE_MS) },
+      $expr: { $ne: ["$summaryHash", { $concat: ["$textHash", `:${SUMMARY_VERSION}`] }] },
+    },
+    { _id: 0, id: 1, title: 1, type: 1, content: 1, publishAt: 1, endTime: 1, maxPoints: 1, textHash: 1 },
   )
     .sort({ publishAt: -1 })
     .limit(limit)
@@ -164,14 +176,39 @@ export async function findPendingSummaries(limit: number): Promise<PendingArticl
   return articles as PendingArticle[];
 }
 
-/** Store a summary, unless the article's content changed since it was made */
-export async function storeSummary(article: { id: number; contentHash: string }, summary: ArticleSummary): Promise<void> {
-  await Article.updateOne(
-    { id: article.id, contentHash: article.contentHash },
-    { $set: { summary: summary.summary, summaryHash: summaryKey(article.contentHash) }, $unset: { summaryPoints: 1 } },
+/** Store a summary, unless the article's text changed since it was made; whether it was stored */
+export async function storeSummary(article: { id: number; textHash: string }, summary: ArticleSummary): Promise<boolean> {
+  const result = await Article.updateOne(
+    { id: article.id, textHash: article.textHash },
+    { $set: { summary: summary.summary, summaryHash: summaryKey(article.textHash) }, $unset: { summaryPoints: 1 } },
     // summaryPoints is no longer in the schema; strict mode would drop the $unset
     { strict: false },
   );
+  return result.matchedCount > 0;
+}
+
+/**
+ * Give every article stored before textHash existed its textHash (from its stored content), with a textChangedAt
+ * older than the debounce. A v2 summary of the content as stored is still current: it is re-keyed to v3 (no new
+ * Gemini call). Idempotent: articles that have a textHash are left alone.
+ */
+export async function migrateArticleTextHashes(now = new Date()): Promise<{ hashed: number; rekeyed: number }> {
+  const stable = new Date(now.getTime() - SUMMARY_DEBOUNCE_MS - 1);
+  const articles = await Article.find({ textHash: { $exists: false } }, { _id: 1, content: 1, contentHash: 1, summaryHash: 1 }).lean();
+  let hashed = 0;
+  let rekeyed = 0;
+  for (const article of articles) {
+    const textHash = articleTextHash(article.content);
+    const current = Boolean(article.contentHash) && article.contentHash === hashContent(article.content) && article.summaryHash === legacySummaryKey(article.contentHash!);
+    const result = await Article.updateOne(
+      // Not when the sync stored a textHash meanwhile
+      { _id: article._id, textHash: { $exists: false } },
+      { $set: { textHash, textChangedAt: stable, ...(current ? { summaryHash: summaryKey(textHash) } : {}) } },
+    );
+    hashed += result.modifiedCount;
+    if (current) rekeyed += result.modifiedCount;
+  }
+  return { hashed, rekeyed };
 }
 
 /** Pause of the job after a failure that says Gemini is down or busy; doubles on every next one in a row */
@@ -193,5 +230,11 @@ export function createSummaryJob({
   batch?: number;
   now?: () => number;
 }) {
-  return createGeminiJob({ findPending: findPendingSummaries, work: (article) => summarizer.summarize(article), store: storeSummary, ...options });
+  return createGeminiJob({
+    findPending: (limit) => findPendingSummaries(limit),
+    work: (article) => summarizer.summarize(article),
+    store: storeSummary,
+    hashOf: (article) => article.textHash,
+    ...options,
+  });
 }

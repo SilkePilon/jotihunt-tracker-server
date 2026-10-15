@@ -20,6 +20,7 @@ import { life360ConfigFromEnv } from "./services/life360.helpers";
 import { Life360Service, setLife360Service } from "./services/life360.service";
 import { BagWfsClient } from "./services/buildings.client";
 import { BuildingsService, setBuildingsService } from "./services/buildings.service";
+import { migrateArticleTextHashes } from "./services/article-summary.service";
 
 // A forgotten promise rejection is logged and the server keeps running; after an uncaught exception the process state
 // is unknown, so log it and exit (docker restarts the server in a second or two)
@@ -80,6 +81,17 @@ for (const connection of mongoose.connection.name === realConnection.name ? [rea
     .then(({ cleaned, handles }) => logger.info(`Passwordless migration (${connection.name}): removed password data from ${cleaned} users, added WebAuthn handles to ${handles}`))
     .catch((error) => logger.error(`Passwordless migration of ${connection.name} failed`, error));
 }
+
+// Summaries are keyed on the article's text (textHash) since v3: give older articles their textHash and re-key their
+// still-current v2 summaries, so none is made again (idempotent; game data, so also after a demo switch)
+const migrateTextHashes = () =>
+  migrateArticleTextHashes()
+    .then(({ hashed, rekeyed }) => logger.info(`Article text hash migration (${mongoose.connection.name}): hashed ${hashed} articles, re-keyed ${rekeyed} summaries`))
+    .catch((error) => logger.error("Article text hash migration failed", error));
+await migrateTextHashes();
+onDemoSwitch(async () => {
+  await migrateTextHashes();
+});
 
 // Telegram (tegenhunts and other @Jotihunt_bot messages). The link and the messages live in the real database like the
 // settings; connecting runs in the background (retried with backoff) so a Telegram outage never delays the start

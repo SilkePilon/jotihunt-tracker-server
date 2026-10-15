@@ -1,10 +1,13 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { Article, summaryKey } from "../models/article.model";
+import { createHash } from "node:crypto";
+import { Article, legacySummaryKey, summaryKey } from "../models/article.model";
 import { Area } from "../models/area.model";
 import { HintCell, HintCellStatus } from "../models/hint-cell.model";
 import { ApiArticle } from "../types/api";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { floorToHour, syncArticles } from "./article-sync.service";
+import { SUMMARY_DEBOUNCE_MS } from "./article-summary.service";
+import { articleTextHash } from "./article-text-hash";
 
 function apiArticle(id: number, type: string, content: string, publishAt = "2026-10-17T12:05:00.000000Z"): ApiArticle {
   return { id, title: `Article ${id}`, type, publish_at: publishAt, message: { content } } as ApiArticle;
@@ -117,37 +120,77 @@ describe("syncArticles", () => {
     expect(cells.find((cell) => cell.area === "alpha")!.answer).toBe("1234 5678");
   });
 
-  test("a changed article loses the summary of its old content", async () => {
-    await syncArticles([apiArticle(20, "news", "<div>Wissel om 23:00</div>")]);
-    const { contentHash } = (await Article.findOne({ id: 20 }).lean())!;
-    await Article.updateOne({ id: 20 }, { $set: { summary: "Wissel om 23:00.", summaryHash: summaryKey(contentHash!) } });
+  const NOW = new Date("2026-10-17T12:00:00Z");
+  const LATER = new Date("2026-10-17T12:05:00Z");
+  const stored = async (id: number) => (await Article.findOne({ id }).lean())!;
 
-    await syncArticles([apiArticle(20, "news", "<div>Wissel om 22:00</div>")]);
-
-    const changed = (await Article.findOne({ id: 20 }).lean())!;
-    expect(changed.contentHash).not.toBe(contentHash);
-    expect(changed.summary).toBeUndefined();
-    expect(changed.summaryHash).toBeUndefined();
+  test("stores the text hash and when the text changed (now, for a new article)", async () => {
+    await syncArticles([apiArticle(30, "news", "<div>Wissel om 23:00</div>")], { now: () => NOW });
+    const article = await stored(30);
+    expect(article.textHash).toBe(articleTextHash("<div>Wissel om 23:00</div>"));
+    expect(article.textChangedAt).toEqual(NOW);
   });
 
-  test("a changed article keeps a summary that was already made for its new content", async () => {
-    await syncArticles([apiArticle(99, "news", "<div>Wissel om 22:00</div>")]);
-    const newHash = (await Article.findOne({ id: 99 }).lean())!.contentHash!;
-    await syncArticles([apiArticle(22, "news", "<div>Wissel om 23:00</div>")]);
-    await Article.updateOne({ id: 22 }, { $set: { summary: "Wissel om 22:00.", summaryHash: summaryKey(newHash) } });
+  test("a formatting-only change keeps the text hash, textChangedAt and the summary (the hint flags still follow the raw content)", async () => {
+    await syncArticles([apiArticle(31, "news", "<div>Wissel om 23:00</div>")], { now: () => NOW });
+    const { textHash, contentHash } = await stored(31);
+    await Article.updateOne({ id: 31 }, { $set: { summary: "Wissel om 23:00.", summaryHash: summaryKey(textHash!) } });
 
-    await syncArticles([apiArticle(22, "news", "<div>Wissel om 22:00</div>")]);
+    await syncArticles([apiArticle(31, "news", "<div class='trix'><strong>Wissel</strong>  om 23:00</div>")], { now: () => LATER });
 
-    expect(await Article.findOne({ id: 22 }).lean()).toMatchObject({ summary: "Wissel om 22:00.", summaryHash: summaryKey(newHash) });
+    const article = await stored(31);
+    expect(article.contentHash).not.toBe(contentHash);
+    expect(article).toMatchObject({ textHash, textChangedAt: NOW, summary: "Wissel om 23:00.", summaryHash: summaryKey(textHash!) });
   });
 
-  test("an unchanged article keeps its summary", async () => {
-    await syncArticles([apiArticle(21, "news", "<div>Wissel om 23:00</div>")]);
-    const { contentHash } = (await Article.findOne({ id: 21 }).lean())!;
-    await Article.updateOne({ id: 21 }, { $set: { summary: "Wissel om 23:00.", summaryHash: summaryKey(contentHash!) } });
+  test("a formatting-only change of a hint still flags its cells (hints follow the raw content)", async () => {
+    await syncArticles([apiArticle(32, "hint", hintHtml)]);
+    const result = await syncArticles([apiArticle(32, "hint", hintHtml.replace("<div>", "<div class='x'>"))]);
+    expect(result.changedHints).toEqual([32]);
+  });
 
-    await syncArticles([apiArticle(21, "news", "<div>Wissel om 23:00</div>")]);
+  test("a text change keeps the old summary until a new one is stored, and sets textChangedAt", async () => {
+    await syncArticles([apiArticle(20, "news", "<div>Wissel om 23:00</div>")], { now: () => NOW });
+    const { textHash } = await stored(20);
+    await Article.updateOne({ id: 20 }, { $set: { summary: "Wissel om 23:00.", summaryHash: summaryKey(textHash!) } });
 
-    expect(await Article.findOne({ id: 21 }).lean()).toMatchObject({ summary: "Wissel om 23:00.", summaryHash: summaryKey(contentHash!) });
+    await syncArticles([apiArticle(20, "news", "<div>Wissel om 22:00</div>")], { now: () => LATER });
+
+    const changed = await stored(20);
+    expect(changed.textHash).not.toBe(textHash);
+    expect(changed.textChangedAt).toEqual(LATER);
+    expect(changed).toMatchObject({ summary: "Wissel om 23:00.", summaryHash: summaryKey(textHash!) });
+  });
+
+  test("an unchanged article keeps its summary and textChangedAt", async () => {
+    await syncArticles([apiArticle(21, "news", "<div>Wissel om 23:00</div>")], { now: () => NOW });
+    const { textHash } = await stored(21);
+    await Article.updateOne({ id: 21 }, { $set: { summary: "Wissel om 23:00.", summaryHash: summaryKey(textHash!) } });
+
+    await syncArticles([apiArticle(21, "news", "<div>Wissel om 23:00</div>")], { now: () => LATER });
+
+    expect(await stored(21)).toMatchObject({ summary: "Wissel om 23:00.", summaryHash: summaryKey(textHash!), textChangedAt: NOW });
+  });
+
+  test("a v2 summary of the unchanged content is re-keyed to the text hash (no new summary needed)", async () => {
+    const content = "<div>Wissel om 23:00</div>";
+    const contentHash = createHash("sha256").update(content).digest("hex");
+    // Stored by the previous version: no text hash yet, a v2 summary of this very content
+    await Article.collection.insertOne({ id: 23, title: "Article 23", type: "news", publishAt: NOW, content, contentHash, summary: "Wissel om 23:00.", summaryHash: legacySummaryKey(contentHash) });
+
+    await syncArticles([apiArticle(23, "news", content)], { now: () => LATER });
+
+    const article = await stored(23);
+    expect(article.textHash).toBe(articleTextHash(content));
+    expect(article).toMatchObject({ summary: "Wissel om 23:00.", summaryHash: summaryKey(articleTextHash(content)) });
+    expect(article.textChangedAt!.getTime()).toBeLessThan(LATER.getTime() - SUMMARY_DEBOUNCE_MS);
+  });
+
+  test("a v2 summary of other content is not re-keyed; the old summary stays visible", async () => {
+    await Article.collection.insertOne({ id: 24, title: "Article 24", type: "news", publishAt: NOW, content: "<div>oud</div>", contentHash: "oude-hash", summary: "Oud.", summaryHash: legacySummaryKey("oude-hash") });
+
+    await syncArticles([apiArticle(24, "news", "<div>nieuw</div>")], { now: () => LATER });
+
+    expect(await stored(24)).toMatchObject({ summary: "Oud.", summaryHash: legacySummaryKey("oude-hash"), textHash: articleTextHash("<div>nieuw</div>"), textChangedAt: LATER });
   });
 });
