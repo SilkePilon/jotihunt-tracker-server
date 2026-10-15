@@ -42,18 +42,18 @@ describe("BagWfsClient", () => {
 
   test("HTTP error: BuildingsUpstreamError", async () => {
     const { impl } = fakeFetch([[]], 503);
-    expect(new BagWfsClient(impl).fetchParts(BOUNDS)).rejects.toBeInstanceOf(BuildingsUpstreamError);
+    await expect(new BagWfsClient(impl).fetchParts(BOUNDS)).rejects.toBeInstanceOf(BuildingsUpstreamError);
   });
 
   test("network error: BuildingsUpstreamError", async () => {
     const impl = (async () => {
       throw new TypeError("fetch failed");
     }) as unknown as typeof fetch;
-    expect(new BagWfsClient(impl).fetchParts(BOUNDS)).rejects.toBeInstanceOf(BuildingsUpstreamError);
+    await expect(new BagWfsClient(impl).fetchParts(BOUNDS)).rejects.toBeInstanceOf(BuildingsUpstreamError);
   });
 
   test("not a feature collection: BuildingsUpstreamError", async () => {
     const impl = (async () => new Response("<html>oops</html>", { status: 200 })) as unknown as typeof fetch;
-    expect(new BagWfsClient(impl).fetchParts(BOUNDS)).rejects.toBeInstanceOf(BuildingsUpstreamError);
+    await expect(new BagWfsClient(impl).fetchParts(BOUNDS)).rejects.toBeInstanceOf(BuildingsUpstreamError);
   });
 });
