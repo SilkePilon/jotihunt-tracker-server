@@ -307,6 +307,9 @@ describe("/intel-chat", () => {
     await postChat(req as unknown as Request, res as unknown as Response);
     const next = startTurn(user._id, 10);
     expect(next).not.toBeNull();
+    // A late end of the stream must not save over the next turn
+    await Bun.sleep(300);
+    expect(await IntelChat.findOne({ userId: user._id, articleId: 10 })).toBeNull();
     endTurn(next!);
   });
 

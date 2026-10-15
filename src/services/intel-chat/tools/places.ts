@@ -65,7 +65,8 @@ export function overpassQuery(specs: KindSpec[], busRoutes: boolean, center: Lat
   const around = `(around:${radiusM},${center.lat.toFixed(6)},${center.lng.toFixed(6)})`;
   let query = "[out:json][timeout:15];";
   const lines = specs.flatMap((spec) => spec.filters.map((filter) => `nwr${filter}${around};`));
-  if (lines.length > 0) query += `(${lines.join("")})->.places;.places out center tags 300;`;
+  // No count limit: Overpass would cut by id, not by distance (the 5 MB read cap refuses too many results instead)
+  if (lines.length > 0) query += `(${lines.join("")})->.places;.places out center tags;`;
   if (busRoutes) query += `relation["route"="bus"]${around}->.routes;.routes out body center 100;node(r.routes)${around};out skel qt 2000;`;
   return query;
 }

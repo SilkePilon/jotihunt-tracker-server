@@ -90,6 +90,14 @@ describe("dutch numbers", () => {
   test("text without number words is null", () => {
     expect(dutchNumbers("de vos is in het bos")).toBeNull();
   });
+
+  test("a lone article een between other words stays text; next to number words it is 1", () => {
+    expect(dutchNumbers("Zoek een kerk")).toBeNull();
+    expect(dutchNumbers("Zoek een kerk bij vier molens")).toBe("Zoek een kerk bij 4 molens");
+    expect(dutchNumbers("een acht acht vier")).toBe("1 8 8 4");
+    expect(dutchNumbers("nul een")).toBe("0 1");
+    expect(dutchNumbers("één kerk")).toBe("1 kerk");
+  });
 });
 
 describe("reverse, mirror-digits", () => {
@@ -135,6 +143,8 @@ describe("keypad", () => {
 describe("plausibility", () => {
   test("an RD answer and real words beat noise", () => {
     expect(plausibility("1884 4407")).toBeGreaterThan(plausibility("8115 5592"));
+    expect(plausibility("1 8 8 4 4 4 0 7")).toBeGreaterThan(plausibility("8 1 1 5 5 5 9 2"));
+    expect(plausibility("1 8 8 3 6 2, 4 4 0 7 2 2")).toBeGreaterThanOrEqual(100);
     expect(plausibility("de vos is in het bos")).toBeGreaterThan(plausibility("qr ibf vf va urg obf"));
   });
 });
@@ -150,6 +160,11 @@ describe("decodeCipher without method", () => {
 
   test("Dutch number words that make an RD coordinate come first", () => {
     expect(decodeCipher("tweeduizend honderdzesentwintig vierduizend zeshonderdtweeënnegentig").results[0]).toMatchObject({ method: "dutch-numbers", output: "2126 4692" });
+  });
+
+  test.each(["een acht acht vier vier vier nul zeven", "één acht acht vier, vier vier nul zeven"])("digit by digit number words (%s) put dutch-numbers in the top 3", (text) => {
+    const top = decodeCipher(text).results.slice(0, 3);
+    expect(top.map((row) => row.method)).toContain("dutch-numbers");
   });
 
   test("mirrored digits that make an RD coordinate come first", () => {

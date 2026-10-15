@@ -231,6 +231,15 @@ const compound = (s: string): number | null => (s === "nul" ? 0 : withMultiplier
 
 const normaliseWord = (word: string) => word.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/-/g, "");
 
+const isNumberWord = (piece: string | undefined) => piece !== undefined && compound(normaliseWord(piece)) !== null;
+
+/** The word "een" at pieces[i] (pieces alternate words and the text between them) reads as 1: a number word next to it, or no other word */
+function loneEenIsNumber(pieces: string[], i: number): boolean {
+  const before = /\p{L}/u.test(pieces[i - 2] ?? "") ? pieces[i - 2] : undefined;
+  const after = /\p{L}/u.test(pieces[i + 2] ?? "") ? pieces[i + 2] : undefined;
+  return (before === undefined && after === undefined) || isNumberWord(before) || isNumberWord(after);
+}
+
 /**
  * Dutch number words to digits, the rest of the text kept: "tweeduizend honderdzesentwintig" → "2126". Words that
  * together make one number (with spaces, hyphens, "en") are joined; null when the text holds no number word.
@@ -253,6 +262,8 @@ export function dutchNumbers(text: string): string | null {
       if (value !== null) best = { end: j, value };
       if (j + 1 >= pieces.length || !/^\s+$/.test(pieces[j + 1])) break;
     }
+    // A lone article "een" ("Zoek een kerk") is only 1 next to other number words (or on its own)
+    if (best && best.end === i && pieces[i].toLowerCase() === "een" && !loneEenIsNumber(pieces, i)) best = null;
     if (best) {
       out.push(String(best.value));
       found = true;
@@ -382,14 +393,26 @@ const LETTER_FREQ: Record<string, number> = {
   q: 0.01,
 };
 
-/** A Jotihunt RD answer in Gelderland ("XXXX YYYY" in hectometres or "XXXXXX YYYYYY" in metres) */
+/** X and Y of the same length (4 = hectometres, 6 = metres) inside Gelderland's RD range */
+function isRdPair(xText: string, yText: string): boolean {
+  if (xText.length !== yText.length) return false;
+  const scale = xText.length === 4 ? 1 : 0.01;
+  const x = Number(xText) * scale;
+  const y = Number(yText) * scale;
+  return x >= 1300 && x <= 2600 && y >= 4100 && y <= 5200;
+}
+
+/**
+ * A Jotihunt RD answer in Gelderland ("XXXX YYYY" in hectometres or "XXXXXX YYYYYY" in metres), also written digit by
+ * digit ("1 8 8 4, 4 4 0 7": 8 or 12 single digits split in two halves)
+ */
 function hasRdAnswer(text: string): boolean {
   for (const match of text.matchAll(/(?<!\d)(\d{4}|\d{6})\s*[,;/]?\s*(\d{4}|\d{6})(?!\d)/g)) {
-    if (match[1].length !== match[2].length) continue;
-    const scale = match[1].length === 4 ? 1 : 0.01;
-    const x = Number(match[1]) * scale;
-    const y = Number(match[2]) * scale;
-    if (x >= 1300 && x <= 2600 && y >= 4100 && y <= 5200) return true;
+    if (isRdPair(match[1], match[2])) return true;
+  }
+  for (const match of text.matchAll(/(?<!\d)\d(?:[\s,;/]+\d(?!\d))+/g)) {
+    const digits = match[0].replace(/\D/g, "");
+    if ((digits.length === 8 || digits.length === 12) && isRdPair(digits.slice(0, digits.length / 2), digits.slice(digits.length / 2))) return true;
   }
   return false;
 }

@@ -85,6 +85,8 @@ export async function postChat(req: Request, res: Response) {
     if (!res.headersSent) res.status(500).json({ error: "chat_failed" });
     if (streaming) {
       // The stream may never be read to its end (so no onEnd): stop the turn and free the chat (no-op when onEnd already did)
+      // Discarded first: a late onEnd then saves nothing over the chat's next turn
+      turn.discarded = true;
       turn.abort.abort();
       endTurn(turn);
     }

@@ -116,6 +116,16 @@ describe("findPlaces", () => {
     expect(result.places).toHaveLength(25);
   });
 
+  test("all places are asked (no Overpass count limit, which would cut by id, not distance): the nearest of 400 comes first", async () => {
+    // Ids go up with the distance except the nearest, which has the highest id
+    const elements = [...Array.from({ length: 399 }, (_, i) => ({ type: "node", id: i, ...north(100 + 5 * i), tags: { highway: "bus_stop" } })), { type: "node", id: 9999, ...north(20), tags: { highway: "bus_stop", name: "Dichtbij" } }];
+    const { fetch, calls } = fakeFetch({ elements });
+    const result = (await runTool(tools({ fetch }).findPlaces, { near: HQ, kinds: ["bus_stop"] })) as { places: Record<string, unknown>[] };
+    expect(queryOf(calls[0])).toContain(".places out center tags;");
+    expect(result.places[0]).toMatchObject({ name: "Dichtbij", distanceM: 20 });
+    expect(result.places).toHaveLength(25);
+  });
+
   test("Overpass failures become a Dutch { error }", async () => {
     expect(await runTool(tools({ fetch: fakeFetch({}, 429).fetch }).findPlaces, { near: HQ, kinds: ["church"] })).toEqual({ error: "Overpass (OpenStreetMap) is druk (HTTP 429); probeer het later" });
     const down = async () => {
