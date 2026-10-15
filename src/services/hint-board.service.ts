@@ -198,3 +198,20 @@ export async function solveCell(articleId: number, area: string, answer: string,
   }
   throw busyError();
 }
+
+/**
+ * Jotiboard purge: put a cell the sync solved back to open, but only while it still holds that answer (an answer someone
+ * gave afterwards stays). Its hint marker goes too, unless another cell links to it. True when the cell was reopened.
+ */
+export async function reopenImportedCell(cellId: mongoose.Types.ObjectId, answer: string): Promise<boolean> {
+  const cell = await HintCell.findOne({ _id: cellId, status: HintCellStatus.Solved, answer }, { markerId: 1 }).lean();
+  if (!cell) return false;
+  const updated = await HintCell.updateOne(
+    { _id: cellId, status: HintCellStatus.Solved, answer },
+    { $set: { status: HintCellStatus.Open }, $unset: { answer: 1, answerKind: 1, answerLocation: 1, markerId: 1 } },
+  );
+  if (updated.modifiedCount === 0) return false;
+  if (cell.markerId) await deleteMarkerIfUnlinked(cell.markerId);
+  invalidateBoardCache();
+  return true;
+}
