@@ -55,6 +55,8 @@ export class BuildingsService {
   /** Waiting fetches, each FIFO; map requests go before job fetches */
   private readonly urgentQueue: (() => void)[] = [];
   private readonly jobQueue: (() => void)[] = [];
+  /** The jobQueue entry per tile id, so a map request for that tile can move it to the urgent queue */
+  private readonly queuedJobs = new Map<string, () => void>();
   /** A job start or clear is past its busy check but hasn't set `job` / finished yet */
   private starting = false;
   private job: BuildingsJob | null = null;
@@ -165,8 +167,11 @@ export class BuildingsService {
   private fetchAndStore(tile: TileXY, urgent: boolean): Promise<Buffer | null> {
     const id = tileId(tile);
     const running = this.inFlight.get(id);
-    if (running) return running;
-    const promise = this.limited(urgent, async () => {
+    if (running) {
+      if (urgent) this.promote(id);
+      return running;
+    }
+    const promise = this.limited(id, urgent, async () => {
       const features = toBuildingFeatures(await this.options.client.fetchParts(tileBounds(tile)));
       const encoded = encodeTile(tile, features);
       const mvt = encoded ? Buffer.from(encoded) : null;
@@ -177,9 +182,29 @@ export class BuildingsService {
     return promise;
   }
 
-  private async limited<T>(urgent: boolean, task: () => Promise<T>): Promise<T> {
+  /** A map request joined a job fetch of tile `id`: if that fetch is still waiting, move it to the urgent queue. */
+  private promote(id: string) {
+    const resolve = this.queuedJobs.get(id);
+    if (!resolve) return;
+    this.queuedJobs.delete(id);
+    this.jobQueue.splice(this.jobQueue.indexOf(resolve), 1);
+    this.urgentQueue.push(resolve);
+  }
+
+  private async limited<T>(id: string, urgent: boolean, task: () => Promise<T>): Promise<T> {
     if (this.active >= this.maxParallel) {
-      await new Promise<void>((resolve) => (urgent ? this.urgentQueue : this.jobQueue).push(resolve));
+      await new Promise<void>((resolve) => {
+        if (urgent) {
+          this.urgentQueue.push(resolve);
+        } else {
+          const entry = () => {
+            this.queuedJobs.delete(id);
+            resolve();
+          };
+          this.queuedJobs.set(id, entry);
+          this.jobQueue.push(entry);
+        }
+      });
     } else {
       this.active++;
     }

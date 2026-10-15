@@ -57,6 +57,8 @@ beforeAll(async () => {
   db = await mongoose.createConnection(uri).asPromise();
 });
 beforeEach(async () => {
+  // A failed test's job can't leak into the next one
+  await service?.idle();
   await buildingTileModel(db).deleteMany({});
   api = new FakeApi();
   clock = new Date("2026-10-15T12:00:00Z");
@@ -168,6 +170,42 @@ describe("jobs", () => {
     await map;
     // The map tile was the second upstream call (right after the job's first, already running)
     expect(key(api.calls[1])).toBe(key(tileBounds(far)));
+    await service.idle();
+  });
+
+  test("a map request for a tile the job has queued overtakes the job's other tiles", async () => {
+    service = new BuildingsService({ connection: db, client: api, logger: silent, maxParallel: 1 });
+    api.hold = true;
+    await service.startPrefetch(51.98, 5.9, 2);
+    await Bun.sleep(5);
+    const queued = tilesAround(51.98, 5.9, 2)[5];
+    const map = service.getTile(queued);
+    // Let the map request do its cache lookup and join the queued job fetch before the first fetch finishes
+    await Bun.sleep(20);
+    api.release();
+    expect(await map).toBeInstanceOf(Buffer);
+    expect(key(api.calls[1])).toBe(key(tileBounds(queued)));
+    await service.idle();
+    expect(api.calls.filter((b) => key(b) === key(tileBounds(queued)))).toHaveLength(1);
+    expect((await service.status()).job).toMatchObject({ done: tilesAround(51.98, 5.9, 2).length, failed: 0 });
+  });
+
+  test("a failing fetch hands its slot to the next waiter", async () => {
+    service = new BuildingsService({ connection: db, client: api, logger: silent, maxParallel: 1 });
+    const tiles = tilesAround(51.98, 5.9, 1);
+    api.failing.add(key(tileBounds(tiles[0])));
+    await service.startPrefetch(51.98, 5.9, 1);
+    await service.idle();
+    expect((await service.status()).job).toMatchObject({ total: tiles.length, done: tiles.length, failed: 1 });
+    expect(api.calls).toHaveLength(tiles.length);
+    expect(await buildingTileModel(db).countDocuments()).toBe(tiles.length - 1);
+  });
+
+  test("two parallel starts: one runs, the other gets 409", async () => {
+    const results = await Promise.allSettled([service.startPrefetch(51.98, 5.9, 1), service.startPrefetch(51.98, 5.9, 1)]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((r) => r.status === "rejected");
+    expect(rejected?.status === "rejected" && rejected.reason).toMatchObject({ status: 409 });
     await service.idle();
   });
 
