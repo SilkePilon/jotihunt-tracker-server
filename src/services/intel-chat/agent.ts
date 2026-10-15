@@ -2,7 +2,7 @@ import { convertToModelMessages, generateId, isStepCount, streamText, toUIMessag
 import { toGeminiError } from "../ai/gemini-error";
 import type { ArticleImage, FetchedImage } from "../article-media";
 import { loadItemImages } from "./item-images";
-import { modelWindow, withItemImages } from "./messages";
+import { modelWindow, withItemImages, withoutNullPartFields } from "./messages";
 import { buildSystemPrompt } from "./prompt";
 import type { ItemView } from "./tools/app-data";
 import { activeToolNames, createIntelTools, type IntelToolContext } from "./tools";
@@ -46,7 +46,7 @@ export interface IntelChatTurn {
 export async function streamIntelChat(turn: IntelChatTurn): Promise<ReadableStream<UIMessageChunk>> {
   const tools = createIntelTools({ articleId: turn.item.articleId, now: () => turn.now, toolModel: turn.models.tool, ...turn.toolContext });
   const images = await loadItemImages(turn.article, turn.downloadImages);
-  const messages = withItemImages(await convertToModelMessages(modelWindow(turn.conversation), { tools, ignoreIncompleteToolCalls: true }), images);
+  const messages = withItemImages(await convertToModelMessages(withoutNullPartFields(modelWindow(turn.conversation)), { tools, ignoreIncompleteToolCalls: true }), images);
   const result = streamText({
     model: turn.deep ? turn.models.deep : turn.models.chat,
     instructions: buildSystemPrompt({ item: turn.item, now: turn.now, web: turn.web, attachedImages: images.map((image) => image.name) }),

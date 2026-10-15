@@ -1,12 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import type { UIMessage } from "ai";
 import { convertReadableStreamToArray } from "ai/test";
+import mongoose from "mongoose";
 import { Article } from "../../models/article.model";
 import { HintCell, HintCellStatus } from "../../models/hint-cell.model";
 import { mockModel, mockStreamModel, type StreamStep } from "../../test/ai";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../../test/db";
 import { streamIntelChat, type IntelChatModels } from "./agent";
 import { clearItemImageCache } from "./item-images";
+import { loadChat, saveChat } from "./store";
 import { loadItemView } from "./tools/app-data";
 
 const NOW = new Date("2026-10-17T12:05:00Z");
@@ -22,7 +24,7 @@ beforeEach(async () => {
 });
 afterAll(disconnectTestDb);
 
-async function runTurn(steps: StreamStep[], options: { web?: boolean; deep?: boolean } = {}) {
+async function runTurn(steps: StreamStep[], options: { web?: boolean; deep?: boolean; conversation?: UIMessage[] } = {}) {
   const chat = mockStreamModel(steps);
   const deep = mockStreamModel(steps);
   const models: IntelChatModels = { chat, deep, tool: mockModel(() => "") };
@@ -31,7 +33,7 @@ async function runTurn(steps: StreamStep[], options: { web?: boolean; deep?: boo
     models,
     item: (await loadItemView(10))!,
     article: { id: 10, content: CONTENT, contentHash: "h" },
-    conversation: [question],
+    conversation: options.conversation ?? [question],
     web: options.web ?? false,
     deep: options.deep ?? false,
     now: NOW,
@@ -75,5 +77,35 @@ describe("streamIntelChat", () => {
     const call = deep.doStreamCalls[0];
     expect(call.tools?.map((tool) => tool.name)).toContain("webSearch");
     expect(call.providerOptions).toEqual({ google: { thinkingConfig: { thinkingLevel: "high" } } });
+  });
+
+  test("a follow-up after a tool turn works with the history as stored (undefined optional fields)", async () => {
+    const first = await runTurn([{ toolCalls: [{ id: "c1", name: "proposeHintAnswer", input: { area: "alpha", answer: "1884 4407" } }] }, { text: "Alpha staat klaar." }]);
+    const userId = new mongoose.Types.ObjectId();
+    await saveChat(userId, 10, first.saved!);
+    const stored = await loadChat(userId, 10);
+    const followUp: UIMessage = { id: "u2", role: "user", parts: [{ type: "text", text: "En nu?" }] };
+    const { chunks, chat } = await runTurn([{ text: "Verder." }], { conversation: [...stored, followUp] });
+    expect(chunks.find((chunk) => chunk.type === "error")).toBeUndefined();
+    expect(chat.doStreamCalls).toHaveLength(1);
+    expect(chat.doStreamCalls[0].prompt.some((message) => message.role === "tool")).toBe(true);
+    // Stored without undefined → null, provider metadata kept
+    const toolPart = stored[1].parts.find((part) => part.type === "tool-proposeHintAnswer") as Record<string, unknown>;
+    expect(Object.values(toolPart)).not.toContain(null);
+  });
+
+  test("history stored with nulls in optional part fields (older chats) still works", async () => {
+    const first = await runTurn([{ toolCalls: [{ id: "c1", name: "proposeHintAnswer", input: { area: "alpha", answer: "1884 4407" } }] }, { text: "Alpha staat klaar." }]);
+    const withNulls = first.saved!.map((message) => ({
+      ...message,
+      parts: message.parts.map((part) =>
+        part.type.startsWith("tool-") ? ({ ...part, title: null, rawInput: null, errorText: null, providerExecuted: null, preliminary: null } as unknown as typeof part) : part,
+      ),
+    }));
+    const followUp: UIMessage = { id: "u2", role: "user", parts: [{ type: "text", text: "En nu?" }] };
+    const { chunks, chat } = await runTurn([{ text: "Verder." }], { conversation: [...withNulls, followUp] });
+    expect(chunks.find((chunk) => chunk.type === "error")).toBeUndefined();
+    expect(chat.doStreamCalls).toHaveLength(1);
+    expect(chat.doStreamCalls[0].prompt.some((message) => message.role === "tool")).toBe(true);
   });
 });

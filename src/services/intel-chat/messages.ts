@@ -86,6 +86,17 @@ export function forStorage(messages: UIMessage[]): UIMessage[] {
   return kept.reverse();
 }
 
+/**
+ * The messages without `null` part fields (chats stored before saveChat dropped `undefined`: BSON made those `null`, which
+ * the model message schema rejects). Only the parts' own fields: tool input/output keep their nulls.
+ */
+export function withoutNullPartFields(messages: UIMessage[]): UIMessage[] {
+  return messages.map((message) => ({
+    ...message,
+    parts: message.parts.map((part) => Object.fromEntries(Object.entries(part).filter(([, value]) => value !== null)) as typeof part),
+  }));
+}
+
 /** The newest MAX_HISTORY_TO_MODEL messages, starting at a user message */
 export function modelWindow(messages: UIMessage[]): UIMessage[] {
   const window = messages.slice(-MAX_HISTORY_TO_MODEL);

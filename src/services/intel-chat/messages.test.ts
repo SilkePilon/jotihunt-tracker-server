@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ModelMessage, UIMessage } from "ai";
 import { clearItemImageCache, loadItemImages } from "./item-images";
-import { appendMessage, DROPPED_IMAGE_TEXT, forStorage, MAX_HISTORY_TO_MODEL, modelWindow, parseIncomingMessage, withItemImages } from "./messages";
+import { appendMessage, DROPPED_IMAGE_TEXT, forStorage, MAX_HISTORY_TO_MODEL, modelWindow, parseIncomingMessage, withItemImages, withoutNullPartFields } from "./messages";
 import { buildSystemPrompt, dutchDateTime } from "./prompt";
 import type { ItemView } from "./tools/app-data";
 
@@ -159,5 +159,32 @@ describe("buildSystemPrompt", () => {
     const prompt = buildSystemPrompt({ item, now, web: false, attachedImages: [] });
     expect(prompt).toContain('Internet staat uit');
     expect(prompt).not.toContain("gebruik webSearch");
+  });
+});
+
+describe("withoutNullPartFields", () => {
+  test("drops null part fields, keeps nulls inside tool input/output and provider metadata", () => {
+    const part = {
+      type: "tool-getItem",
+      toolCallId: "c1",
+      state: "output-available",
+      title: null,
+      rawInput: null,
+      errorText: null,
+      providerExecuted: null,
+      preliminary: null,
+      input: { area: null },
+      output: { nearestGroup: null },
+      callProviderMetadata: { google: { thoughtSignature: "sig" } },
+    };
+    const [message] = withoutNullPartFields([{ id: "a1", role: "assistant", parts: [part as unknown as UIMessage["parts"][number]] }]);
+    expect(message.parts[0] as unknown).toEqual({
+      type: "tool-getItem",
+      toolCallId: "c1",
+      state: "output-available",
+      input: { area: null },
+      output: { nearestGroup: null },
+      callProviderMetadata: { google: { thoughtSignature: "sig" } },
+    });
   });
 });

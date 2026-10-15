@@ -32,4 +32,22 @@ describe("intel chat store", () => {
     expect(await loadChat(alice, 1)).toEqual([]);
     expect(await loadChat(bob, 1)).toHaveLength(1);
   });
+
+  test("undefined fields are dropped, not stored as null; provider metadata is kept", async () => {
+    const assistant = {
+      id: "a1",
+      role: "assistant",
+      parts: [{ type: "tool-getItem", toolCallId: "c1", state: "output-available", input: {}, output: { x: null }, title: undefined, errorText: undefined, callProviderMetadata: { google: { thoughtSignature: "sig" } } }],
+    } as unknown as UIMessage;
+    await saveChat(alice, 1, [assistant]);
+    expect((await loadChat(alice, 1))[0].parts[0] as unknown).toEqual({
+      type: "tool-getItem",
+      toolCallId: "c1",
+      state: "output-available",
+      input: {},
+      output: { x: null },
+      callProviderMetadata: { google: { thoughtSignature: "sig" } },
+    });
+  });
 });
+
