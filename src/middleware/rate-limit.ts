@@ -80,11 +80,15 @@ export interface RateLimitOptions {
   key: (req: Request) => string;
   /** Most keys kept; the oldest are dropped first (default 10 000) */
   maxKeys?: number;
+  /** Body of the 429 (default a Dutch `message`) */
+  body?: Record<string, unknown>;
   now?: () => number;
 }
 
+const TOO_MANY = { message: "Te veel verzoeken achter elkaar, wacht even en probeer het opnieuw." };
+
 /** In-memory fixed-window limiter for writes: at most `max` requests per key per window, then 429. */
-export function limitRate({ windowMs, max, key, maxKeys = DEFAULT_MAX_KEYS, now = Date.now }: RateLimitOptions) {
+export function limitRate({ windowMs, max, key, maxKeys = DEFAULT_MAX_KEYS, body = TOO_MANY, now = Date.now }: RateLimitOptions) {
   const counts = new Map<string, { count: number; resetAt: number }>();
 
   return (req: Request, res: Response, next: NextFunction) => {
@@ -98,7 +102,7 @@ export function limitRate({ windowMs, max, key, maxKeys = DEFAULT_MAX_KEYS, now 
     }
     if (entry.count >= max) {
       res.setHeader("Retry-After", String(Math.ceil((entry.resetAt - at) / 1000)));
-      return res.status(429).json({ message: "Te veel verzoeken achter elkaar, wacht even en probeer het opnieuw." });
+      return res.status(429).json(body);
     }
     entry.count++;
     next();

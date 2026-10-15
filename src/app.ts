@@ -34,6 +34,7 @@ import buildingsRoute from "./routes/buildings.route";
 import counterHuntRoute from "./routes/counter-hunt.route";
 import happyHourRoute from "./routes/happy-hour.route";
 import sentryTunnelRoute from "./routes/sentry-tunnel.route";
+import intelChatRoute from "./routes/intel-chat.route";
 
 export const app = express();
 if (process.env.TRUST_PROXY) app.set("trust proxy", parseTrustProxy(process.env.TRUST_PROXY));
@@ -48,11 +49,20 @@ app.use((_req, res, next) => {
 // Polled JSON (hint board, hunt reports, predictions) shrinks 5-10x. ETags are computed on the uncompressed body
 // before compression, so conditional requests still get a 304.
 // Building vector tiles too: compressible() doesn't know application/x-protobuf
+// Never the AI chat's event stream: gzip would hold its chunks back
 app.use(
-  compression({ filter: (req, res) => /x-protobuf/.test(String(res.getHeader("Content-Type"))) || compression.filter(req, res) }),
+  compression({
+    filter: (req, res) => {
+      const type = String(res.getHeader("Content-Type"));
+      if (/event-stream/.test(type)) return false;
+      return /x-protobuf/.test(type) || compression.filter(req, res);
+    },
+  }),
 );
 // Website error reports for Sentry (raw envelope body, no auth, before the JSON parser and the demo gate)
 app.use("/sentry-tunnel", cors({ maxAge: 86400, exposedHeaders: ["X-Sentry-Rate-Limits", "Retry-After"] }), sentryTunnelRoute);
+// AI chat questions may carry one image (≤ 2 MB, base64 in JSON); every other route keeps the 100 kB default
+app.use("/intel-chat", express.json({ limit: "4mb" }));
 app.use(express.json());
 // Express 5 leaves req.body undefined when no body parser matched; keep the Express 4 behaviour of an empty object
 app.use((req, _res, next) => {
@@ -104,6 +114,8 @@ app.use("/life360", life360Route);
 app.use("/buildings", buildingsRoute);
 app.use("/counter-hunt", counterHuntRoute);
 app.use("/happy-hour", happyHourRoute);
+// AI chat per user per Intel item (Gemini with our tools; the AI never writes)
+app.use("/intel-chat", intelChatRoute);
 // After the demo gate: verifyToken reads the users of the default connection. The setting itself is global (real database).
 app.use("/settings", settingsRoute);
 

@@ -111,4 +111,13 @@ describe("limitRate", () => {
     // "a" was evicted, so it starts over
     expect(attempt(limit, "a", 201).passed).toBe(true);
   });
+
+  test("answers the 429 with a custom body when given", () => {
+    clock = 0;
+    const limit = limitRate({ windowMs: 1000, max: 1, key: () => "k", body: { error: "rate_limited" }, now: () => clock });
+    expect(attempt(limit, "a", 200).passed).toBe(true);
+    const blocked = attempt(limit, "a", 200);
+    expect(blocked.res.statusCode).toBe(429);
+    expect(blocked.res.body).toEqual({ error: "rate_limited" });
+  });
 });
