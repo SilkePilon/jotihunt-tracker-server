@@ -1,5 +1,5 @@
 import { ToolInputError } from "./tools/context";
-import type { LatLng } from "./geo";
+import { normalise, type LatLng } from "./geo";
 
 /** PDOK Locatieserver (Dutch addresses, streets, places, postcodes; no key, NL only) */
 export const PDOK_BASE_URL = "https://api.pdok.nl/bzk/locatieserver/search/v3_1";
@@ -41,13 +41,6 @@ export function parseWktPoint(value: unknown): LatLng | null {
   return match ? { lng: Number(match[1]), lat: Number(match[2]) } : null;
 }
 
-const normalise = (value: string) =>
-  value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
 
 /** Higher for a doc in a town the query names (its woonplaats over its gemeente), plus more for an address/street there when the query asks more than the town */
 function townScore(query: string, doc: Record<string, unknown>): number {

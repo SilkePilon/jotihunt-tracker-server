@@ -451,3 +451,12 @@ export function intersectRd({ bearings = [], circles = [], points = [] }: { bear
   const note = worstMiss > APPROXIMATE_M ? `De lijnen en cirkels komen niet precies samen; beste benadering (afwijking tot ${Math.round(worstMiss)} m)` : undefined;
   return { points: chosen.map(({ point }) => rdPoint(point)), ...(note ? { note } : {}) };
 }
+
+/** Lower-case, accent-free, punctuation as single spaces: for comparing place and stop names */
+export const normalise = (value: string) =>
+  value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();

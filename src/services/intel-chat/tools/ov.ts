@@ -2,7 +2,7 @@ import { jsonSchema, tool } from "ai";
 import { AREAS, areaTitle, type AreaName } from "../../../constants/areas";
 import { formatRdAnswer, toRd } from "../../rd-answer";
 import { loadGroups } from "../data";
-import { coordinateAt, estimateArea, metresBetween, parseCoordinate, type AreaGroup, type LatLng } from "../geo";
+import { coordinateAt, estimateArea, metresBetween, normalise, parseCoordinate, type AreaGroup, type LatLng } from "../geo";
 import {
   hhmm,
   isoAmsterdam,
@@ -78,13 +78,6 @@ const walkMinutes = (distanceM: number) => Math.max(1, Math.round((distanceM * D
 const delayMin = (planned: Date, expected: Date) => Math.round((expected.getTime() - planned.getTime()) / MIN);
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
-const normalise = (value: string) =>
-  value
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
 const wordsOf = (value: string) => new Set(normalise(value).split(" ").filter(Boolean));
 const sameWords = (a: Set<string>, b: Set<string>) => a.size === b.size && [...a].every((word) => b.has(word));
 
