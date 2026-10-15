@@ -6,6 +6,7 @@ import { FakeImporter, FakeJotiboardClient, PASSWORD } from "../test/jotiboard-c
 import { JotiboardAuthError, JotiboardLoginError, JotiboardUpstreamError } from "./jotiboard.client";
 import { JotiboardService, POLL_INTERVAL_MS, type JotiboardServiceOptions } from "./jotiboard.service";
 import { decryptSession } from "./telegram.helpers";
+import { setDemoModeFlag } from "../demo/demo-mode";
 
 const KEY = randomBytes(32).toString("base64");
 const uri = process.env.MONGO_URI_TEST ?? "mongodb://localhost:27017/jotihunt-test";
@@ -134,6 +135,24 @@ describe("poll", () => {
     expect(client.calls).toContain("read manualLocations id-3");
   });
 
+  test("demo mode switched on while Jotiboard is read: nothing is imported", async () => {
+    let release!: () => void;
+    client.readGate = new Promise<void>((resolve) => (release = resolve));
+    const poll = service.pollOnce();
+    while (!client.calls.some((call) => call.startsWith("read"))) await Bun.sleep(1);
+    setDemoModeFlag(true);
+    try {
+      release();
+      await poll;
+      expect(importer.solveSnapshots).toEqual([]);
+      expect(importer.pinSnapshots).toEqual([]);
+      expect((await service.status()) as { lastSyncAt: string | null }).toMatchObject({ lastSyncAt: null });
+    } finally {
+      setDemoModeFlag(false);
+      client.readGate = null;
+    }
+  });
+
   test("importer error → generic lastError", async () => {
     importer.importError = new Error("db down");
     await service.pollOnce();
@@ -168,6 +187,18 @@ describe("sync toggle, unlink, purge, restart", () => {
     expect(result.removed).toEqual({ markers: 5, hints: 2 });
     expect(result.status).toMatchObject({ state: "linked", syncEnabled: false, counts: { pins: 0, hints: 0 } });
     expect((await jotiboardLinkModel(realDb).findOne().lean())?.syncEnabled).toBe(false);
+  });
+
+  test("purge is refused in demo mode", async () => {
+    importer.current = { pins: 5, hints: 2 };
+    setDemoModeFlag(true);
+    try {
+      await expect(service.purge()).rejects.toMatchObject({ status: 409, message: "Data verwijderen kan niet in demomodus." });
+    } finally {
+      setDemoModeFlag(false);
+    }
+    expect(importer.purged).toBe(0);
+    expect((await jotiboardLinkModel(realDb).findOne().lean())?.syncEnabled).toBe(true);
   });
 
   test("purge without a link still works", async () => {

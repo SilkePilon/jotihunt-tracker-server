@@ -50,6 +50,24 @@ describe("pins", () => {
     expect(await JotiboardImport.findOne().lean()).toMatchObject({ result: "skipped", reason: "duplicate" });
   });
 
+  test("our hint answer takes over an imported hint pin of that hour (no replaceMarker needed)", async () => {
+    await importer.importPins([pin({ type: "hint", foxAreas: ["Alpha"] })]);
+    const imported = await Marker.findOne({ source: "jotiboard" }).lean();
+    expect(imported).toMatchObject({ type: MarkerType.Hint, area: "alpha" });
+    await cell();
+    expect(await solveCell(10, "alpha", "155000 463000")).toMatchObject({ status: HintCellStatus.Solved });
+    const markers = await Marker.find().lean();
+    expect(markers).toHaveLength(1);
+    expect(markers[0].source).toBeUndefined();
+    expect(String(markers[0]._id)).not.toBe(String(imported!._id));
+    expect(String((await HintCell.findOne().lean())?.markerId)).toBe(String(markers[0]._id));
+    // The import record no longer counts and the pin is not imported again
+    expect(await JotiboardImport.findOne({ kind: "pin" }).lean()).toMatchObject({ result: "skipped", reason: "duplicate" });
+    expect(await importer.counts()).toEqual({ pins: 0, hints: 0 });
+    await importer.importPins([pin({ type: "hint", foxAreas: ["Alpha"] })]);
+    expect(await Marker.countDocuments()).toBe(1);
+  });
+
   test("a pin gone from Jotiboard removes only its imported marker", async () => {
     const ours = await Marker.create({ area: "bravo", type: MarkerType.Hunt, time: new Date(T), location: point(5.0, 52.0) });
     await importer.importPins([pin(), pin({ id: "p2", foxAreas: ["Alpha"] })]);
@@ -77,6 +95,16 @@ describe("hint solves", () => {
     await importer.importHintSolves([solve()]);
     expect((await HintCell.findOne().lean())?.answer).toBe("Kerk");
     expect(await JotiboardImport.findOne().lean()).toMatchObject({ result: "skipped", reason: "cell-solved" });
+  });
+
+  test("a cell we answer between the importer's check and its solve keeps our answer", async () => {
+    await cell();
+    await solveCell(10, "alpha", "Kerk");
+    // What the importer's solve does once the cell is no longer open
+    const error = await solveCell(10, "alpha", "155000 463000", { onlyIfOpen: true }).catch((caught) => caught);
+    expect(error).toMatchObject({ status: 409, details: { cellSolved: true } });
+    expect(await HintCell.findOne().lean()).toMatchObject({ status: HintCellStatus.Solved, answer: "Kerk", answerKind: "text" });
+    expect(await Marker.countDocuments()).toBe(0);
   });
 
   test("no cell yet: retried until the cell exists", async () => {

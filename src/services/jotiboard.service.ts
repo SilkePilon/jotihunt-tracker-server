@@ -46,6 +46,7 @@ const BUSY = "Even geduld, Jotiboard is nog bezig.";
 const UNREACHABLE_LINK = "Jotiboard is nu niet bereikbaar, probeer het later opnieuw.";
 const UNREACHABLE_SYNC = "Jotiboard niet bereikbaar, probeert opnieuw";
 const SYNC_FAILED = "Synchroniseren mislukt, probeert opnieuw";
+const PURGE_IN_DEMO = "Data verwijderen kan niet in demomodus.";
 const LOGIN_ERRORS: Record<JotiboardLoginError["code"], [number, string]> = {
   invalid: [400, "Ongeldige gebruikersnaam of wachtwoord"],
   tooMany: [429, "Te veel pogingen, probeer het later opnieuw"],
@@ -202,19 +203,23 @@ export class JotiboardService {
 
   async setSyncEnabled(enabled: boolean): Promise<JotiboardStatus> {
     this.requireConfig();
-    const link = this.active;
-    if (!link) throw new ServiceError(409, NOT_LINKED);
-    await this.links.updateOne({ key: JOTIBOARD_LINK_KEY }, { $set: { syncEnabled: enabled } });
-    link.syncEnabled = enabled;
-    if (enabled && this.canPoll()) this.schedule(0);
-    if (!enabled) this.clearTimer();
-    this.options.logger.info(`Jotiboard sync ${enabled ? "on" : "off"}`);
-    return this.status();
+    return this.exclusive(async () => {
+      const link = this.active;
+      if (!link) throw new ServiceError(409, NOT_LINKED);
+      await this.links.updateOne({ key: JOTIBOARD_LINK_KEY }, { $set: { syncEnabled: enabled } });
+      link.syncEnabled = enabled;
+      if (enabled && this.canPoll()) this.schedule(0);
+      if (!enabled) this.clearTimer();
+      this.options.logger.info(`Jotiboard sync ${enabled ? "on" : "off"}`);
+      return this.status();
+    });
   }
 
   /** "Data verwijderen": turn sync off (else the next poll imports everything again), wait for a running poll, purge. */
   async purge(): Promise<{ removed: { markers: number; hints: number }; status: JotiboardStatus }> {
     this.requireConfig();
+    // The imports to remove live in the real database, not in the demo one the default connection serves now
+    if (isDemoMode()) throw new ServiceError(409, PURGE_IN_DEMO);
     return this.exclusive(async () => {
       if (this.active) {
         await this.links.updateOne({ key: JOTIBOARD_LINK_KEY }, { $set: { syncEnabled: false } });
@@ -240,7 +245,7 @@ export class JotiboardService {
     try {
       await run;
     } finally {
-      this.polling = null;
+      if (this.polling === run) this.polling = null;
     }
   }
 
@@ -252,20 +257,23 @@ export class JotiboardService {
       this.schedule(interval);
       return;
     }
+    // The imports must land in the database this poll started in (demo mode may come on while Jotiboard is read)
+    const demoGeneration = currentGeneration();
     const generation = this.generation;
     const started = this.now();
     try {
-      const idToken = await this.idToken(generation);
+      const idToken = await this.idToken();
       const [solvesRaw, pinsRaw] = await Promise.all([this.options.client.read("hintSolves", idToken), this.options.client.read("manualLocations", idToken)]);
       if (generation !== this.generation) return;
       const ran = await runTracked(
         async () => {
+          if (isDemoMode()) return false;
           // Solves first: a hint solution beats a hint pin for the same hour
           await this.importer.importHintSolves(parseHintSolves(solvesRaw));
           await this.importer.importPins(parsePins(pinsRaw));
           return true;
         },
-        { generation: currentGeneration() },
+        { generation: demoGeneration },
       );
       if (generation !== this.generation) return;
       if (ran) {
@@ -280,7 +288,11 @@ export class JotiboardService {
         if (this.active) this.active.state = "reauth";
         this.session = null;
         this.clearTimer();
-        await this.links.updateOne({ key: JOTIBOARD_LINK_KEY }, { $set: { state: "reauth" } });
+        try {
+          await this.links.updateOne({ key: JOTIBOARD_LINK_KEY }, { $set: { state: "reauth" } });
+        } catch (storeError) {
+          this.options.logger.error("Could not store the Jotiboard logged-out state", storeError);
+        }
         return;
       }
       this.lastError = error instanceof JotiboardUpstreamError ? UNREACHABLE_SYNC : SYNC_FAILED;
@@ -290,18 +302,25 @@ export class JotiboardService {
   }
 
   /** A valid ID token: the current one, or a fresh one from the refresh token (stored again when it rotated). */
-  private async idToken(generation: number): Promise<string> {
+  private async idToken(): Promise<string> {
     const session = this.session;
     if (session && session.expiresAt.getTime() - this.now().getTime() > REFRESH_MARGIN_MS) return session.idToken;
-    const refreshToken = this.active?.refreshToken;
-    if (!refreshToken) throw new JotiboardAuthError("No stored Jotiboard session");
+    const link = this.active;
+    const refreshToken = link?.refreshToken;
+    if (!link || !refreshToken) throw new JotiboardAuthError("No stored Jotiboard session");
     const fresh = await this.options.client.refresh(refreshToken);
-    if (generation !== this.generation || !this.active) return fresh.idToken;
+    // Re-login or unlink meanwhile: this token belongs to the old link. Otherwise (also after a purge or a sync toggle)
+    // keep it: Jotiboard may have rotated the refresh token, and the old one may stop working.
+    if (this.active !== link) return fresh.idToken;
     this.session = fresh;
     if (fresh.refreshToken !== refreshToken) {
+      link.refreshToken = fresh.refreshToken;
       const sealed = encryptSession(fresh.refreshToken, this.requireConfig().sessionKey);
-      await this.links.updateOne({ key: JOTIBOARD_LINK_KEY }, { $set: { refreshCiphertext: sealed.ciphertext, iv: sealed.iv, tag: sealed.tag } });
-      this.active.refreshToken = fresh.refreshToken;
+      // linkedAt: never overwrite the token of a link stored by a re-login that is still finishing
+      await this.links.updateOne(
+        { key: JOTIBOARD_LINK_KEY, linkedAt: link.linkedAt },
+        { $set: { refreshCiphertext: sealed.ciphertext, iv: sealed.iv, tag: sealed.tag } },
+      );
     }
     return fresh.idToken;
   }

@@ -233,6 +233,40 @@ describe("intel: assignments and read state", () => {
   });
 });
 
+describe("markers", () => {
+  test("POST /markers: our hint marker takes over an imported Jotiboard hint pin of that hour", async () => {
+    const { Marker, MarkerType } = await import("./models/marker.model");
+    const { HintCell } = await import("./models/hint-cell.model");
+    const slot = new Date("2026-10-17T14:00:00.000Z");
+    const imported = await Marker.create({ area: "alpha", time: slot, type: MarkerType.Hint, location: { type: "Point", coordinates: [5.6, 52.3] }, source: "jotiboard" });
+    const linked = await HintCell.create({ articleId: 10, area: "alpha", publishAt: slot, slotTime: slot, markerId: imported._id });
+    const user = await createUser();
+    const res = await request("/markers", {
+      method: "POST",
+      token: tokenFor(user),
+      json: { area: "alpha", type: MarkerType.Hint, time: "2026-10-17T14:20:00.000Z", location: { coordinates: [5.7, 52.4] } },
+    });
+    expect(res.status).toBe(201);
+    const markers = await Marker.find().lean();
+    expect(markers).toHaveLength(1);
+    expect(markers[0]).toMatchObject({ area: "alpha", time: slot, location: { coordinates: [5.7, 52.4] } });
+    expect(markers[0].source).toBeUndefined();
+    expect((await HintCell.findById(linked._id).lean())?.markerId).toBeUndefined();
+  });
+
+  test("POST /markers: a hint marker of ours on that hour still answers 409", async () => {
+    const { Marker, MarkerType } = await import("./models/marker.model");
+    await Marker.create({ area: "alpha", time: new Date("2026-10-17T14:00:00.000Z"), type: MarkerType.Hint, location: { type: "Point", coordinates: [5.6, 52.3] } });
+    const res = await request("/markers", {
+      method: "POST",
+      token: tokenFor(await createUser()),
+      json: { area: "alpha", type: MarkerType.Hint, time: "2026-10-17T14:20:00.000Z", location: { coordinates: [5.7, 52.4] } },
+    });
+    expect(res.status).toBe(409);
+    expect(await Marker.countDocuments()).toBe(1);
+  });
+});
+
 describe("write rate limit", () => {
   test("POST /markers answers 429 after 30 writes per minute per user", async () => {
     const [a, b] = [await createUser(), await createUser()];

@@ -6,6 +6,7 @@ import { HuntReport } from "../models/hunt-report.model";
 import { HintCell } from "../models/hint-cell.model";
 import { isDuplicateKeyError } from "../utils/mongo";
 import { sendCachedJson } from "../services/response-cache";
+import { takeOverImportedHintMarker } from "../services/hint-board.service";
 
 /** Polled by every hunter: one shared body for a moment (cleared by every marker write) */
 export async function getMarkers(_req: Request, res: Response) {
@@ -25,13 +26,16 @@ export async function createMarker(req: Request, res: Response) {
     parsedTime.setSeconds(0, 0);
   }
 
+  const create = () => Marker.create({ area, time: parsedTime, location: { type: "Point", coordinates: location.coordinates }, type });
   try {
-    const marker = await Marker.create({
-      area,
-      time: parsedTime,
-      location: { type: "Point", coordinates: location.coordinates },
-      type,
-    });
+    let marker;
+    try {
+      marker = await create();
+    } catch (error) {
+      // Our marker wins over a hint pin imported from Jotiboard on the same hour: take its place, try once more
+      if (!isDuplicateKeyError(error) || type != MarkerType.Hint || !(await takeOverImportedHintMarker(area, parsedTime))) throw error;
+      marker = await create();
+    }
     return res.status(201).json(marker);
   } catch (error) {
     if (isDuplicateKeyError(error)) {

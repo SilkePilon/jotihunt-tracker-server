@@ -1,11 +1,9 @@
-import type { Types } from "mongoose";
 import { ServiceError } from "../http/service-error";
 import { HintCell, HintCellStatus } from "../models/hint-cell.model";
-import { HuntReport } from "../models/hunt-report.model";
 import { JotiboardImport } from "../models/jotiboard-import.model";
 import { Marker } from "../models/marker.model";
 import { isDuplicateKeyError } from "../utils/mongo";
-import { reopenImportedCell, solveCell } from "./hint-board.service";
+import { reopenImportedCell, solveCell, unlinkMarkers } from "./hint-board.service";
 import { DUPLICATE_WINDOW_MS, hintSolveImports, importKey, isNearDuplicate, pinImports, type JotiboardHintSolve, type JotiboardPin } from "./jotiboard.helpers";
 
 export interface JotiboardCounts {
@@ -23,15 +21,6 @@ export interface JotiboardImporter {
   /** Remove everything the sync imported (markers, solved cells that still hold the imported answer) and all records */
   purge(): Promise<{ markers: number; hints: number }>;
   counts(): Promise<JotiboardCounts>;
-}
-
-/** Drop the links hunt reports and hint cells keep to deleted markers (as deleteMarker does). */
-async function unlinkMarkers(markerIds: Types.ObjectId[]) {
-  if (!markerIds.length) return;
-  await Promise.all([
-    HuntReport.updateMany({ markerId: { $in: markerIds } }, { $unset: { markerId: 1 } }),
-    HintCell.updateMany({ markerId: { $in: markerIds } }, { $unset: { markerId: 1 } }),
-  ]);
 }
 
 async function importPins(pins: JotiboardPin[]): Promise<void> {
@@ -98,12 +87,20 @@ async function importHintSolves(solves: JotiboardHintSolve[]): Promise<void> {
       continue;
     }
     try {
-      await solveCell(solve.messageId, solve.area, solve.answer);
+      // onlyIfOpen: a cell we answer between the check above and this solve keeps our answer
+      await solveCell(solve.messageId, solve.area, solve.answer, { onlyIfOpen: true });
       await save({ result: "imported", cellId: cell._id, answer: solve.answer });
     } catch (error) {
-      // 409: a hint marker of ours already holds this area's hour
       if (!(error instanceof ServiceError) || error.status !== 409) throw error;
-      await save({ result: "skipped", reason: "duplicate" });
+      if (error.details.cellSolved) {
+        await save({ result: "skipped", reason: "cell-solved" });
+      } else if (error.details.existingMarkerId) {
+        // A hint marker of ours already holds this area's hour
+        await save({ result: "skipped", reason: "duplicate" });
+      } else {
+        // Any other conflict (a concurrent write on the cell): the next poll tries again
+        throw error;
+      }
     }
   }
 }

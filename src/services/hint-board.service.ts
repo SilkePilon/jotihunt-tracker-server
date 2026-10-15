@@ -1,6 +1,8 @@
 import mongoose from "mongoose";
 import { Article } from "../models/article.model";
 import { HintCell, HintCellStatus } from "../models/hint-cell.model";
+import { HuntReport } from "../models/hunt-report.model";
+import { JotiboardImport } from "../models/jotiboard-import.model";
 import { Marker, MarkerType } from "../models/marker.model";
 import { parseRdAnswer } from "./rd-answer";
 import { isDuplicateKeyError } from "../utils/mongo";
@@ -78,6 +80,33 @@ async function deleteMarkerIfUnlinked(markerId: mongoose.Types.ObjectId) {
   await Marker.deleteOne({ _id: markerId, type: MarkerType.Hint });
 }
 
+/** Drop the links hunt reports and hint cells keep to deleted markers (as deleteMarker does). */
+export async function unlinkMarkers(markerIds: mongoose.Types.ObjectId[]) {
+  if (!markerIds.length) return;
+  const [, cells] = await Promise.all([
+    HuntReport.updateMany({ markerId: { $in: markerIds } }, { $unset: { markerId: 1 } }),
+    HintCell.updateMany({ markerId: { $in: markerIds } }, { $unset: { markerId: 1 } }),
+  ]);
+  if (cells.modifiedCount > 0) invalidateBoardCache();
+}
+
+/**
+ * "Our data wins" over the Jotiboard sync: when the hint marker of this area and hour is an imported one, delete it (and
+ * the links to it) so our own write can take its place. Its import record becomes a skipped duplicate, so the sync does
+ * not bring it back. True when an imported marker was taken over.
+ */
+export async function takeOverImportedHintMarker(area: string, slotTime: Date): Promise<boolean> {
+  const imported = await Marker.findOneAndDelete({ type: MarkerType.Hint, area, time: slotTime, source: "jotiboard" }, { projection: { _id: 1 } }).lean();
+  if (!imported) return false;
+  await unlinkMarkers([imported._id]);
+  await JotiboardImport.updateMany(
+    { kind: "pin", markerId: imported._id },
+    { $set: { result: "skipped", reason: "duplicate" }, $unset: { markerId: 1 } },
+  );
+  invalidateBoardCache();
+  return true;
+}
+
 const sameLocation = (a?: number[] | null, b?: number[] | null) => !!a && !!b && a.length === b.length && a.every((value, i) => value === b[i]);
 
 /**
@@ -143,22 +172,39 @@ async function syncHintMarker(cellId: mongoose.Types.ObjectId) {
     await deleteMarkerIfUnlinked(createdMarkerId);
   }
 }
+export interface SolveOptions {
+  /** Replace another hint marker of the area and hour instead of answering 409 */
+  replaceMarker?: boolean;
+  /** Only answer a cell that is still open (the Jotiboard sync); else 409 with `cellSolved: true` */
+  onlyIfOpen?: boolean;
+}
+
+const cellSolvedError = () => new ServiceError(409, "Dit vak is al opgelost", { cellSolved: true });
+
 /**
  * Store an answer; anyone may answer, the last answer wins. A coordinate (RD) answer places the hint marker of the
- * area and hour (409 with existingMarkerId when another hint marker is already there, unless replaceMarker); a word
- * removes the marker the cell had. The cell is updated with a compare-and-set on its marker link, then the marker
- * follows the answer that won.
+ * area and hour (409 with existingMarkerId when another hint marker is already there, unless replaceMarker; a hint
+ * marker imported from Jotiboard is taken over silently); a word removes the marker the cell had. The cell is updated
+ * with a compare-and-set on its marker link (and, with onlyIfOpen, on its status), then the marker follows the answer
+ * that won.
  */
-export async function solveCell(articleId: number, area: string, answer: string, replaceMarker = false) {
+export async function solveCell(articleId: number, area: string, answer: string, options: boolean | SolveOptions = false) {
+  const { replaceMarker = false, onlyIfOpen = false } = typeof options === "boolean" ? { replaceMarker: options } : options;
   const trimmedAnswer = answer.trim();
   const rd = parseRdAnswer(trimmedAnswer);
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const cell = await readCell({ articleId, area });
     if (!cell) throw new ServiceError(404, "Hintvak niet gevonden");
+    if (onlyIfOpen && cell.status !== HintCellStatus.Open) throw cellSolvedError();
 
     if (rd) {
-      const existing = await Marker.findOne({ type: MarkerType.Hint, area, time: cell.slotTime }, { _id: 1 }).lean();
+      const existing = await Marker.findOne({ type: MarkerType.Hint, area, time: cell.slotTime }, { _id: 1, source: 1 }).lean();
+      if (existing?.source === "jotiboard") {
+        // Our answer wins over an imported hint pin; decide again with the marker (and links to it) gone
+        await takeOverImportedHintMarker(area, cell.slotTime);
+        continue;
+      }
       if (existing && String(existing._id) !== String(cell.markerId)) {
         if (!replaceMarker) {
           throw new ServiceError(409, "Er bestaat al een hint-marker voor dit deelgebied op dit uur", {
@@ -175,7 +221,7 @@ export async function solveCell(articleId: number, area: string, answer: string,
     const unset: Record<string, 1> = { ...UNSET_LEGACY };
     if (!rd) Object.assign(unset, { markerId: 1, answerLocation: 1 });
     const updated = await HintCell.updateOne(
-      { _id: cell._id, markerId: cell.markerId ?? null },
+      { _id: cell._id, markerId: cell.markerId ?? null, ...(onlyIfOpen ? { status: HintCellStatus.Open } : {}) },
       {
         $set: {
           answer: trimmedAnswer,
@@ -188,7 +234,7 @@ export async function solveCell(articleId: number, area: string, answer: string,
       // The legacy fields are no longer in the schema; strict mode would drop their $unset
       { strict: false },
     );
-    if (updated.matchedCount === 0) continue; // the marker link changed meanwhile: decide again
+    if (updated.matchedCount === 0) continue; // the marker link (or status) changed meanwhile: decide again (top of loop)
 
     // Answer changed from a coordinate to a word: remove the marker we created earlier
     if (!rd && cell.markerId) await deleteMarkerIfUnlinked(cell.markerId);
