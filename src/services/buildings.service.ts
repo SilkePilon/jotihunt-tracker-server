@@ -11,6 +11,8 @@ export interface BuildingsJob {
   failed: number;
   startedAt: string;
   finishedAt: string | null;
+  /** Stopped after MAX_CONSECUTIVE_FAILURES failed tiles in a row; the rest counts as failed */
+  aborted: boolean;
 }
 
 export interface BuildingsStatus {
@@ -41,6 +43,11 @@ export interface BuildingsServiceOptions {
 }
 
 const BUSY = "Er loopt al een taak voor de 3D-gebouwen.";
+/** A job stops after this many failed tiles in a row, so a hanging 3DBAG can't lock the cache for hours */
+export const MAX_CONSECUTIVE_FAILURES = 10;
+
+/** A queued job fetch that was dropped because its job aborted */
+class JobAbortedError extends Error {}
 
 /**
  * 3D buildings from 3DBAG, cached per z15 tile as a ready vector tile. A miss is fetched on demand (map requests go
@@ -54,9 +61,10 @@ export class BuildingsService {
   private active = 0;
   /** Waiting fetches, each FIFO; map requests go before job fetches */
   private readonly urgentQueue: (() => void)[] = [];
-  private readonly jobQueue: (() => void)[] = [];
+  /** Job entries; called with `skip` to drop the fetch without giving it a slot (job aborted) */
+  private readonly jobQueue: ((skip?: boolean) => void)[] = [];
   /** The jobQueue entry per tile id, so a map request for that tile can move it to the urgent queue */
-  private readonly queuedJobs = new Map<string, () => void>();
+  private readonly queuedJobs = new Map<string, (skip?: boolean) => void>();
   /** A job start or clear is past its busy check but hasn't set `job` / finished yet */
   private starting = false;
   private job: BuildingsJob | null = null;
@@ -142,16 +150,32 @@ export class BuildingsService {
   }
 
   private async startJob(kind: BuildingsJob["kind"], tiles: TileXY[]): Promise<BuildingsStatus> {
-    const job: BuildingsJob = { kind, done: 0, total: tiles.length, failed: 0, startedAt: this.now().toISOString(), finishedAt: null };
+    const job: BuildingsJob = {
+      kind,
+      done: 0,
+      total: tiles.length,
+      failed: 0,
+      startedAt: this.now().toISOString(),
+      finishedAt: null,
+      aborted: false,
+    };
     this.job = job;
     this.options.logger.info(`3D buildings ${kind} started (${tiles.length} tiles)`);
+    let consecutiveFailures = 0;
     this.jobDone = Promise.all(
       tiles.map(async (tile) => {
         try {
           await this.fetchAndStore(tile, false);
+          consecutiveFailures = 0;
         } catch (error) {
           job.failed++;
+          if (job.aborted) return;
           this.options.logger.warn(`3D buildings tile ${tileId(tile)} failed: ${error instanceof Error ? error.message : String(error)}`);
+          if (++consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            job.aborted = true;
+            this.options.logger.warn(`3D buildings ${kind} aborted after ${consecutiveFailures} consecutive failures`);
+            this.dropQueuedJobFetches();
+          }
         } finally {
           job.done++;
         }
@@ -191,20 +215,27 @@ export class BuildingsService {
     this.urgentQueue.push(resolve);
   }
 
+  /** Job aborted: its waiting fetches end with JobAbortedError (fetches a map request joined were promoted, so they stay). */
+  private dropQueuedJobFetches() {
+    for (const entry of this.jobQueue.splice(0)) entry(true);
+  }
+
   private async limited<T>(id: string, urgent: boolean, task: () => Promise<T>): Promise<T> {
     if (this.active >= this.maxParallel) {
-      await new Promise<void>((resolve) => {
+      const skip = await new Promise<boolean>((resolve) => {
         if (urgent) {
-          this.urgentQueue.push(resolve);
+          this.urgentQueue.push(() => resolve(false));
         } else {
-          const entry = () => {
+          const entry = (skip = false) => {
             this.queuedJobs.delete(id);
-            resolve();
+            resolve(skip);
           };
           this.queuedJobs.set(id, entry);
           this.jobQueue.push(entry);
         }
       });
+      // Dropped without a slot, so nothing to hand on
+      if (skip) throw new JobAbortedError("job aborted");
     } else {
       this.active++;
     }

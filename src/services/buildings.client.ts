@@ -56,7 +56,11 @@ export class BagWfsClient implements BuildingsApi {
     } catch (error) {
       throw new BuildingsUpstreamError(`3DBAG not reachable: ${error instanceof Error ? error.message : String(error)}`);
     }
-    if (!response.ok) throw new BuildingsUpstreamError(`3DBAG answered ${response.status}`);
+    if (!response.ok) {
+      // Free the connection; the error body isn't needed
+      await response.body?.cancel();
+      throw new BuildingsUpstreamError(`3DBAG answered ${response.status}`);
+    }
     let body: { features?: unknown };
     try {
       body = (await response.json()) as { features?: unknown };

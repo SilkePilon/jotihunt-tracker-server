@@ -10,7 +10,7 @@ function requireService(): BuildingsService {
   return service;
 }
 
-/** Vector tile bytes; MapLibre loads it with the Authorization header (transformRequest). */
+/** Vector tile bytes; MapLibre loads it with the Authorization header (the client's jhbuildings:// custom protocol fetches it). */
 export async function getTile(req: Request, res: Response) {
   const tile = { x: Number(req.params.x), y: Number(req.params.y) };
   if (Number(req.params.z) !== TILE_ZOOM || !isValidTile(tile)) return res.status(400).json({ message: "Ongeldige tegel." });

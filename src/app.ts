@@ -47,7 +47,10 @@ app.use((_req, res, next) => {
 });
 // Polled JSON (hint board, hunt reports, predictions) shrinks 5-10x. ETags are computed on the uncompressed body
 // before compression, so conditional requests still get a 304.
-app.use(compression());
+// Building vector tiles too: compressible() doesn't know application/x-protobuf
+app.use(
+  compression({ filter: (req, res) => /x-protobuf/.test(String(res.getHeader("Content-Type"))) || compression.filter(req, res) }),
+);
 // Website error reports for Sentry (raw envelope body, no auth, before the JSON parser and the demo gate)
 app.use("/sentry-tunnel", cors({ maxAge: 86400, exposedHeaders: ["X-Sentry-Rate-Limits", "Retry-After"] }), sentryTunnelRoute);
 app.use(express.json());

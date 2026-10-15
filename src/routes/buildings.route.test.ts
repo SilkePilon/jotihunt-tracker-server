@@ -20,9 +20,24 @@ const TILE = tileOf(5.9005, 51.9805);
 class FakeApi implements BuildingsApi {
   fail = false;
   empty = false;
+  /** A 20x20 grid of buildings, so the tile is over compression's 1 KB threshold */
+  many = false;
+  /** While set, fetches wait for it (keeps a job running) */
+  gate: Promise<void> | null = null;
   async fetchParts(b: Bounds): Promise<RawBuildingPart[]> {
+    if (this.gate) await this.gate;
     if (this.fail) throw new BuildingsUpstreamError("down");
     if (this.empty) return [];
+    if (this.many) {
+      const step = (b.east - b.west) / 20;
+      const dy = (b.north - b.south) / 20;
+      return Array.from({ length: 400 }, (_, i) => {
+        const lon = b.west + (i % 20) * step;
+        const lat = b.south + Math.floor(i / 20) * dy;
+        const ring = [[lon, lat], [lon + step / 2, lat], [lon + step / 2, lat + dy / 2], [lon, lat + dy / 2], [lon, lat]];
+        return { geometry: { type: "Polygon", coordinates: [ring] }, properties: { b3_h_70p: 20 + (i % 7), b3_h_maaiveld: 10 } };
+      });
+    }
     const lon = (b.west + b.east) / 2;
     const lat = (b.south + b.north) / 2;
     const d = (b.east - b.west) / 10;
@@ -85,6 +100,15 @@ describe("GET /buildings/15/:x/:y.pbf", () => {
     expect((await res.arrayBuffer()).byteLength).toBeGreaterThan(0);
   });
 
+  test("a tile over 1 KB is gzipped", async () => {
+    api.many = true;
+    const token = tokenFor(await createUser());
+    const res = await request(tilePath(), { token, headers: { "Accept-Encoding": "gzip" } });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-encoding")).toBe("gzip");
+    expect((await res.arrayBuffer()).byteLength).toBeGreaterThan(1024);
+  });
+
   test("empty tile: 204", async () => {
     api.empty = true;
     const token = tokenFor(await createUser());
@@ -123,10 +147,13 @@ describe("admin routes", () => {
     const empty = await (await request("/admin/buildings", { token })).json();
     expect(empty).toMatchObject({ tiles: 0, buildings: 0, job: null });
 
+    let release = () => {};
+    api.gate = new Promise<void>((resolve) => (release = resolve));
     const started = await request("/admin/buildings/prefetch", { method: "POST", token, json: { lat: 51.98, lon: 5.9, radiusKm: 1 } });
     expect(started.status).toBe(202);
     expect((await started.json()).job.kind).toBe("prefetch");
     expect((await request("/admin/buildings/refresh", { method: "POST", token })).status).toBe(409);
+    release();
     await service.idle();
 
     const status = await (await request("/admin/buildings", { token })).json();

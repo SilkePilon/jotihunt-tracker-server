@@ -3,7 +3,7 @@ import mongoose, { type Connection } from "mongoose";
 import { buildingTileModel } from "../models/building-tile.model";
 import { BuildingsUpstreamError, type BuildingsApi } from "./buildings.client";
 import { tileBounds, tileId, tileOf, tilesAround, type Bounds, type RawBuildingPart } from "./buildings.helpers";
-import { BuildingsService } from "./buildings.service";
+import { BuildingsService, MAX_CONSECUTIVE_FAILURES } from "./buildings.service";
 
 const uri = process.env.MONGO_URI_TEST ?? "mongodb://localhost:27017/jotihunt-test";
 const silent = { info() {}, warn() {}, error() {} };
@@ -207,6 +207,38 @@ describe("jobs", () => {
     const rejected = results.find((r) => r.status === "rejected");
     expect(rejected?.status === "rejected" && rejected.reason).toMatchObject({ status: 409 });
     await service.idle();
+  });
+
+  test("a job aborts after MAX_CONSECUTIVE_FAILURES failed tiles in a row", async () => {
+    const warns: string[] = [];
+    const logger = { ...silent, warn: (m: string) => warns.push(m) };
+    service = new BuildingsService({ connection: db, client: api, logger });
+    const tiles = tilesAround(51.98, 5.9, 3);
+    for (const tile of tiles) api.failing.add(key(tileBounds(tile)));
+    await service.startPrefetch(51.98, 5.9, 3);
+    await service.idle();
+    const { job } = await service.status();
+    expect(job).toMatchObject({ total: tiles.length, done: tiles.length, failed: tiles.length, aborted: true });
+    expect(tiles.length).toBeGreaterThan(MAX_CONSECUTIVE_FAILURES + 4);
+    // The 10 failures, plus at most maxParallel (4) already started: a failing fetch hands its slot on before the job sees it
+    expect(api.calls.length).toBeGreaterThanOrEqual(MAX_CONSECUTIVE_FAILURES);
+    expect(api.calls.length).toBeLessThanOrEqual(MAX_CONSECUTIVE_FAILURES + 4);
+    expect(warns.filter((m) => m.includes("aborted after"))).toEqual([`3D buildings prefetch aborted after ${MAX_CONSECUTIVE_FAILURES} consecutive failures`]);
+    expect(warns.filter((m) => m.includes(" failed: "))).toHaveLength(MAX_CONSECUTIVE_FAILURES);
+    // The service works again after the abort
+    api.failing.clear();
+    expect(await service.getTile(TILE)).toBeInstanceOf(Buffer);
+  });
+
+  test("a success resets the consecutive failure count", async () => {
+    service = new BuildingsService({ connection: db, client: api, logger: silent, maxParallel: 1 });
+    const tiles = tilesAround(51.98, 5.9, 3);
+    // Every other tile fails: never 10 in a row
+    tiles.forEach((tile, i) => i % 2 === 0 && api.failing.add(key(tileBounds(tile))));
+    await service.startPrefetch(51.98, 5.9, 3);
+    await service.idle();
+    expect((await service.status()).job).toMatchObject({ done: tiles.length, failed: Math.ceil(tiles.length / 2), aborted: false });
+    expect(api.calls).toHaveLength(tiles.length);
   });
 
   test("radius is validated", async () => {
