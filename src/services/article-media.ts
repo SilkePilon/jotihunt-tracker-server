@@ -156,7 +156,7 @@ const MEDIA_TYPES: Record<string, string> = {
 };
 
 /** The body, or null when it is larger than `max` bytes (stops reading there) */
-async function readCapped(response: Response, max: number): Promise<Uint8Array | null> {
+export async function readCapped(response: Response, max: number): Promise<Uint8Array | null> {
   if (!response.body) {
     const data = new Uint8Array(await response.arrayBuffer());
     return data.byteLength <= max ? data : null;

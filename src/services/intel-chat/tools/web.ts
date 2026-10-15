@@ -1,6 +1,7 @@
 import { google } from "@ai-sdk/google";
 import { generateText, jsonSchema, tool, type LanguageModel } from "ai";
 import { toGeminiError } from "../../ai/gemini-error";
+import { readWebPage } from "../web-fetch";
 import { safely, ToolInputError, type IntelToolContext } from "./context";
 
 /** Tools that reach the internet; only active when the user switched "Web" on */
@@ -59,6 +60,11 @@ export function webTools(ctx: IntelToolContext) {
       description: "Zoek op internet (Google). Voor feiten, plaatsen, namen, trivia en codes die je niet zeker weet. Geeft een kort antwoord met bronnen.",
       inputSchema: jsonSchema<{ query: string }>({ type: "object", properties: { query: { type: "string", description: "Zoekvraag, zo specifiek mogelijk" } }, required: ["query"] }),
       execute: ({ query }, { abortSignal }) => safely("webSearch", () => webSearch(ctx.toolModel, query, abortSignal)),
+    }),
+    readWebPage: tool({
+      description: "Lees een openbare webpagina als platte tekst (max 20 000 tekens), bv. een bron uit webSearch of een link uit een hint.",
+      inputSchema: jsonSchema<{ url: string }>({ type: "object", properties: { url: { type: "string", description: "http(s)-adres" } }, required: ["url"] }),
+      execute: ({ url }, { abortSignal }) => safely("readWebPage", () => readWebPage(url, { fetch: ctx.fetch, lookup: ctx.lookup, signal: abortSignal })),
     }),
   };
 }
