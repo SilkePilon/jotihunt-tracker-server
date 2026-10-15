@@ -44,6 +44,67 @@ describe("assertPublicUrl", () => {
   });
 });
 
+describe("IPv6 forms that embed an IPv4 address", () => {
+  const embedded = ["http://[::ffff:127.0.0.1]/", "http://[::ffff:7f00:1]/", "http://[::ffff:a9fe:a9fe]/", "http://[0:0:0:0:0:ffff:127.0.0.1]/", "http://[::127.0.0.1]/", "http://[::7f00:1]/", "http://[64:ff9b::7f00:1]/", "http://[2002:7f00:1::]/", "http://[2002:a00:1::1]/", "http://[fec0::1]/", "http://[::ffff:0:a00:1]/"];
+
+  test("are refused through the URL path", async () => {
+    for (const url of embedded) await expect(assertPublicUrl(url, publicDns)).rejects.toThrow("niet toegestaan");
+  });
+
+  test("readWebPage never fetches them", async () => {
+    const { fetch, urls } = fakeFetch({});
+    for (const url of embedded) await expect(readWebPage(url, { fetch, lookup: publicDns })).rejects.toThrow("niet toegestaan");
+    expect(urls).toEqual([]);
+  });
+
+  test("a host resolving to a mapped private address is refused", async () => {
+    await expect(assertPublicUrl("http://mapped.example/", async () => ["::ffff:10.0.0.1"])).rejects.toThrow("niet toegestaan");
+    await expect(assertPublicUrl("http://mapped.example/", async () => ["::ffff:a00:1"])).rejects.toThrow("niet toegestaan");
+  });
+
+  test("public IPv6 and embedded public IPv4 stay allowed", async () => {
+    for (const url of ["http://[2a00:1450:400e:80c::200e]/", "http://[::ffff:8.8.8.8]/", "http://[2002:808:808::1]/"]) {
+      expect((await assertPublicUrl(url, publicDns)).protocol).toBe("http:");
+    }
+    expect((await assertPublicUrl("http://v6.example/", async () => ["2a00:1450:400e:80c::200e"])).hostname).toBe("v6.example");
+  });
+
+  test("documentation and test-net IPv4 ranges are private", () => {
+    for (const ip of ["192.0.2.1", "198.51.100.7", "203.0.113.9", "0.1.2.3", "100.127.255.255", "2001:db8::1"]) expect(isPrivateAddress(ip)).toBe(true);
+  });
+});
+
+describe("readWebPage deadline", () => {
+  test("a slow DNS lookup is cut off by the deadline signal", async () => {
+    const { fetch, urls } = fakeFetch({});
+    const never = () => new Promise<string[]>(() => {});
+    const started = Date.now();
+    await expect(readWebPage("https://slow.example/", { fetch, lookup: never, signal: AbortSignal.timeout(50) })).rejects.toThrow("Pagina niet bereikbaar");
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(urls).toEqual([]);
+  });
+
+  test("a user abort stops a pending lookup and a pending fetch", async () => {
+    const lookupAbort = new AbortController();
+    const pendingLookup = readWebPage("https://slow.example/", { fetch: fakeFetch({}).fetch, lookup: () => new Promise(() => {}), signal: lookupAbort.signal });
+    lookupAbort.abort();
+    await expect(pendingLookup).rejects.toThrow("Pagina niet bereikbaar");
+
+    const fetchAbort = new AbortController();
+    let sawSignal = false;
+    const hangingFetch = (_url: string, init: RequestInit) =>
+      new Promise<Response>((_, reject) => {
+        sawSignal = init.signal instanceof AbortSignal;
+        init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      });
+    const pendingFetch = readWebPage("https://example.org/a", { fetch: hangingFetch, lookup: publicDns, signal: fetchAbort.signal });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    fetchAbort.abort();
+    await expect(pendingFetch).rejects.toThrow("Pagina niet bereikbaar");
+    expect(sawSignal).toBe(true);
+  });
+});
+
 describe("readWebPage", () => {
   test("html becomes text with the title", async () => {
     const { fetch } = fakeFetch({ "https://example.org/a": () => html("<html><head><title> Brave </title></head><body><p>Merida</p><script>x()</script></body></html>") });
