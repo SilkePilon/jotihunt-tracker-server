@@ -2,13 +2,14 @@ import { appDataTools } from "./app-data";
 import type { IntelToolContext } from "./context";
 import { mapTools } from "./map";
 import { proposalTools } from "./proposals";
+import { puzzleTools } from "./puzzle";
 import { WEB_TOOL_NAMES, webTools } from "./web";
 
 export type { IntelToolContext } from "./context";
 
 /** Every tool of the Intel chat; names are binding for the client (UI part type `tool-<name>`) */
 export function createIntelTools(ctx: IntelToolContext) {
-  return { ...appDataTools(ctx), ...mapTools(ctx), ...proposalTools(ctx), ...webTools(ctx) };
+  return { ...appDataTools(ctx), ...mapTools(ctx), ...proposalTools(ctx), ...webTools(ctx), ...puzzleTools(ctx) };
 }
 
 export type IntelTools = ReturnType<typeof createIntelTools>;
