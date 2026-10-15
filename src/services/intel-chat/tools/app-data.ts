@@ -2,12 +2,14 @@ import { jsonSchema, tool } from "ai";
 import { AREAS, knownAreaName, type AreaName } from "../../../constants/areas";
 import { groupConfig } from "../../../auth/config";
 import { Area } from "../../../models/area.model";
+import { Assignment, AssignmentStatus } from "../../../models/assignment.model";
 import { Hunt } from "../../../models/hunt.model";
 import { HuntReport } from "../../../models/hunt-report.model";
 import { Prediction } from "../../../models/prediction.model";
 import { Article, publicArticlesFilter } from "../../../models/article.model";
 import { HintCell, HintCellStatus } from "../../../models/hint-cell.model";
 import { Team } from "../../../models/team.model";
+import { User } from "../../../models/user.model";
 import { getHuntableAreas } from "../../../settings/huntable-areas-setting";
 import { articleAttachments, articleImages } from "../../article-media";
 import { htmlToText } from "../../html-text";
@@ -110,6 +112,43 @@ export async function loadItemView(articleId: number): Promise<ItemView | null> 
   if (!article) return null;
   const cells = article.type === "hint" ? await HintCell.find({ articleId }).lean() : [];
   return itemView(article, cells);
+}
+
+/** A public assignment article ("opdracht"); ToolInputError when not found or another kind of item */
+export async function findAssignmentArticle(articleId: number) {
+  const article = await findPublicArticle(articleId);
+  if (!article) throw new ToolInputError(`Item ${articleId} niet gevonden`);
+  if (article.type !== "assignment") throw new ToolInputError(`Item ${articleId} is geen opdracht`);
+  return article;
+}
+
+/** getAssignment output (contract: AssignmentInfo) */
+export interface AssignmentInfo {
+  articleId: number;
+  title: string;
+  status: AssignmentStatus;
+  owner: string | null;
+  notes: { by: string; text: string; at: string }[];
+  endTime: string | null;
+  maxPoints: number | null;
+}
+
+/** Our bookkeeping of an assignment: status, owner and notes with display names (open and empty before the first write) */
+export async function assignmentInfo(articleId: number): Promise<AssignmentInfo> {
+  const article = await findAssignmentArticle(articleId);
+  const assignment = await Assignment.findOne({ articleId }).lean();
+  const ids = [assignment?.owner, ...(assignment?.notes ?? []).map((note) => note.user)].filter((id) => id !== undefined && id !== null);
+  const names = new Map((await User.find({ _id: { $in: ids } }, { name: 1 }).lean()).map((user) => [user._id.toString(), user.name]));
+  const nameOf = (id: unknown) => names.get(String(id)) ?? "Onbekend";
+  return {
+    articleId,
+    title: article.title,
+    status: (assignment?.status as AssignmentStatus | undefined) ?? AssignmentStatus.Open,
+    owner: assignment?.owner ? nameOf(assignment.owner) : null,
+    notes: (assignment?.notes ?? []).map((note) => ({ by: nameOf(note.user), text: note.text, at: note.createdAt.toISOString() })),
+    endTime: article.endTime ? article.endTime.toISOString() : null,
+    maxPoints: article.maxPoints ?? null,
+  };
 }
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -291,6 +330,11 @@ export function appDataTools(ctx: IntelToolContext) {
       description: "Geschiedenis van één vossenteam, oud naar nieuw: hunts (jotihunt.nl), onze huntmeldingen met locatie, opgeloste hintpunten, en de laatste AI-voorspelling.",
       inputSchema: jsonSchema<{ area: string }>({ type: "object", properties: { area: { type: "string", enum: [...AREAS] } }, required: ["area"] }),
       execute: ({ area }) => safely("getFoxHistory", () => foxHistory(area)),
+    }),
+    getAssignment: tool({
+      description: "Lees onze administratie van een opdracht: status (open, busy, submitted, skipped), wie hem doet, notities, deadline en max punten. Zonder articleId: het open item.",
+      inputSchema: jsonSchema<{ articleId?: number }>({ type: "object", properties: { articleId: { type: "integer", description: "Id van een andere opdracht; weglaten voor het open item" } } }),
+      execute: ({ articleId }) => safely("getAssignment", () => assignmentInfo(articleId ?? ctx.articleId)),
     }),
     getOurTeams: tool({
       description: "Waar onze eigen hunters nu zijn (Traccar-trackers en Life360), met hoe oud de positie is in minuten.",

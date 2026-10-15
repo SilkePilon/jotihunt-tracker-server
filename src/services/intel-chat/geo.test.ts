@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { toRd } from "../rd-answer";
-import { bearingBetween, convexHull, distanceToHull, estimateArea, formatCoordinate, groupsWithin, insideNl, nearestGroups, parseCoordinate, projectFrom, type AreaGroup } from "./geo";
+import { fromRd, toRd } from "../rd-answer";
+import { bearingBetween, convexHull, distanceToHull, estimateArea, formatCoordinate, groupsWithin, insideNl, intersectRd, nearestGroups, parseCoordinate, projectFrom, type AreaGroup } from "./geo";
 
 /** HQ Jotihunt, Stikkerstraat Arnhem (RD 188362 440722) */
 const HQ = { lat: 51.95392, lng: 5.87252 };
@@ -159,5 +159,69 @@ describe("projectFrom / bearingBetween", () => {
 
   test("bearing is 0-360", () => {
     expect(bearingBetween(HQ, projectFrom(HQ, 350, 1000))).toBeCloseTo(350, 0);
+  });
+});
+
+describe("intersectRd", () => {
+  const at = (x: number, y: number) => {
+    const { lat, lng } = fromRd(x, y);
+    return { lat, lng };
+  };
+  const A = at(180_000, 440_000);
+  const B = at(190_000, 440_000);
+  const C = at(185_000, 450_000);
+  const TARGET = { x: 185_000, y: 445_000 };
+  const near = (rd: { x: number; y: number }, expected: { x: number; y: number }, metres = 5) => {
+    expect(Math.abs(rd.x - expected.x)).toBeLessThan(metres);
+    expect(Math.abs(rd.y - expected.y)).toBeLessThan(metres);
+  };
+  const toward = (from: { lat: number; lng: number }) => bearingBetween(from, at(TARGET.x, TARGET.y));
+
+  test("two bearings meet in one point", () => {
+    const result = intersectRd({ bearings: [{ from: A, bearingDeg: toward(A) }, { from: B, bearingDeg: toward(B) }] });
+    expect(result.points).toHaveLength(1);
+    near(result.points[0].rd, TARGET);
+    expect(result.note).toBeUndefined();
+  });
+
+  test("three bearings: the least-squares point first", () => {
+    const result = intersectRd({ bearings: [{ from: A, bearingDeg: toward(A) }, { from: B, bearingDeg: toward(B) }, { from: C, bearingDeg: toward(C) + 1 }] });
+    near(result.points[0].rd, TARGET, 120);
+    expect(result.points.length).toBeLessThanOrEqual(2);
+  });
+
+  test("parallel lines and lines that only cross behind a start point give a note", () => {
+    expect(intersectRd({ bearings: [{ from: A, bearingDeg: 0 }, { from: B, bearingDeg: 0 }] })).toEqual({ points: [], note: "De peilingen lopen evenwijdig; er is geen snijpunt" });
+    expect(intersectRd({ bearings: [{ from: A, bearingDeg: toward(A) + 180 }, { from: B, bearingDeg: toward(B) + 180 }] })).toEqual({
+      points: [],
+      note: "De peilingen snijden alleen achter een startpunt; er is geen snijpunt",
+    });
+  });
+
+  test("two circles: two points, one when they touch, none apart", () => {
+    const r = Math.hypot(5000, 5000);
+    const two = intersectRd({ circles: [{ center: A, radiusM: r }, { center: B, radiusM: r }] });
+    expect(two.points).toHaveLength(2);
+    const ys = two.points.map((point) => point.rd.y).sort((p, q) => p - q);
+    near({ x: two.points[0].rd.x, y: ys[0] }, { x: 185_000, y: 435_000 });
+    near({ x: two.points[1].rd.x, y: ys[1] }, TARGET);
+    const touch = intersectRd({ circles: [{ center: A, radiusM: 5000 }, { center: B, radiusM: 5000 }] });
+    expect(touch.points).toHaveLength(1);
+    near(touch.points[0].rd, { x: 185_000, y: 440_000 });
+    expect(intersectRd({ circles: [{ center: A, radiusM: 1000 }, { center: B, radiusM: 1000 }] })).toEqual({ points: [], note: "De cirkels raken elkaar niet; er is geen snijpunt" });
+  });
+
+  test("a bearing and a circle", () => {
+    const result = intersectRd({ bearings: [{ from: A, bearingDeg: toward(A) }], circles: [{ center: B, radiusM: Math.hypot(5000, 5000) }] });
+    expect(result.points).toHaveLength(1);
+    near(result.points[0].rd, TARGET);
+    expect(intersectRd({ bearings: [{ from: A, bearingDeg: 270 }], circles: [{ center: B, radiusM: 1000 }] })).toEqual({ points: [], note: "De peiling raakt de cirkel niet; er is geen snijpunt" });
+  });
+
+  test("only points: their centroid", () => {
+    const result = intersectRd({ points: [A, B, C] });
+    expect(result.points).toHaveLength(1);
+    near(result.points[0].rd, { x: 185_000, y: 443_333 });
+    expect(result.note).toBe("Middelpunt van 3 punten");
   });
 });

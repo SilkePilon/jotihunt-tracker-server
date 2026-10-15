@@ -2,9 +2,9 @@ import { jsonSchema, tool } from "ai";
 import { AREAS, knownAreaName } from "../../../constants/areas";
 import { loadGroups, loadSolvedHintPoints, loadTrackers } from "../data";
 import { straightLineSeconds } from "../../prediction/straight-line.router";
-import { bearingBetween, coordinateAt, formatCoordinate, groupsWithin, insideNl, metresBetween, parseCoordinate, projectFrom, type ParsedCoordinate } from "../geo";
+import { bearingBetween, coordinateAt, formatCoordinate, groupsWithin, insideNl, intersectRd, metresBetween, parseCoordinate, projectFrom, type ParsedCoordinate } from "../geo";
 import { geocode, reverseGeocode } from "../pdok.client";
-import { checkPointResult } from "../point";
+import { checkPointResult, pointResult, type PointResult } from "../point";
 import { createTurnBudget, safely, spend, ToolInputError, type IntelToolContext } from "./context";
 
 /** Description of a `point` argument, shared by every tool that takes one */
@@ -51,6 +51,37 @@ export function project(fromText: string, bearing: number, metres: number) {
   const target = coordinateAt(projectFrom(from, ((bearing % 360) + 360) % 360, metres));
   return { latLng: target.latLng, rd: { x: Math.round(target.rd.x), y: Math.round(target.rd.y) }, formatted: formatCoordinate(target), insideNl: insideNl(target.latLng) };
 }
+const MAX_INTERSECT_INPUTS = 10;
+const MAX_CIRCLE_M = 100_000;
+const TOO_FEW = "Geef minstens twee peilingen of cirkels, of alleen points (minstens twee) voor het middelpunt";
+
+const listOf = <T>(value: T[] | undefined, name: string): T[] => {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > MAX_INTERSECT_INPUTS) throw new ToolInputError(`${name} moet een lijst van max 10 zijn`);
+  return value;
+};
+
+/** Where bearings (kruispeiling) and circles meet (0-2 candidates, best first), or the centroid of points */
+export async function intersect(input: { bearings?: { from: string; bearingDeg: number }[]; circles?: { center: string; radiusM: number }[]; points?: string[] }): Promise<{ points: PointResult[]; note?: string }> {
+  const bearings = listOf(input.bearings, "bearings").map((bearing) => {
+    const bearingDeg = Number(bearing?.bearingDeg);
+    if (!Number.isFinite(bearingDeg)) throw new ToolInputError("bearingDeg moet een getal zijn");
+    return { from: readPoint(bearing?.from, "from").latLng, bearingDeg };
+  });
+  const circles = listOf(input.circles, "circles").map((circle) => {
+    const radiusM = Number(circle?.radiusM);
+    if (!Number.isFinite(radiusM) || radiusM < 1 || radiusM > MAX_CIRCLE_M) throw new ToolInputError("radiusM moet tussen 1 en 100000 liggen");
+    return { center: readPoint(circle?.center, "center").latLng, radiusM };
+  });
+  const lines = bearings.length + circles.length;
+  const points = lines === 0 ? listOf(input.points, "points").map((point) => readPoint(point, "points").latLng) : [];
+  if (lines === 1 || (lines === 0 && points.length < 2)) throw new ToolInputError(TOO_FEW);
+  const result = intersectRd({ bearings, circles, points });
+  const groups = await loadGroups();
+  const label = (index: number) => (lines === 0 ? "Middelpunt" : result.points.length === 1 ? "Snijpunt" : `Snijpunt ${index + 1}`);
+  return { points: result.points.map((point, index) => pointResult(point, label(index), groups)), ...(result.note ? { note: result.note } : {}) };
+}
+
 export function mapTools(turn: IntelToolContext) {
   const ctx: IntelToolContext = { ...turn, budget: turn.budget ?? createTurnBudget() };
   return {
@@ -115,6 +146,25 @@ export function mapTools(turn: IntelToolContext) {
         required: ["from", "bearingDeg", "distanceM"],
       }),
       execute: ({ from, bearingDeg, distanceM }) => safely("projectPoint", async () => project(from, Number(bearingDeg), Number(distanceM))),
+    }),
+    intersect: tool({
+      description:
+        "Snijpunt van kompaspeilingen (kruispeiling: vanaf een punt in een richting) en/of cirkels (op een afstand van een punt): max 2 kandidaten, beste eerst, elk met deelgebied en dichtstbijzijnde groep. Met alleen points: het middelpunt. Een note legt uit waarom er geen (exact) snijpunt is.",
+      inputSchema: jsonSchema<{ bearings?: { from: string; bearingDeg: number }[]; circles?: { center: string; radiusM: number }[]; points?: string[] }>({
+        type: "object",
+        properties: {
+          bearings: {
+            type: "array",
+            items: { type: "object", properties: { from: { type: "string", description: POINT_DESCRIPTION }, bearingDeg: { type: "number", description: "Kompasrichting in graden, 0 = noord" } }, required: ["from", "bearingDeg"] },
+          },
+          circles: {
+            type: "array",
+            items: { type: "object", properties: { center: { type: "string", description: POINT_DESCRIPTION }, radiusM: { type: "number", description: "Afstand in meters (1-100000)" } }, required: ["center", "radiusM"] },
+          },
+          points: { type: "array", items: { type: "string", description: POINT_DESCRIPTION }, description: "Alleen voor het middelpunt van punten" },
+        },
+      }),
+      execute: (input) => safely("intersect", () => intersect(input)),
     }),
     geocode: tool({
       description: "Zoek een adres, straat, plaats of postcode in Nederland (PDOK). Geeft max 5 treffers met coördinaten.",

@@ -1,6 +1,7 @@
 import { google } from "@ai-sdk/google";
 import { generateText, jsonSchema, tool, type LanguageModel } from "ai";
 import { toGeminiError } from "../../ai/gemini-error";
+import { CIPHER_METHODS, decodeCipher } from "../cipher";
 import { BUDGET_EXHAUSTED, createTurnBudget, safely, spend, ToolInputError, type IntelToolContext } from "./context";
 
 export const RUN_CODE_TIMEOUT_MS = 60_000;
@@ -45,6 +46,20 @@ export async function runCode(model: LanguageModel, task: string, abortSignal?: 
 export function puzzleTools(ctx: IntelToolContext) {
   const budget = ctx.budget ?? createTurnBudget();
   return {
+    decodeCipher: tool({
+      description:
+        "Ontcijfer tekst zonder AI, exact: caesar (alle 25 verschuivingen), atbash, a1z26, morse, roman, dutch-numbers (Nederlandse getalwoorden → cijfers), reverse, mirror-digits (cijfer → 9 - cijfer), vigenere (met key), nato, keypad (T9 multi-tap). Zonder method: alle passende methodes, meest leesbare/RD-achtige eerst (max 30).",
+      inputSchema: jsonSchema<{ text: string; method?: string; key?: string }>({
+        type: "object",
+        properties: {
+          text: { type: "string", description: "De gecodeerde tekst (max 2000 tekens)" },
+          method: { type: "string", enum: [...CIPHER_METHODS], description: "Eén methode; weglaten om alles te proberen" },
+          key: { type: "string", description: "Sleutelwoord voor vigenere" },
+        },
+        required: ["text"],
+      }),
+      execute: ({ text, method, key }) => safely("decodeCipher", async () => decodeCipher(text, method, key)),
+    }),
     runCode: tool({
       description: "Laat een precieze rekentaak uitvoeren met Python: ciphers decoderen (Caesar met alle shifts, binair, morse-tabellen), letters tellen, stapeltellen, rekenwerk. Beschrijf de taak volledig met alle invoer.",
       inputSchema: jsonSchema<{ task: string }>({ type: "object", properties: { task: { type: "string", description: "De volledige taak met alle gegevens" } }, required: ["task"] }),

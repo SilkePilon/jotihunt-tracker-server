@@ -1,5 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { Area } from "../../../models/area.model";
+import { Assignment, AssignmentStatus } from "../../../models/assignment.model";
+import { User } from "../../../models/user.model";
 import { Article } from "../../../models/article.model";
 import { HintCell, HintCellStatus } from "../../../models/hint-cell.model";
 import { Team } from "../../../models/team.model";
@@ -119,5 +121,35 @@ describe("getAreas", () => {
     expect(overview.huntableConfigured).toBe(false);
     expect(overview.areas.every((area) => area.allowed)).toBe(true);
     expect(overview.areas.find((area) => area.area === "alpha")?.huntableNow).toBe(true);
+  });
+});
+
+describe("getAssignment", () => {
+  test("status, owner and notes with names; defaults when we never wrote anything", async () => {
+    const assignment = appDataTools({ articleId: 11, now: () => NOW, toolModel: mockModel(() => "") });
+    expect(await runTool(assignment.getAssignment, {})).toEqual({ articleId: 11, title: "Bouw een kasteel", status: "open", owner: null, notes: [], endTime: "2026-10-17T18:00:00.000Z", maxPoints: 12 });
+    const [anna, bram] = await User.create([{ name: "Anna" }, { name: "Bram" }]);
+    await Assignment.create({
+      articleId: 11,
+      status: AssignmentStatus.Busy,
+      owner: anna._id,
+      notes: [
+        { user: bram._id, text: "Karton gehaald", createdAt: new Date("2026-10-17T13:00:00Z") },
+        { user: anna._id, text: "Foto volgt", createdAt: new Date("2026-10-17T13:30:00Z") },
+      ],
+    });
+    expect(await runTool(tools.getAssignment, { articleId: 11 })).toMatchObject({
+      status: "busy",
+      owner: "Anna",
+      notes: [
+        { by: "Bram", text: "Karton gehaald", at: "2026-10-17T13:00:00.000Z" },
+        { by: "Anna", text: "Foto volgt", at: "2026-10-17T13:30:00.000Z" },
+      ],
+    });
+  });
+
+  test("not an assignment or not found is an error", async () => {
+    expect(await runTool(tools.getAssignment, {})).toEqual({ error: "Item 10 is geen opdracht" });
+    expect(await runTool(tools.getAssignment, { articleId: 404 })).toEqual({ error: "Item 404 niet gevonden" });
   });
 });

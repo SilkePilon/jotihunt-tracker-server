@@ -273,3 +273,181 @@ export function projectFrom(from: LatLng, bearing: number, metres: number): LatL
   const [lng, lat] = destination([from.lng, from.lat], metres, bearing, { units: "meters" }).geometry.coordinates;
   return { lat, lng };
 }
+
+// --- Intersections (kruispeiling, cirkels) in RD ----------------------------------------------------------------
+
+export interface BearingLine {
+  from: LatLng;
+  /** Compass bearing (true north), degrees */
+  bearingDeg: number;
+}
+
+export interface Circle {
+  center: LatLng;
+  radiusM: number;
+}
+
+export interface IntersectResult {
+  points: ParsedCoordinate[];
+  note?: string;
+}
+
+type Ray = { kind: "ray"; p: Xy; d: Xy };
+type Ring = { kind: "ring"; c: Xy; r: number };
+type Shape = Ray | Ring;
+
+const MAX_CANDIDATES = 2;
+/** Lines closer to parallel than this (sine of the angle between them) do not meet */
+const PARALLEL_SIN = Math.sin((0.5 * Math.PI) / 180);
+/** Circles (or a line and a circle) this close to touching count as touching: RD is not exactly metres */
+const TOUCH_TOLERANCE = (size: number) => Math.max(5, size * 0.001);
+const SAME_POINT_M = 1;
+const APPROXIMATE_M = 50;
+
+const NOTES = {
+  parallel: "De peilingen lopen evenwijdig; er is geen snijpunt",
+  behind: "De peilingen snijden alleen achter een startpunt; er is geen snijpunt",
+  circles: "De cirkels raken elkaar niet; er is geen snijpunt",
+  lineCircle: "De peiling raakt de cirkel niet; er is geen snijpunt",
+} as const;
+
+const rdXy = (latLng: LatLng): Xy => {
+  const { x, y } = toRd(latLng.lng, latLng.lat);
+  return [x, y];
+};
+const sub = (p: Xy, q: Xy): Xy => [p[0] - q[0], p[1] - q[1]];
+const perpDot = (p: Xy, q: Xy) => p[0] * q[1] - p[1] * q[0];
+const dot = (p: Xy, q: Xy) => p[0] * q[0] + p[1] * q[1];
+const along = (p: Xy, d: Xy, t: number): Xy => [p[0] + d[0] * t, p[1] + d[1] * t];
+
+/** A bearing as a ray in RD: the true bearing turned into the grid direction by projecting 1 km along it */
+function rayOf(line: BearingLine): Ray {
+  const p = rdXy(line.from);
+  const q = rdXy(projectFrom(line.from, ((line.bearingDeg % 360) + 360) % 360, 1000));
+  const d = sub(q, p);
+  const length = Math.hypot(d[0], d[1]);
+  return { kind: "ray", p, d: [d[0] / length, d[1] / length] };
+}
+
+type PairResult = { points: Xy[]; note?: string };
+
+function rayRay(a: Ray, b: Ray): PairResult {
+  const denominator = perpDot(a.d, b.d);
+  if (Math.abs(denominator) < PARALLEL_SIN) return { points: [], note: NOTES.parallel };
+  const between = sub(b.p, a.p);
+  const ta = perpDot(between, b.d) / denominator;
+  const tb = perpDot(between, a.d) / denominator;
+  if (ta < 0 || tb < 0) return { points: [], note: NOTES.behind };
+  return { points: [along(a.p, a.d, ta)] };
+}
+
+function ringRing(a: Ring, b: Ring): PairResult {
+  const between = sub(b.c, a.c);
+  const d = Math.hypot(between[0], between[1]);
+  const tolerance = TOUCH_TOLERANCE(a.r + b.r);
+  if (d < SAME_POINT_M || d > a.r + b.r + tolerance || d < Math.abs(a.r - b.r) - tolerance) return { points: [], note: NOTES.circles };
+  const unit: Xy = [between[0] / d, between[1] / d];
+  // Touching (outside or inside): one point on the line through both centres
+  if (Math.abs(d - (a.r + b.r)) <= tolerance) return { points: [along(a.c, unit, a.r + (d - a.r - b.r) / 2)] };
+  if (Math.abs(d - Math.abs(a.r - b.r)) <= tolerance) return { points: [along(a.c, unit, a.r >= b.r ? a.r : -a.r)] };
+  const x = (d * d + a.r * a.r - b.r * b.r) / (2 * d);
+  const h = Math.sqrt(Math.max(0, a.r * a.r - x * x));
+  const base = along(a.c, unit, x);
+  return {
+    points: [
+      [base[0] - unit[1] * h, base[1] + unit[0] * h],
+      [base[0] + unit[1] * h, base[1] - unit[0] * h],
+    ],
+  };
+}
+
+function rayRing(a: Ray, b: Ring): PairResult {
+  // Foot of the perpendicular from the centre on the line
+  const t0 = dot(sub(b.c, a.p), a.d);
+  const foot = along(a.p, a.d, t0);
+  const offset = Math.hypot(foot[0] - b.c[0], foot[1] - b.c[1]);
+  const tolerance = TOUCH_TOLERANCE(b.r);
+  if (offset > b.r + tolerance) return { points: [], note: NOTES.lineCircle };
+  const half = offset >= b.r ? 0 : Math.sqrt(b.r * b.r - offset * offset);
+  const ts = half < SAME_POINT_M ? [t0] : [t0 - half, t0 + half];
+  const forward = ts.filter((t) => t >= 0);
+  return forward.length > 0 ? { points: forward.map((t) => along(a.p, a.d, t)) } : { points: [], note: NOTES.lineCircle };
+}
+
+function pair(a: Shape, b: Shape): PairResult {
+  if (a.kind === "ray" && b.kind === "ray") return rayRay(a, b);
+  if (a.kind === "ring" && b.kind === "ring") return ringRing(a, b);
+  return a.kind === "ray" ? rayRing(a, b as Ring) : rayRing(b as Ray, a);
+}
+
+/** The point closest to all lines (least squares on the perpendicular distances), null when they are (nearly) parallel */
+function leastSquares(rays: Ray[]): Xy | null {
+  let [m00, m01, m11, b0, b1] = [0, 0, 0, 0, 0];
+  for (const { p, d } of rays) {
+    // I - d dᵀ projects onto the line's normal
+    const [n00, n01, n11] = [1 - d[0] * d[0], -d[0] * d[1], 1 - d[1] * d[1]];
+    m00 += n00;
+    m01 += n01;
+    m11 += n11;
+    b0 += n00 * p[0] + n01 * p[1];
+    b1 += n01 * p[0] + n11 * p[1];
+  }
+  const determinant = m00 * m11 - m01 * m01;
+  if (Math.abs(determinant) < 1e-9) return null;
+  return [(m11 * b0 - m01 * b1) / determinant, (m00 * b1 - m01 * b0) / determinant];
+}
+
+/** How far a point is from a shape: from a ray (its start when the point lies behind it) or a circle line */
+function miss(point: Xy, shape: Shape): number {
+  if (shape.kind === "ring") return Math.abs(Math.hypot(point[0] - shape.c[0], point[1] - shape.c[1]) - shape.r);
+  const t = dot(sub(point, shape.p), shape.d);
+  const closest = t < 0 ? shape.p : along(shape.p, shape.d, t);
+  return Math.hypot(point[0] - closest[0], point[1] - closest[1]);
+}
+
+const rdPoint = ([x, y]: Xy): ParsedCoordinate => {
+  const { lat, lng } = fromRd(x, y);
+  return { kind: "rd", latLng: { lat, lng }, rd: { x, y } };
+};
+
+/**
+ * Where bearing lines (kruispeiling) and/or circles (a distance from a point) meet, computed in the RD plane: at most 2
+ * candidates, best fit first. Bearings are rays: a crossing behind a start point does not count. With only `points`:
+ * their centroid. `note` (Dutch) explains an empty result or a crossing that is only approximate.
+ */
+export function intersectRd({ bearings = [], circles = [], points = [] }: { bearings?: BearingLine[]; circles?: Circle[]; points?: LatLng[] }): IntersectResult {
+  if (bearings.length + circles.length === 0) {
+    if (points.length === 0) return { points: [] };
+    const xy = points.map(rdXy);
+    const centroid: Xy = [xy.reduce((sum, p) => sum + p[0], 0) / xy.length, xy.reduce((sum, p) => sum + p[1], 0) / xy.length];
+    return { points: [rdPoint(centroid)], note: `Middelpunt van ${points.length} punten` };
+  }
+  const rays = bearings.map(rayOf);
+  const shapes: Shape[] = [...rays, ...circles.map((circle): Ring => ({ kind: "ring", c: rdXy(circle.center), r: circle.radiusM }))];
+  const candidates: Xy[] = [];
+  let firstNote: string | undefined;
+  for (let i = 0; i < shapes.length; i++) {
+    for (let j = i + 1; j < shapes.length; j++) {
+      const result = pair(shapes[i], shapes[j]);
+      candidates.push(...result.points);
+      firstNote ??= result.note;
+    }
+  }
+  if (rays.length >= 3) {
+    const best = leastSquares(rays);
+    if (best && rays.every((ray) => dot(sub(best, ray.p), ray.d) >= 0)) candidates.push(best);
+  }
+  if (candidates.length === 0) return { points: [], note: firstNote };
+
+  const scored = candidates
+    .map((point, index) => ({ point, index, error: shapes.reduce((sum, shape) => sum + miss(point, shape) ** 2, 0) }))
+    .sort((p, q) => p.error - q.error || p.index - q.index);
+  const chosen: typeof scored = [];
+  for (const candidate of scored) {
+    if (chosen.length === MAX_CANDIDATES) break;
+    if (chosen.every((other) => Math.hypot(other.point[0] - candidate.point[0], other.point[1] - candidate.point[1]) > SAME_POINT_M)) chosen.push(candidate);
+  }
+  const worstMiss = Math.max(...shapes.map((shape) => miss(chosen[0].point, shape)));
+  const note = worstMiss > APPROXIMATE_M ? `De lijnen en cirkels komen niet precies samen; beste benadering (afwijking tot ${Math.round(worstMiss)} m)` : undefined;
+  return { points: chosen.map(({ point }) => rdPoint(point)), ...(note ? { note } : {}) };
+}

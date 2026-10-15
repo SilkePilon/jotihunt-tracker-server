@@ -5,7 +5,8 @@ import { Team } from "../../../models/team.model";
 import { mockModel } from "../../../test/ai";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../../../test/db";
 import { runTool } from "../../../test/tools";
-import { parseCoordinate } from "../geo";
+import { Assignment } from "../../../models/assignment.model";
+import { bearingBetween, parseCoordinate } from "../geo";
 import { mapTools } from "./map";
 import { normaliseAnswer, proposalTools } from "./proposals";
 
@@ -91,5 +92,53 @@ describe("proposeHintAnswer", () => {
 
   test("normaliseAnswer keeps 6+6 RD as typed (parseRdAnswer reads it)", () => {
     expect(normaliseAnswer("188362 440722")).toMatchObject({ answer: "188362 440722", kind: "rd" });
+  });
+});
+
+describe("intersect", () => {
+  const latLng = (rd: string) => parseCoordinate(rd)!.latLng;
+  const toward = (from: string) => bearingBetween(latLng(from), latLng("185000 445000"));
+
+  test("two bearings: one PointResult with area and nearest group", async () => {
+    const result = (await runTool(tools.intersect, { bearings: [{ from: "180000 440000", bearingDeg: toward("180000 440000") }, { from: "190000 440000", bearingDeg: toward("190000 440000") }] })) as {
+      points: { label: string; rdText: string; nearestGroup: unknown }[];
+    };
+    expect(result.points).toHaveLength(1);
+    expect(result.points[0]).toMatchObject({ label: "Snijpunt", rdText: "1850 4450", nearestGroup: expect.objectContaining({ name: "A3" }) });
+  });
+
+  test("two circles give two candidates; the centroid of points; a note when nothing meets", async () => {
+    const two = (await runTool(tools.intersect, { circles: [{ center: "180000 440000", radiusM: 7071 }, { center: "190000 440000", radiusM: 7071 }] })) as { points: { label: string; rdText: string }[] };
+    expect(two.points.map((point) => point.label)).toEqual(["Snijpunt 1", "Snijpunt 2"]);
+    expect(two.points.map((point) => point.rdText).sort()).toEqual(["1850 4350", "1850 4450"]);
+    expect(await runTool(tools.intersect, { points: ["180000 440000", "190000 440000"] })).toMatchObject({ points: [{ label: "Middelpunt", rdText: "1850 4400" }], note: "Middelpunt van 2 punten" });
+    expect(await runTool(tools.intersect, { bearings: [{ from: "180000 440000", bearingDeg: 0 }, { from: "190000 440000", bearingDeg: 0 }] })).toEqual({ points: [], note: "De peilingen lopen evenwijdig; er is geen snijpunt" });
+  });
+
+  test("bad input is a Dutch error", async () => {
+    expect(await runTool(tools.intersect, { bearings: [{ from: "180000 440000", bearingDeg: 10 }] })).toEqual({ error: "Geef minstens twee peilingen of cirkels, of alleen points (minstens twee) voor het middelpunt" });
+    expect(await runTool(tools.intersect, { circles: [{ center: "180000 440000", radiusM: 0 }, { center: "190000 440000", radiusM: 10 }] })).toEqual({ error: "radiusM moet tussen 1 en 100000 liggen" });
+    expect(await runTool(tools.intersect, { bearings: [{ from: "nergens", bearingDeg: 1 }, { from: "190000 440000", bearingDeg: 2 }] })).toEqual({ error: 'Kon geen coördinaat lezen uit from "nergens"' });
+  });
+});
+
+describe("proposeAssignmentUpdate", () => {
+  beforeEach(async () => {
+    await Article.create({ id: 12, title: "Bouw een kasteel", type: "assignment", publishAt: NOW, content: "x" });
+  });
+
+  test("a proposal with status and/or note, nothing written", async () => {
+    const assignment = proposalTools({ ...ctx, articleId: 12 });
+    expect(await runTool(assignment.proposeAssignmentUpdate, { status: "busy", note: "  Foto staat op de drive " })).toEqual({ articleId: 12, title: "Bouw een kasteel", status: "busy", note: "Foto staat op de drive" });
+    expect(await runTool(tools.proposeAssignmentUpdate, { articleId: 12, status: "submitted" })).toEqual({ articleId: 12, title: "Bouw een kasteel", status: "submitted" });
+    expect(await Assignment.countDocuments()).toBe(0);
+  });
+
+  test("errors: not an assignment, bad status, nothing to change, note too long", async () => {
+    expect(await runTool(tools.proposeAssignmentUpdate, { status: "busy" })).toEqual({ error: "Item 10 is geen opdracht" });
+    expect(await runTool(tools.proposeAssignmentUpdate, { articleId: 99, status: "busy" })).toEqual({ error: "Item 99 niet gevonden" });
+    expect(await runTool(tools.proposeAssignmentUpdate, { articleId: 12, status: "klaar" })).toEqual({ error: "Onbekende status: klaar (open, busy, submitted of skipped)" });
+    expect(await runTool(tools.proposeAssignmentUpdate, { articleId: 12 })).toEqual({ error: "Geef een status of een notitie" });
+    expect(await runTool(tools.proposeAssignmentUpdate, { articleId: 12, note: "x".repeat(1001) })).toEqual({ error: "Notitie moet 1 tot 1000 tekens zijn" });
   });
 });

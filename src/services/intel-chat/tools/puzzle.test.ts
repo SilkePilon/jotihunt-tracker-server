@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { localGoogle } from "../../../test/ai";
+import { localGoogle, mockModel } from "../../../test/ai";
 import { runTool } from "../../../test/tools";
 import { puzzleTools } from "./puzzle";
 
@@ -33,5 +33,19 @@ describe("runCode", () => {
     const google = localGoogle(() => Response.json({}));
     stop = google.stop;
     expect(await runTool(puzzleTools({ articleId: 1, now: () => new Date(), toolModel: google.model("x") }).runCode, { task: " " })).toEqual({ error: "Taak moet 1 tot 4000 tekens zijn" });
+  });
+});
+
+describe("decodeCipher", () => {
+  const tools = puzzleTools({ articleId: 1, now: () => new Date(), toolModel: mockModel(() => "") });
+
+  test("decodes without AI, best first", async () => {
+    const { results } = (await runTool(tools.decodeCipher, { text: "qr ibf vf va urg obf" })) as { results: unknown[] };
+    expect(results[0]).toEqual({ method: "caesar", detail: "ROT13", output: "de vos is in het bos" });
+    expect(await runTool(tools.decodeCipher, { text: "LXFOPVEFRNHR", method: "vigenere", key: "LEMON" })).toEqual({ results: [{ method: "vigenere", detail: "sleutel LEMON", output: "ATTACKATDAWN" }] });
+  });
+
+  test("bad input is a Dutch error", async () => {
+    expect(await runTool(tools.decodeCipher, { text: "abc", method: "rot47" })).toEqual({ error: "Onbekende methode: rot47" });
   });
 });

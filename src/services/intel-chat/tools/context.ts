@@ -8,11 +8,11 @@ export interface IntelToolContext {
   /** The item open in the Intel window */
   articleId: number;
   now: () => Date;
-  /** Model for the webSearch and runCode sub-calls (Gemini built-in tools) */
+  /** Model for the webSearch, runCode and lookAtPoint sub-calls */
   toolModel: LanguageModel;
   /** Walking minutes via ORS (distance tool); a straight-line estimate without it */
   walkMinutes?: WalkMinutes;
-  /** HTTP for PDOK and readWebPage (tests pass a fake) */
+  /** HTTP for PDOK, Overpass and readWebPage (tests pass a fake) */
   fetch?: (url: string, init: RequestInit) => Promise<Response>;
   /** DNS lookup for readWebPage's address check (tests pass a fake) */
   lookup?: (hostname: string) => Promise<string[]>;
@@ -21,12 +21,12 @@ export interface IntelToolContext {
 }
 
 /** Paid or rate-limited sub-calls per turn (one question) */
-export const TURN_LIMITS = { webSearch: 6, runCode: 4, walkingRoute: 5 } as const;
+export const TURN_LIMITS = { webSearch: 6, runCode: 4, walkingRoute: 5, findPlaces: 4, lookAtPoint: 3 } as const;
 export type TurnBudget = Record<keyof typeof TURN_LIMITS, number>;
 export const BUDGET_EXHAUSTED = "Limiet voor deze vraag bereikt";
 
 /** A budget for one turn: nothing used yet */
-export const createTurnBudget = (): TurnBudget => ({ webSearch: 0, runCode: 0, walkingRoute: 0 });
+export const createTurnBudget = (): TurnBudget => ({ webSearch: 0, runCode: 0, walkingRoute: 0, findPlaces: 0, lookAtPoint: 0 });
 
 /** Use one call of `kind`; false (nothing used) when this turn's limit is reached */
 export function spend(budget: TurnBudget, kind: keyof typeof TURN_LIMITS): boolean {

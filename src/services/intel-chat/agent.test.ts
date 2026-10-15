@@ -68,6 +68,7 @@ describe("streamIntelChat", () => {
     expect(names).toContain("getItem");
     expect(names).toContain("proposeHintAnswer");
     expect(names).not.toContain("webSearch");
+    for (const name of ["decodeCipher", "findPlaces", "intersect", "lookAtPoint", "getAssignment", "proposeAssignmentUpdate"]) expect(names).toContain(name);
     expect(call.providerOptions).toEqual({ google: { thinkingConfig: { includeThoughts: true } } });
   });
 
