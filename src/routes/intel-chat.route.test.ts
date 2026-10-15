@@ -7,7 +7,11 @@ import { Article } from "../models/article.model";
 import { HintCell, HintCellStatus } from "../models/hint-cell.model";
 import { IntelChat } from "../models/intel-chat.model";
 import { User } from "../models/user.model";
-import { activeWorkCount } from "../demo/demo-mode";
+import { EventEmitter } from "node:events";
+import type { Request, Response } from "express";
+import { activeWorkCount, setDemoSwitchInProgress } from "../demo/demo-mode";
+import { postChat } from "../controllers/intel-chat.controller";
+import { endTurn, startTurn } from "../services/intel-chat/turns";
 import { setIntelChatModels } from "../services/intel-chat/instance";
 import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import { mockModel, mockStreamModel, type StreamStep } from "../test/ai";
@@ -259,6 +263,51 @@ describe("/intel-chat", () => {
     expect(activeWorkCount()).toBe(before);
     abort.abort();
     await Bun.sleep(200);
+  });
+
+  test("a turn that ends while a demo switch is in progress saves nothing (and frees the chat)", async () => {
+    useSlowModel();
+    const user = await createUser();
+    const token = tokenFor(user);
+    const res = await ask(token, question("m1"));
+    const reader = res.body!.getReader();
+    await reader.read();
+    setDemoSwitchInProgress(true);
+    try {
+      while (!(await reader.read()).done);
+      await Bun.sleep(200);
+      expect(await IntelChat.findOne({ userId: user._id, articleId: 10 })).toBeNull();
+    } finally {
+      setDemoSwitchInProgress(false);
+    }
+    const next = startTurn(user._id, 10);
+    expect(next).not.toBeNull();
+    endTurn(next!);
+  });
+
+  test("piping the stream failing after it started still frees the chat", async () => {
+    useSlowModel();
+    const user = await createUser();
+    const res = Object.assign(new EventEmitter(), {
+      headersSent: false,
+      writableFinished: false,
+      destroyed: false,
+      setHeaders() {
+        throw new Error("socket gone");
+      },
+      status() {
+        return res;
+      },
+      json() {
+        return res;
+      },
+      end() {},
+    });
+    const req = { params: { articleId: "10" }, body: { message: question("m1"), web: false, deep: false }, user: { _id: user._id } };
+    await postChat(req as unknown as Request, res as unknown as Response);
+    const next = startTurn(user._id, 10);
+    expect(next).not.toBeNull();
+    endTurn(next!);
   });
 
   test("a failure before the stream starts is 500 chat_failed (only the error name logged) and frees the chat", async () => {

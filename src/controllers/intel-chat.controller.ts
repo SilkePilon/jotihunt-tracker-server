@@ -1,7 +1,7 @@
 import { pipeUIMessageStreamToResponse, type UIMessage } from "ai";
 import type { Request, Response } from "express";
 import { releaseDemoWork } from "../demo/database-switch";
-import { beginWork, currentGeneration } from "../demo/demo-mode";
+import { currentGeneration, runTracked } from "../demo/demo-mode";
 import { logger } from "../logger";
 import { streamIntelChat } from "../services/intel-chat/agent";
 import { getIntelChatModels, getIntelToolDeps } from "../services/intel-chat/instance";
@@ -26,8 +26,8 @@ export async function getChat(req: Request, res: Response) {
 export async function deleteChat(req: Request, res: Response) {
   const articleId = articleIdOf(req);
   if (!(await findPublicArticle(articleId))) return notFound(res);
-  await discardTurn(req.user!._id, articleId);
-  await clearChat(req.user!._id, articleId);
+  // The chat stays taken until it is cleared: a question meanwhile is 409 busy instead of reviving the old history
+  await discardTurn(req.user!._id, articleId, () => clearChat(req.user!._id, articleId));
   return res.status(204).end();
 }
 
@@ -48,15 +48,15 @@ export async function postChat(req: Request, res: Response) {
   const userId = req.user!._id;
   const turn = startTurn(userId, articleId);
   if (!turn) return res.status(409).json({ error: "busy" });
+  res.on("close", () => {
+    if (!res.writableFinished) turn.abort.abort();
+  });
   let streaming = false;
   try {
     const item = await loadItemView(articleId);
     if (!item) return notFound(res);
     const conversation = forStorage(appendMessage(await loadChat(userId, articleId), message));
     const generation = currentGeneration();
-    res.on("close", () => {
-      if (!res.writableFinished) turn.abort.abort();
-    });
 
     const stream = await streamIntelChat({
       models,
@@ -83,21 +83,27 @@ export async function postChat(req: Request, res: Response) {
     // Only the name: the error may hold the prompt
     logger.error(`Intel chat turn of item ${articleId} failed${streaming ? "" : " before streaming"}: ${error instanceof Error ? error.name : "unknown error"}`);
     if (!res.headersSent) res.status(500).json({ error: "chat_failed" });
+    if (streaming) {
+      // The stream may never be read to its end (so no onEnd): stop the turn and free the chat (no-op when onEnd already did)
+      turn.abort.abort();
+      endTurn(turn);
+    }
   } finally {
     // Once streaming, the stream's onEnd ends the turn
     if (!streaming) endTurn(turn);
   }
 }
 
-/** Save what a turn produced, unless the database was switched (demo) since it started; counted so a switch waits for it */
+/**
+ * Save what a turn produced, unless a demo switch is running or the database was switched since the turn started;
+ * counted so a switch waits for it
+ */
 async function saveTurn(turn: ActiveTurn, userId: Parameters<typeof saveChat>[0], articleId: number, generation: number, messages: UIMessage[]) {
-  const finish = beginWork();
   try {
-    if (currentGeneration() === generation) await saveChat(userId, articleId, forStorage(messages));
+    await runTracked(() => saveChat(userId, articleId, forStorage(messages)), { generation });
   } catch (error) {
     logger.error(`Could not save the intel chat of item ${articleId}`, error);
   } finally {
-    finish();
     endTurn(turn);
   }
 }

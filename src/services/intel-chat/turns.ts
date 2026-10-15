@@ -30,14 +30,24 @@ export function endTurn(turn: ActiveTurn) {
 }
 
 /**
- * "Nieuw gesprek": stop the running turn of this chat (if any) so it never saves, wait for a save already under way and
- * free the chat for a new turn. Call before deleting the stored chat.
+ * "Nieuw gesprek": stop the running turn of this chat (if any) so it never saves, wait for a save already under way, then
+ * run `whileHeld` (clear the stored chat) while the chat is still taken, so no new turn can load the old history in
+ * between. The chat is free again afterwards, also when `whileHeld` fails.
  */
-export async function discardTurn(userId: mongoose.Types.ObjectId | string, articleId: number): Promise<void> {
-  const turn = turns.get(keyOf(userId, articleId));
-  if (!turn) return;
-  turn.discarded = true;
-  turn.abort.abort();
-  await turn.saving?.catch(() => undefined);
-  endTurn(turn);
+export async function discardTurn(userId: mongoose.Types.ObjectId | string, articleId: number, whileHeld: () => Promise<void>): Promise<void> {
+  const key = keyOf(userId, articleId);
+  const running = turns.get(key);
+  // Take the key over: the stopped turn's own endTurn is then a no-op and a new POST is 409 busy until we are done
+  const hold: ActiveTurn = { key, abort: new AbortController(), discarded: true };
+  turns.set(key, hold);
+  try {
+    if (running) {
+      running.discarded = true;
+      running.abort.abort();
+      await running.saving?.catch(() => undefined);
+    }
+    await whileHeld();
+  } finally {
+    endTurn(hold);
+  }
 }
