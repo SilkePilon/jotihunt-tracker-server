@@ -2,12 +2,17 @@ import { jsonSchema, tool } from "ai";
 import { AREAS, knownAreaName, type AreaName } from "../../../constants/areas";
 import { groupConfig } from "../../../auth/config";
 import { Area } from "../../../models/area.model";
+import { Hunt } from "../../../models/hunt.model";
+import { HuntReport } from "../../../models/hunt-report.model";
+import { Prediction } from "../../../models/prediction.model";
 import { Article, publicArticlesFilter } from "../../../models/article.model";
 import { HintCell, HintCellStatus } from "../../../models/hint-cell.model";
 import { Team } from "../../../models/team.model";
 import { getHuntableAreas } from "../../../settings/huntable-areas-setting";
 import { articleAttachments, articleImages } from "../../article-media";
 import { htmlToText } from "../../html-text";
+import { loadTrackers } from "../data";
+import { coordinateAt, formatCoordinate } from "../geo";
 import { safely, ToolInputError, type IntelToolContext } from "./context";
 
 export type ItemKind = "hint" | "opdracht" | "nieuws";
@@ -189,6 +194,68 @@ export async function areasOverview() {
 
 const KIND_VALUES: ItemKind[] = ["hint", "opdracht", "nieuws"];
 
+export interface FoxEvent {
+  time: string;
+  kind: "hunt" | "hunt-report" | "hint";
+  detail: string;
+  latLng: { lat: number; lng: number } | null;
+  rdText: string | null;
+}
+
+const MAX_FOX_EVENTS = 30;
+const at = (lng: number, lat: number) => ({ latLng: { lat, lng }, rdText: formatCoordinate(coordinateAt({ lat, lng })).rd8 });
+
+/** What we know of one fox team, oldest first (the newest 30): site hunts, our hunt reports, solved hint points, and the latest prediction */
+export async function foxHistory(area: string) {
+  const key = knownAreaName(area);
+  if (!key) throw new ToolInputError(`Onbekend deelgebied: ${area}`);
+  const [hunts, reports, cells, prediction] = await Promise.all([
+    Hunt.find({ area: new RegExp(`^${key}$`, "i") }).sort({ huntTime: -1 }).limit(MAX_FOX_EVENTS).lean(),
+    HuntReport.find({ area: key }).sort({ createdAt: -1 }).limit(MAX_FOX_EVENTS).lean(),
+    HintCell.find({ area: key, status: HintCellStatus.Solved, articleId: publicArticlesFilter().id }).sort({ slotTime: -1 }).limit(MAX_FOX_EVENTS).lean(),
+    Prediction.findOne({ area: key }).lean(),
+  ]);
+  const titles = new Map((await Article.find({ id: { $in: cells.map((cell) => cell.articleId) } }, { _id: 0, id: 1, title: 1 }).lean()).map((article) => [article.id, article.title]));
+  const events: (FoxEvent & { sort: number })[] = [
+    ...hunts.map((hunt) => {
+      const time = hunt.huntTime ?? hunt.updatedAt;
+      return { sort: time.getTime(), time: time.toISOString(), kind: "hunt" as const, detail: `hunt op jotihunt.nl: ${hunt.status}, ${hunt.points} punten`, latLng: null, rdText: null };
+    }),
+    ...reports.map((report) => {
+      const time = report.huntTime ?? report.takenAt ?? report.createdAt;
+      const position = report.location?.coordinates;
+      return { sort: time.getTime(), time: time.toISOString(), kind: "hunt-report" as const, detail: `hunt gemeld door ${report.reportedByName}`, ...(position?.length === 2 ? at(position[0], position[1]) : { latLng: null, rdText: null }) };
+    }),
+    ...cells.map((cell) => ({
+      sort: cell.slotTime.getTime(),
+      time: cell.slotTime.toISOString(),
+      kind: "hint" as const,
+      detail: `hint "${titles.get(cell.articleId) ?? cell.articleId}": ${cell.answer ?? ""}`,
+      ...(cell.answerLocation?.length === 2 ? at(cell.answerLocation[0], cell.answerLocation[1]) : { latLng: null, rdText: null }),
+    })),
+  ];
+  return {
+    area: key,
+    events: events
+      .sort((a, b) => a.sort - b.sort)
+      .slice(-MAX_FOX_EVENTS)
+      .map(({ sort: _sort, ...event }) => event),
+    prediction: prediction
+      ? { status: prediction.status, pin: prediction.pin ?? null, confidence: prediction.confidence ?? null, why: prediction.why ?? "", round: prediction.round ?? 1, updatedAt: prediction.updatedAt.toISOString(), stale: prediction.stale ?? false }
+      : null,
+  };
+}
+
+/** Where our own hunters are (Traccar + Life360), newest fix first */
+export async function ourTeams(now: Date) {
+  const trackers = await loadTrackers(now);
+  return {
+    trackers: trackers
+      .sort((a, b) => b.at.getTime() - a.at.getTime())
+      .map((tracker) => ({ name: tracker.name, source: tracker.source, ...at(tracker.lng, tracker.lat), ageMin: Math.max(0, Math.round((now.getTime() - tracker.at.getTime()) / 60_000)) })),
+  };
+}
+
 export function appDataTools(ctx: IntelToolContext) {
   return {
     getItem: tool({
@@ -219,6 +286,16 @@ export function appDataTools(ctx: IntelToolContext) {
       description: "Alle vossenteams (deelgebieden) met status (green = actief, orange = onderweg, red = inactief), ons eigen vossenteam en of we ze mogen hunten.",
       inputSchema: jsonSchema<Record<string, never>>({ type: "object", properties: {} }),
       execute: () => safely("getAreas", () => areasOverview()),
+    }),
+    getFoxHistory: tool({
+      description: "Geschiedenis van één vossenteam, oud naar nieuw: hunts (jotihunt.nl), onze huntmeldingen met locatie, opgeloste hintpunten, en de laatste AI-voorspelling.",
+      inputSchema: jsonSchema<{ area: string }>({ type: "object", properties: { area: { type: "string", enum: [...AREAS] } }, required: ["area"] }),
+      execute: ({ area }) => safely("getFoxHistory", () => foxHistory(area)),
+    }),
+    getOurTeams: tool({
+      description: "Waar onze eigen hunters nu zijn (Traccar-trackers en Life360), met hoe oud de positie is in minuten.",
+      inputSchema: jsonSchema<Record<string, never>>({ type: "object", properties: {} }),
+      execute: () => safely("getOurTeams", () => ourTeams(ctx.now())),
     }),
   };
 }
