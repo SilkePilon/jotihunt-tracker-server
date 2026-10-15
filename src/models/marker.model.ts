@@ -27,6 +27,15 @@ const MarkerSchema = new mongoose.Schema({
     default: MarkerType.Hint,
     required: true,
   },
+  /** Set on markers imported by the Jotiboard sync (absent: ours) */
+  source: {
+    type: String,
+    enum: ["jotiboard"],
+  },
+  /** Jotiboard pin id (manualLocations key) of an imported marker */
+  externalId: {
+    type: String,
+  },
 });
 
 MarkerSchema.index({ area: 1, time: 1 }, { unique: true, partialFilterExpression: { type: "hint" } });
