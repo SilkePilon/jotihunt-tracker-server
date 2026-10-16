@@ -8,6 +8,20 @@ export interface StoredHuntLike {
   siteKey: string;
   statusClass: HuntStatusClass | string;
   points: number;
+  /** The last outcome logged for it; missing on hunts stored before it existed (then its status class counts) */
+  lastNotifiedOutcome?: Outcome | null;
+  /** The points of that outcome */
+  lastNotifiedPoints?: number | null;
+}
+
+export type Outcome = "approved" | "rejected";
+
+const isOutcome = (status: string): status is Outcome => status === "approved" || status === "rejected";
+
+/** The outcome a stored hunt was last logged with */
+export function lastOutcomeOf(hunt: StoredHuntLike): { outcome: Outcome | null; points: number | null } {
+  if (hunt.lastNotifiedOutcome !== undefined) return { outcome: hunt.lastNotifiedOutcome, points: hunt.lastNotifiedPoints ?? null };
+  return isOutcome(hunt.statusClass) ? { outcome: hunt.statusClass, points: hunt.points } : { outcome: null, points: null };
 }
 
 /** A sync log entry before it is stored */
@@ -31,9 +45,10 @@ export function isInitialImport(storedCount: number, scrapedCount: number): bool
 /**
  * What changed between the stored and the scraped hunts, in page order:
  * - a new siteKey → "new" (and "approved" / "rejected" when it is already judged, except on an initial import);
- * - a status class change to approved or rejected → that event;
- * - other points while it stays approved → "points".
- * Hunts that disappear are no event.
+ * - approved or rejected while the last logged outcome was something else → that event;
+ * - approved with other points than last logged → "points".
+ * A status flapping through pending/unknown is no event and does not reset the last outcome. Hunts that disappear are
+ * no event.
  */
 export function diffHunts(previous: StoredHuntLike[], next: ScrapedHunt[], now: Date, options: { initial?: boolean } = {}): EventDraft[] {
   const before = new Map(previous.map((hunt) => [hunt.siteKey, hunt]));
@@ -51,8 +66,10 @@ export function diffHunts(previous: StoredHuntLike[], next: ScrapedHunt[], now: 
       if (!options.initial) outcome(hunt);
       continue;
     }
-    if (old.statusClass !== hunt.status) outcome(hunt);
-    else if (hunt.status === "approved" && old.points !== hunt.points) add(hunt, "points", hunt.points);
+    if (!isOutcome(hunt.status)) continue;
+    const last = lastOutcomeOf(old);
+    if (last.outcome !== hunt.status) outcome(hunt);
+    else if (hunt.status === "approved" && last.points !== hunt.points) add(hunt, "points", hunt.points);
   }
   return events;
 }

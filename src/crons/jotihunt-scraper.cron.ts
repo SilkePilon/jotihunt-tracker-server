@@ -4,10 +4,12 @@ import { Hunt } from "../models/hunt.model";
 import { HuntSyncEvent, type HuntSyncEventDoc } from "../models/hunt-sync-event.model";
 import { closeScraper, jotihuntLogin, scrapeHunts } from "../services/jotihunt-scraper.service";
 import { markSyncFailure, markSyncSettled, markSyncStart, markSyncSuccess } from "../services/hunt-sync-state";
-import { diffHunts, isInitialImport } from "../services/hunt-sync-diff";
+import { diffHunts, isInitialImport, lastOutcomeOf, type Outcome } from "../services/hunt-sync-diff";
+import { HUNT_MARKER_SOURCE } from "../services/hunt-sync.service";
+import { Marker } from "../models/marker.model";
 import { notifyHuntEvents, syncHuntMarkers } from "../services/hunt-sync.service";
 import { deadline } from "../services/http-limits";
-import { assignSiteKeys, classifyStatus, type ScrapedHunt } from "../services/jotihunt-hunts.parse";
+import { classifyStatus, rekeyTimeHunts, type ScrapedHunt } from "../services/jotihunt-hunts.parse";
 
 /** A whole scrape (browser start, login, page load) may take this long; then the browser is closed and the run ends */
 export const SCRAPE_DEADLINE_MS = 120_000;
@@ -34,8 +36,8 @@ export async function keepStoredDates(scraped: ScrapedHunt[]): Promise<void> {
     const match = stored.find((entry) => entry.area.toLowerCase() === hunt.area.toLowerCase() && entry.huntTimeText === hunt.huntTimeText.trim());
     if (match?.huntTime) hunt.huntTime = match.huntTime;
   }
-  // A re-dated time changes a time-based key
-  assignSiteKeys(scraped);
+  // A re-dated time changes a time-based key (and only those)
+  rekeyTimeHunts(scraped);
 }
 
 export interface StoreResult {
@@ -62,10 +64,12 @@ export async function storeHunts(scraped: ScrapedHunt[], now = new Date()): Prom
   await backfillSiteKeys();
   const keys = scraped.map((hunt) => hunt.siteKey);
   const storedCount = await Hunt.countDocuments();
-  const previous = (await Hunt.find({ siteKey: { $in: keys } }).select("siteKey status statusClass points").lean()).map((hunt) => ({
+  await rekeyMovedHunts(scraped);
+  const previous = (await Hunt.find({ siteKey: { $in: keys } }).select("siteKey status statusClass points lastNotifiedOutcome lastNotifiedPoints").lean()).map((hunt) => ({
     siteKey: hunt.siteKey!,
     statusClass: hunt.statusClass ?? classifyStatus(hunt.status, hunt.points),
     points: hunt.points,
+    ...(hunt.lastNotifiedOutcome !== undefined && { lastNotifiedOutcome: (hunt.lastNotifiedOutcome ?? null) as "approved" | "rejected" | null, lastNotifiedPoints: hunt.lastNotifiedPoints ?? null }),
   }));
   const initial = isInitialImport(storedCount, scraped.length);
   const drafts = diffHunts(previous, scraped, now, { initial });
@@ -75,6 +79,9 @@ export async function storeHunts(scraped: ScrapedHunt[], now = new Date()): Prom
     scraped.map((hunt) => {
       const old = before.get(hunt.siteKey);
       const judged = hunt.status === "approved" || hunt.status === "rejected";
+      // The outcome the log now shows for it: the new one when judged, else what was logged before
+      const last = judged ? { outcome: hunt.status as Outcome, points: hunt.points } : old ? lastOutcomeOf(old) : { outcome: null, points: null };
+      const qrCode = hunt.qrCode ?? hunt.detailQrCode ?? null;
       return {
         updateOne: {
           filter: { siteKey: hunt.siteKey },
@@ -89,7 +96,9 @@ export async function storeHunts(scraped: ScrapedHunt[], now = new Date()): Prom
               huntTime: hunt.huntTime,
               huntTimeText: hunt.huntTimeText,
               updatedAt: now,
-              ...(hunt.qrCode && { qrCode: hunt.qrCode }),
+              lastNotifiedOutcome: last.outcome,
+              lastNotifiedPoints: last.points,
+              ...(qrCode && { qrCode }),
               ...(hunt.location && { location: hunt.location }),
               ...(old && old.statusClass !== hunt.status && { statusChangedAt: now }),
             },
@@ -115,9 +124,11 @@ export async function storeHunts(scraped: ScrapedHunt[], now = new Date()): Prom
     events = (await HuntSyncEvent.insertMany(documents)).map((event) => event.toObject() as HuntSyncEventDoc);
   }
 
-  // Only hunts inside the page's time window can be missing for real
+  // Only hunts inside the page's time window (from its oldest readable time) can be missing for real; hunts without a
+  // time are never dropped, and a page without any readable time drops nothing
   const times = scraped.flatMap((hunt) => (hunt.huntTime ? [hunt.huntTime.getTime()] : []));
-  const windowFilter = times.length === scraped.length ? { $or: [{ huntTime: { $gte: new Date(Math.min(...times)) } }, { huntTime: null }] } : {};
+  if (times.length === 0) return { deleted: false, events, initial, removed: [] };
+  const windowFilter = { huntTime: { $gte: new Date(Math.min(...times)) } };
   const inWindow = await Hunt.countDocuments(windowFilter);
   if (scraped.length * 2 < inWindow) return { deleted: false, events, initial, removed: [] };
   const gone = await Hunt.find({ ...windowFilter, siteKey: { $nin: keys } })
@@ -125,6 +136,46 @@ export async function storeHunts(scraped: ScrapedHunt[], now = new Date()): Prom
     .lean();
   if (gone.length > 0) await Hunt.deleteMany({ _id: { $in: gone.map((hunt) => hunt._id) } });
   return { deleted: true, events, initial, removed: gone.flatMap((hunt) => (hunt.siteKey ? [hunt.siteKey] : [])) };
+}
+
+/** A hunt whose key changed (a QR code now shown, an old time-based key) is the same fox within this of the same time */
+export const REKEY_MATCH_MS = 60_000;
+
+/**
+ * Scraped hunts with a key that is not stored take over a stored hunt of the same fox whose hunt time is within a
+ * minute and whose key the page no longer shows (closest first), so a changed key is no new hunt (no "new" entry, no
+ * push). Its markers and log entries follow the new key.
+ */
+async function rekeyMovedHunts(scraped: ScrapedHunt[]): Promise<void> {
+  const keys = scraped.map((hunt) => hunt.siteKey);
+  const known = new Set((await Hunt.find({ siteKey: { $in: keys } }).select("siteKey").lean()).map((hunt) => hunt.siteKey));
+  const unseen = scraped.filter((hunt) => !known.has(hunt.siteKey) && hunt.huntTime);
+  if (unseen.length === 0) return;
+  const candidates = await Hunt.find({ siteKey: { $nin: keys }, huntTime: { $type: "date" }, area: { $in: [...new Set(unseen.map((hunt) => new RegExp(`^${hunt.area}$`, "i")))] } })
+    .select("_id siteKey area huntTime")
+    .lean();
+  const taken = new Set<string>();
+  // Two different QR codes, hunt codes or detail ids are two hunts, however close in time
+  const kind = (key: string | null | undefined) => key?.split(":")[0] ?? "";
+  const distinct = (a: string | null | undefined, b: string) => kind(a) === kind(b) && ["qr", "code", "id"].includes(kind(b));
+  for (const hunt of unseen) {
+    const match = candidates
+      .filter(
+        (candidate) =>
+          !taken.has(String(candidate._id)) &&
+          !distinct(candidate.siteKey, hunt.siteKey) &&
+          candidate.area.toLowerCase() === hunt.area.toLowerCase() &&
+          Math.abs(candidate.huntTime!.getTime() - hunt.huntTime!.getTime()) <= REKEY_MATCH_MS,
+      )
+      .sort((a, b) => Math.abs(a.huntTime!.getTime() - hunt.huntTime!.getTime()) - Math.abs(b.huntTime!.getTime() - hunt.huntTime!.getTime()))[0];
+    if (!match) continue;
+    taken.add(String(match._id));
+    await Hunt.updateOne({ _id: match._id }, { $set: { siteKey: hunt.siteKey } });
+    if (match.siteKey) {
+      await Marker.updateMany({ source: HUNT_MARKER_SOURCE, externalId: match.siteKey }, { $set: { externalId: hunt.siteKey } });
+      await HuntSyncEvent.updateMany({ huntId: match._id }, { $set: { siteKey: hunt.siteKey } });
+    }
+  }
 }
 
 export default async function scrapeJotihuntWebsite() {
@@ -165,7 +216,7 @@ export default async function scrapeJotihuntWebsite() {
       async () => {
         await keepStoredDates(scraped).catch((error) => logger.warn("(CRON) Could not look up stored hunt dates:", error));
         const result = await storeHunts(scraped);
-        if (!result.deleted) logger.warn(`(CRON) Scraped only ${scraped.length} hunts, far fewer than stored; kept the stored hunts`);
+        if (!result.deleted) logger.warn(`(CRON) Kept every stored hunt: the page showed ${scraped.length} hunt(s), far fewer than stored, or no readable times`);
         markSyncSuccess(new Date());
         // Hunt markers feed the map, cooldown and prediction; then tell everyone what changed
         await syncHuntMarkers().catch((error) => logger.error("(CRON) Error syncing hunt markers:", error));

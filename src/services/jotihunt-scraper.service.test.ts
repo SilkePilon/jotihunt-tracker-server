@@ -16,6 +16,8 @@ const TABLE = "<table><tr><th>Deelgebied</th><th>Huntcode</th><th>Status</th><th
 let pages: Record<string, string> = {};
 /** Every page opened */
 let visited: string[] = [];
+/** Paths whose page load never finishes */
+let hanging = new Set<string>();
 
 function fakeBrowser() {
   let connected = true;
@@ -32,6 +34,7 @@ function fakeBrowser() {
     },
     goto: async (target: string) => {
       visited.push(target);
+      if (hanging.has(new URL(target).pathname)) await new Promise(() => {});
       url = target.endsWith("/hunts") && huntsRedirect ? huntsRedirect : target;
       huntsRedirect = null;
     },
@@ -68,7 +71,7 @@ mock.module("../logger", () => ({ logger: { info() {}, debug() {}, error() {}, w
 // A fresh instance: another test file may have loaded the service already (before JOTIHUNT_WEB_URL was set,
 // and resetAppConfig in the settings tests drops its config listener)
 const freshService = "./jotihunt-scraper.service?fresh";
-const { closeScraper, forgetHuntDetails, jotihuntLogin, scrapeHunts, testJotihuntLogin } = (await import(freshService)) as typeof import("./jotihunt-scraper.service");
+const { closeScraper, forgetHuntDetails, jotihuntLogin, scrapeHunts, setDetailTimeouts, testJotihuntLogin } = (await import(freshService)) as typeof import("./jotihunt-scraper.service");
 
 /** A settings collection with only the plain username stored; the env holds the login */
 function fakeConnection(): Connection {
@@ -93,7 +96,9 @@ beforeEach(async () => {
   rejectLogin = false;
   pages = {};
   visited = [];
+  hanging = new Set();
   forgetHuntDetails();
+  setDetailTimeouts({ pageMs: 50, budgetMs: 1_000 });
 });
 afterAll(resetAppConfig);
 
@@ -131,7 +136,7 @@ describe("hunt detail pages", () => {
     pages["/hunts/2"] = detail(52.05);
     const hunts = await scrapeHunts();
     expect(hunts[0]).toMatchObject({ siteKey: "id:1", location: { lat: 52.01, lng: 5.98, accuracy: null } });
-    expect(hunts[1]).toMatchObject({ siteKey: "id:2", qrCode: "Q52.05", location: { lat: 52.05, lng: 5.65, accuracy: 9 } });
+    expect(hunts[1]).toMatchObject({ siteKey: "id:2", qrCode: null, detailQrCode: "Q52.05", location: { lat: 52.05, lng: 5.65, accuracy: 9 } });
     expect(visited.filter((target) => target.includes("/hunts/"))).toEqual(["https://jh.test/hunts/2"]);
   });
 
@@ -144,6 +149,32 @@ describe("hunt detail pages", () => {
     const second = await scrapeHunts();
     expect(second.filter((hunt) => hunt.location)).toHaveLength(7);
     expect(visited.filter((target) => target.includes("/hunts/"))).toEqual(["https://jh.test/hunts/6", "https://jh.test/hunts/7"]);
+  });
+});
+
+describe("hunt detail pages that fail", () => {
+  const card = (id: number) => `<div class="hunt"><h3>Vossenteam Delta</h3><p>Tijd: 20:0${id}</p><a href="/hunts/${id}">Details</a></div>`;
+
+  test("a hanging page times out; the list (and the other pages) still come through; the failure is not retried at once", async () => {
+    pages["/hunts"] = `<main>${card(1)}${card(2)}</main>`;
+    pages["/hunts/2"] = "<main><dl><dt>Locatie</dt><dd>52.05, 5.65</dd></dl></main>";
+    hanging.add("/hunts/1");
+    const hunts = await scrapeHunts();
+    expect(hunts.map((hunt) => [hunt.siteKey, hunt.location?.lat ?? null])).toEqual([
+      ["id:1", null],
+      ["id:2", 52.05],
+    ]);
+    visited = [];
+    await scrapeHunts();
+    expect(visited.filter((target) => target.includes("/hunts/"))).toEqual([]);
+  });
+
+  test("the detail budget stops opening pages", async () => {
+    setDetailTimeouts({ pageMs: 50, budgetMs: 60 });
+    pages["/hunts"] = `<main>${[1, 2, 3, 4].map(card).join("")}</main>`;
+    for (const id of [1, 2, 3, 4]) hanging.add(`/hunts/${id}`);
+    await scrapeHunts();
+    expect(visited.filter((target) => target.includes("/hunts/")).length).toBeLessThanOrEqual(2);
   });
 });
 

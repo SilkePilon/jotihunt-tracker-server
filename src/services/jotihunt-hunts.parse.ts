@@ -54,6 +54,8 @@ export interface ScrapedHunt {
   location: ParsedLocation | null;
   /** Link to the hunt's own page, as written in the page (may be relative) */
   detailUrl: string | null;
+  /** QR code read from the hunt's own page: stored, but never part of the siteKey (that page is not always read) */
+  detailQrCode?: string | null;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -544,6 +546,22 @@ export function assignSiteKeys<T extends Parameters<typeof siteKeyOf>[0] & { sit
   const seen = new Map<string, number>();
   for (const hunt of hunts) {
     const key = siteKeyOf(hunt);
+    const count = (seen.get(key) ?? 0) + 1;
+    seen.set(key, count);
+    hunt.siteKey = count === 1 ? key : `${key}#${count}`;
+  }
+  return hunts;
+}
+
+/**
+ * After hunt times were re-dated (clock-only times keep their stored date): new keys for the hunts keyed by time, with
+ * the same "#2" suffixes for duplicates. Other keys (QR code, hunt code, detail id) never change.
+ */
+export function rekeyTimeHunts<T extends Parameters<typeof siteKeyOf>[0] & { siteKey: string }>(hunts: T[]): T[] {
+  const seen = new Map<string, number>();
+  for (const hunt of hunts) {
+    if (!hunt.siteKey.startsWith("time:") || !hunt.huntTime) continue;
+    const key = `time:${hunt.area.trim().toLowerCase()}:${hunt.huntTime.toISOString()}`;
     const count = (seen.get(key) ?? 0) + 1;
     seen.set(key, count);
     hunt.siteKey = count === 1 ? key : `${key}#${count}`;

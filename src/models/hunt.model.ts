@@ -66,6 +66,16 @@ const HuntSchema = new mongoose.Schema({
     type: Date,
     required: false,
   },
+  /** The last outcome logged in the sync log (flapping through pending/unknown never repeats it); null: none yet */
+  lastNotifiedOutcome: {
+    type: String,
+    enum: ["approved", "rejected", null],
+    required: false,
+  },
+  lastNotifiedPoints: {
+    type: Number,
+    required: false,
+  },
   /** When its status class last changed (or it was first seen already judged) */
   statusChangedAt: {
     type: Date,

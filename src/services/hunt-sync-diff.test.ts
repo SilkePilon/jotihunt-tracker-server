@@ -17,7 +17,7 @@ const scraped = (siteKey: string, overrides: Partial<ScrapedHunt> = {}): Scraped
   detailUrl: null,
   ...overrides,
 });
-const stored = (siteKey: string, statusClass: string, points = 0) => ({ siteKey, statusClass, points });
+const stored = (siteKey: string, statusClass: string, points = 0, extra: { lastNotifiedOutcome?: "approved" | "rejected" | null; lastNotifiedPoints?: number | null } = {}) => ({ siteKey, statusClass, points, ...extra });
 
 describe("diffHunts", () => {
   test("a new hunt is 'new'", () => {
@@ -49,6 +49,14 @@ describe("diffHunts", () => {
   test("nothing changed, or a change to pending/unknown: no events", () => {
     expect(diffHunts([stored("qr:A", "pending"), stored("qr:B", "approved", 10)], [scraped("qr:A"), scraped("qr:B", { status: "approved", points: 10 })], now)).toEqual([]);
     expect(diffHunts([stored("qr:A", "approved", 10)], [scraped("qr:A", { status: "unknown", points: 0 })], now)).toEqual([]);
+  });
+
+  test("flapping through unknown/pending never repeats an outcome or a points change", () => {
+    const flapped = stored("qr:A", "unknown", 0, { lastNotifiedOutcome: "approved", lastNotifiedPoints: 10 });
+    expect(diffHunts([flapped], [scraped("qr:A", { status: "approved", points: 10 })], now)).toEqual([]);
+    expect(diffHunts([stored("qr:A", "approved", 10)], [scraped("qr:A", { status: "unknown", points: 0 })], now)).toEqual([]);
+    expect(diffHunts([stored("qr:A", "pending", 0, { lastNotifiedOutcome: "approved", lastNotifiedPoints: 10 })], [scraped("qr:A", { status: "rejected" })], now).map(({ type }) => type)).toEqual(["rejected"]);
+    expect(diffHunts([flapped], [scraped("qr:A", { status: "approved", points: 12 })], now)).toEqual([{ siteKey: "qr:A", area: "alpha", type: "points", points: 12, at: now }]);
   });
 
   test("an initial import emits only 'new'", () => {

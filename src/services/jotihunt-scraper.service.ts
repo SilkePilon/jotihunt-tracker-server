@@ -1,5 +1,6 @@
 import puppeteer, { Page } from "puppeteer";
 import { logger } from "../logger";
+import { deadline } from "./http-limits";
 import { onAppConfigChange, plain, secret } from "../settings/app-config";
 import { extractHuntsPage, parseHuntDetail, parseHuntsPage, type ParsedLocation, type ScrapedHunt } from "./jotihunt-hunts.parse";
 
@@ -134,7 +135,8 @@ export async function scrapeHunts(): Promise<ScrapedHunt[]> {
   }
   lastWarning = warning;
 
-  await addDetails(page, hunts);
+  // Never lose the list because of a detail page
+  await addDetails(page, hunts).catch((error) => logger.warn("(SCRAPER) Reading hunt pages failed:", error));
   logger.debug(`(SCRAPER) Found ${hunts.length} hunts from website.`);
   return hunts;
 }
@@ -143,36 +145,50 @@ let lastWarning: string | null = null;
 
 /** Detail pages opened per run at most (each takes a page load) */
 export const MAX_DETAIL_PAGES = 5;
-/** A detail page without a location is opened again after this long */
+/** A detail page without a location (or that failed) is opened again after this long */
 const DETAIL_RETRY_MS = 5 * 60 * 1000;
+/** One detail page may take this long; all of them together this long (the whole scrape has 120 s) */
+let detailTimeouts = { pageMs: 10_000, budgetMs: 45_000 };
 /** What a detail page gave, by its URL; a page with a location is not opened again */
 const details = new Map<string, { location: ParsedLocation | null; qrCode: string | null; at: number }>();
 
 /**
- * Hunts whose list row has no location get it (and their QR code) from their own page, when the list links one. At most
- * MAX_DETAIL_PAGES pages per run; a failing page is skipped. The siteKey stays the list page's.
+ * Hunts whose list row has no location get it (and the QR code, as detailQrCode) from their own page, when the list
+ * links one. At most MAX_DETAIL_PAGES pages per run, each with its own timeout, within an overall budget; a failing
+ * page is remembered (retried after 5 min) and never fails the scrape. The siteKey stays the list page's.
  */
 async function addDetails(page: Page, hunts: ScrapedHunt[], now = Date.now()): Promise<void> {
+  const started = Date.now();
   let opened = 0;
   for (const hunt of hunts) {
     if (hunt.location || !hunt.detailUrl) continue;
     const url = new URL(hunt.detailUrl, websiteUrl + "/hunts").href;
     let found = details.get(url);
     if (!found || (!found.location && now - found.at > DETAIL_RETRY_MS)) {
-      if (opened >= MAX_DETAIL_PAGES) continue;
+      if (opened >= MAX_DETAIL_PAGES || Date.now() - started >= detailTimeouts.budgetMs) continue;
       opened++;
+      const timeoutMs = Math.min(detailTimeouts.pageMs, Math.max(1, detailTimeouts.budgetMs - (Date.now() - started)));
       try {
-        await page.goto(url, { waitUntil: "networkidle2" });
-        found = { ...parseHuntDetail(await page.content()), at: now };
-        details.set(url, found);
+        const html = await deadline(
+          page.goto(url, { waitUntil: "networkidle2", timeout: timeoutMs }).then(() => page.content()),
+          timeoutMs,
+          `Hunt page took longer than ${timeoutMs / 1000} s`,
+        );
+        found = { ...parseHuntDetail(html), at: now };
       } catch (error) {
         logger.warn(`(SCRAPER) Could not read hunt page ${url}:`, error);
-        continue;
+        found = { location: null, qrCode: null, at: now };
       }
+      details.set(url, found);
     }
     hunt.location = found.location;
-    hunt.qrCode ??= found.qrCode;
+    hunt.detailQrCode = found.qrCode;
   }
+}
+
+/** For tests */
+export function setDetailTimeouts(timeouts: { pageMs: number; budgetMs: number }): void {
+  detailTimeouts = timeouts;
 }
 
 /** For tests */

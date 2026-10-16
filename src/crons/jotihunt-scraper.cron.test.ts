@@ -157,3 +157,64 @@ describe("storeHunts: synced fields and the sync log", () => {
     expect((await Hunt.find().lean()).map((hunt) => hunt.siteKey).sort()).toEqual(["qr:A", "qr:C", "qr:D", "qr:OLD"]);
   });
 });
+
+describe("storeHunts: stable keys and safe deletes (review fixes)", () => {
+  const now = new Date("2026-10-17T19:50:00Z");
+  const later = new Date("2026-10-17T19:51:00Z");
+  const at = (minutes: number) => new Date(time.getTime() + minutes * 60_000);
+  const pending = (overrides: Partial<ScrapedHunt>) => web(null, { area: "alpha", status: "pending", statusText: "Wacht op bevestiging", points: 0, ...overrides });
+
+  test("a QR code from the detail page is stored but never changes the key", async () => {
+    const hunt = pending({ detailUrl: "/hunts/5", huntTimeText: "21:03" });
+    expect(hunt.siteKey).toBe("id:5");
+    hunt.detailQrCode = "Q5";
+    await keepStoredDates([hunt]);
+    expect(hunt.siteKey).toBe("id:5");
+    await storeHunts([hunt], now);
+    expect(await Hunt.findOne({ siteKey: "id:5" }).lean()).toMatchObject({ qrCode: "Q5" });
+  });
+
+  test("re-dating a clock-only time re-keys only time-based keys", async () => {
+    const saturday = new Date("2026-10-17T07:15:00Z");
+    await storeHunts([pending({ huntTimeText: "09:15", huntTime: saturday })], now);
+    const sunday = new Date("2026-10-18T07:15:00Z");
+    const timeKeyed = pending({ huntTimeText: "09:15", huntTime: sunday });
+    const qrKeyed = pending({ huntTimeText: "09:15", huntTime: sunday, qrCode: "Q1" });
+    await keepStoredDates([timeKeyed, qrKeyed]);
+    expect(timeKeyed.siteKey).toBe(`time:alpha:${saturday.toISOString()}`);
+    expect(qrKeyed.siteKey).toBe("qr:Q1");
+  });
+
+  test("a stored hunt under another key (same fox, time within 1 min) is re-keyed, not logged again", async () => {
+    await storeHunts([pending({ huntTime: at(0) }), pending({ area: "bravo", huntTime: at(5) })], now);
+    expect(await HuntSyncEvent.countDocuments()).toBe(2);
+    const rekeyed = pending({ huntTime: at(0.5), qrCode: "QA", status: "approved", statusText: "Goedgekeurd", points: 10 });
+    const { events } = await storeHunts([rekeyed, pending({ area: "bravo", huntTime: at(5) })], later);
+    expect(events.map(({ type, siteKey }) => [type, siteKey])).toEqual([["approved", "qr:QA"]]);
+    expect(await Hunt.countDocuments()).toBe(2);
+    expect(await Hunt.findOne({ siteKey: "qr:QA" }).lean()).toMatchObject({ statusClass: "approved", firstSeenAt: now });
+  });
+
+  test("flapping through unknown does not log the outcome again", async () => {
+    await storeHunts([pending({ qrCode: "A" }), pending({ qrCode: "B", area: "bravo" })], now);
+    await storeHunts([pending({ qrCode: "A", status: "approved", points: 10 }), pending({ qrCode: "B", area: "bravo" })], now);
+    await storeHunts([pending({ qrCode: "A", status: "unknown", statusText: "", points: 0 }), pending({ qrCode: "B", area: "bravo" })], now);
+    const { events } = await storeHunts([pending({ qrCode: "A", status: "approved", points: 10 }), pending({ qrCode: "B", area: "bravo" })], now);
+    expect(events).toEqual([]);
+    expect(await Hunt.findOne({ siteKey: "qr:A" }).lean()).toMatchObject({ lastNotifiedOutcome: "approved", lastNotifiedPoints: 10 });
+  });
+
+  test("the delete window uses known times only; hunts without a time are never dropped by it", async () => {
+    await storeHunts([pending({ qrCode: "A", huntTime: at(0) }), pending({ qrCode: "B", huntTime: at(10) }), pending({ qrCode: "N", huntTime: null, huntTimeText: "?" })], now);
+    const { removed } = await storeHunts([pending({ qrCode: "A", huntTime: at(0) }), pending({ qrCode: "C", huntTime: null, huntTimeText: "?" })], later);
+    expect(removed).toEqual(["qr:B"]);
+    expect((await Hunt.find().lean()).map((hunt) => hunt.siteKey).sort()).toEqual(["qr:A", "qr:C", "qr:N"]);
+  });
+
+  test("no readable time on the page: nothing is deleted", async () => {
+    await storeHunts([pending({ qrCode: "A", huntTime: at(0) }), pending({ qrCode: "B", huntTime: at(10) })], now);
+    const result = await storeHunts([pending({ qrCode: "C", huntTime: null, huntTimeText: "?" }), pending({ qrCode: "D", huntTime: null, huntTimeText: "?" })], later);
+    expect(result).toMatchObject({ deleted: false, removed: [] });
+    expect(await Hunt.countDocuments()).toBe(4);
+  });
+});

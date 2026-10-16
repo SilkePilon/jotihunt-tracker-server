@@ -21,6 +21,11 @@ export async function syncHuntMarkers(): Promise<{ created: number; updated: num
     Marker.find({ source: HUNT_MARKER_SOURCE }).lean(),
   ]);
   const existing = new Map(markers.map((marker) => [marker.externalId ?? "", marker]));
+  // Hunt markers the app made itself before the sync (reported hunts): a synced hunt next to one gets no second marker
+  const reported = await Marker.find({ type: MarkerType.Hunt, source: { $exists: false } })
+    .select("area time")
+    .lean();
+  const reportedNear = (area: string, time: Date) => reported.some((marker) => marker.area.toLowerCase() === area && Math.abs(marker.time.getTime() - time.getTime()) <= REPORTED_MARKER_MATCH_MS);
   const wanted = new Set<string>();
   let created = 0;
   let updated = 0;
@@ -32,6 +37,7 @@ export async function syncHuntMarkers(): Promise<{ created: number; updated: num
     const area = hunt.area.toLowerCase();
     const marker = existing.get(hunt.siteKey);
     if (!marker) {
+      if (reportedNear(area, time)) continue;
       await Marker.create({ area, time, type: MarkerType.Hunt, location: { type: "Point", coordinates }, source: HUNT_MARKER_SOURCE, externalId: hunt.siteKey });
       created++;
       continue;
@@ -46,7 +52,10 @@ export async function syncHuntMarkers(): Promise<{ created: number; updated: num
   return { created, updated, deleted: gone.length };
 }
 
-/** A "new" hunt whose hunt time is older than this is no news (a re-import), only its log line is kept */
+/** A synced hunt within this of an app-reported hunt marker of the same fox is that same hunt */
+export const REPORTED_MARKER_MATCH_MS = 15 * 60 * 1000;
+
+/** A hunt first seen when its hunt time is older than this is no news (a re-import), only its log lines are kept */
 export const STALE_NEW_HUNT_MS = 2 * 60 * 60 * 1000;
 
 /**
@@ -59,9 +68,11 @@ export async function notifyHuntEvents(
 ): Promise<AppNotificationDocument[]> {
   if (result.initial) return [];
   const now = options.now ?? new Date();
+  const isStale = (event: HuntSyncNotificationEvent) => !!event.huntTime && now.getTime() - event.huntTime.getTime() > STALE_NEW_HUNT_MS;
+  // Hunts first seen in this batch long after their time (a re-import): neither their arrival nor their outcome is news
+  const staleNew = new Set(result.events.filter((event) => event.type === "new" && isStale(event)).map((event) => String(event.huntId)));
   const inputs = result.events.flatMap((event) => {
-    if (event.initial) return [];
-    if (event.type === "new" && event.huntTime && now.getTime() - event.huntTime.getTime() > STALE_NEW_HUNT_MS) return [];
+    if (event.initial || staleNew.has(String(event.huntId))) return [];
     const input = buildHuntSyncNotification(event);
     return input ? [input] : [];
   });

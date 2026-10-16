@@ -54,6 +54,15 @@ describe("syncHuntMarkers", () => {
     expect((await huntMarkers()).map((marker) => marker.externalId)).toEqual(["qr:B"]);
   });
 
+  test("no synced marker next to an app-reported hunt marker of the same fox within 15 min", async () => {
+    await Marker.create({ area: "alpha", time: new Date(huntTime.getTime() + 10 * 60_000), type: MarkerType.Hunt, location: { type: "Point", coordinates: [5.9, 52.1] } });
+    await storeHunts([scraped("qr:A"), scraped("qr:B", { huntTime: new Date(huntTime.getTime() + 60 * 60_000) }), scraped("qr:C", { area: "delta" })], now);
+    expect(await syncHuntMarkers()).toEqual({ created: 2, updated: 0, deleted: 0 });
+    expect((await huntMarkers()).map((marker) => marker.externalId)).toEqual(["qr:B", "qr:C"]);
+    // Stable: not created on the next run either
+    expect(await syncHuntMarkers()).toEqual({ created: 0, updated: 0, deleted: 0 });
+  });
+
   test("leaves other markers alone", async () => {
     await Marker.create({ area: "alpha", time: huntTime, type: MarkerType.Hunt, location: { type: "Point", coordinates: [5.9, 52.1] } });
     await Marker.create({ area: "alpha", time: huntTime, type: MarkerType.Hunt, location: { type: "Point", coordinates: [5.9, 52.1] }, source: "jotiboard", externalId: "pin1" });
@@ -91,9 +100,19 @@ describe("notifyHuntEvents", () => {
     expect(await AppNotification.countDocuments()).toBe(0);
   });
 
-  test("a 'new' hunt that is hours old pushes nothing", async () => {
+  test("a hunt first seen hours after its time pushes nothing, also not its outcome", async () => {
     await storeHunts([scraped("qr:X")], now);
-    const result = await storeHunts([scraped("qr:X"), scraped("qr:OLD", { huntTime: new Date(now.getTime() - 3 * 60 * 60 * 1000) })], now);
+    const old = new Date(now.getTime() - 3 * 60 * 60 * 1000);
+    const result = await storeHunts([scraped("qr:X"), scraped("qr:OLD", { huntTime: old }), scraped("qr:OLD2", { huntTime: old, area: "delta", status: "approved", points: 10 })], now);
+    expect(result.events.map(({ type }) => type)).toEqual(["new", "new", "approved"]);
     expect(await notifyHuntEvents(result, { now, send })).toEqual([]);
+  });
+
+  test("an old hunt that is judged later still pushes its outcome", async () => {
+    const old = new Date(now.getTime() - 3 * 60 * 60 * 1000);
+    await storeHunts([scraped("qr:X")], now);
+    await storeHunts([scraped("qr:X"), scraped("qr:OLD", { huntTime: old })], now);
+    const result = await storeHunts([scraped("qr:X"), scraped("qr:OLD", { huntTime: old, status: "rejected" })], now);
+    expect((await notifyHuntEvents(result, { now, send })).map((notification) => notification.type)).toEqual(["hunt-rejected"]);
   });
 });
