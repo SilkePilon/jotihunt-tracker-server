@@ -14,11 +14,10 @@ export async function markArticleRead(userId: Id, articleId: number): Promise<vo
 
 /** The articles this user read, and per article the names of the users who read it (sorted) */
 export async function getReadState(userId: Id): Promise<{ read: number[]; readBy: Record<string, string[]> }> {
-  const [user, readers] = await Promise.all([
-    User.findById(userId, { readArticles: 1 }).lean(),
-    User.find({ "readArticles.0": { $exists: true } }, { name: 1, readArticles: 1 }).sort({ name: 1 }).lean(),
-  ]);
+  // Every user with read articles; the requesting user is among them unless they read nothing
+  const readers = await User.find({ "readArticles.0": { $exists: true } }, { name: 1, readArticles: 1 }).sort({ name: 1 }).lean();
   const readBy: Record<string, string[]> = {};
   for (const reader of readers) for (const articleId of reader.readArticles ?? []) (readBy[String(articleId)] ??= []).push(reader.name);
+  const user = readers.find((reader) => String(reader._id) === String(userId));
   return { read: user?.readArticles ?? [], readBy };
 }
