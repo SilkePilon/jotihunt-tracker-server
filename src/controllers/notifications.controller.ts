@@ -2,7 +2,7 @@ import { Request, Response } from "express";
 import { AppNotification, toNotificationView } from "../models/notification.model";
 import { PushSubscription } from "../models/push-subscription.model";
 import { User } from "../models/user.model";
-import { buildBroadcastNotification } from "../services/notifier.helpers";
+import { buildBroadcastNotification, knownOptionalTypes, REMOVED_NOTIFICATION_TYPES } from "../services/notifier.helpers";
 import { counterHuntView } from "../services/telegram.helpers";
 import { currentGeneration, runTracked } from "../demo/demo-mode";
 import { sendToAll, vapidPublicKey } from "../services/push.service";
@@ -22,7 +22,13 @@ export async function listNotifications(req: Request, res: Response) {
 }
 
 function prefsOf(user: { notificationPrefs?: { disabledTypes?: string[]; promptedVersion?: number } | null }) {
-  return { disabledTypes: [...(user.notificationPrefs?.disabledTypes ?? [])], promptedVersion: user.notificationPrefs?.promptedVersion ?? 0 };
+  return { disabledTypes: knownOptionalTypes(user.notificationPrefs?.disabledTypes ?? []), promptedVersion: user.notificationPrefs?.promptedVersion ?? 0 };
+}
+
+/** Remove notification types that no longer exist from every user's preferences (startup; idempotent). */
+export async function dropRemovedNotificationTypes(): Promise<number> {
+  const result = await User.updateMany({ "notificationPrefs.disabledTypes": { $in: [...REMOVED_NOTIFICATION_TYPES] } }, { $pull: { "notificationPrefs.disabledTypes": { $in: [...REMOVED_NOTIFICATION_TYPES] } } });
+  return result.modifiedCount;
 }
 
 export async function getPreferences(req: Request, res: Response) {
@@ -31,7 +37,7 @@ export async function getPreferences(req: Request, res: Response) {
 
 export async function putPreferences(req: Request, res: Response) {
   const update: Record<string, unknown> = {};
-  if (Array.isArray(req.body.disabledTypes)) update.$set = { "notificationPrefs.disabledTypes": [...new Set(req.body.disabledTypes as string[])] };
+  if (Array.isArray(req.body.disabledTypes)) update.$set = { "notificationPrefs.disabledTypes": knownOptionalTypes(req.body.disabledTypes) };
   if (req.body.promptedVersion !== undefined) update.$max = { "notificationPrefs.promptedVersion": Number(req.body.promptedVersion) };
   const user = await User.findByIdAndUpdate(req.user!._id, update, { returnDocument: "after" }).lean();
   return res.status(200).json(prefsOf(user ?? req.user!));

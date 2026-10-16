@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { dropRemovedNotificationTypes } from "./controllers/notifications.controller";
 import { debug, logger } from "./logger";
 import { flushSentry } from "./sentry";
 import { app } from "./app";
@@ -114,6 +115,11 @@ await migrateTextHashes();
 onDemoSwitch(async () => {
   await migrateTextHashes();
 });
+
+// "hunt-deadline" was removed with manual hunt registration: drop it from stored notification preferences
+await dropRemovedNotificationTypes()
+  .then((count) => count > 0 && logger.info(`Removed old notification types from ${count} user(s)`))
+  .catch((error) => logger.error("Could not remove old notification types", error));
 
 // Telegram (tegenhunts and other @Jotihunt_bot messages). The link and the messages live in the real database like the
 // settings; connecting runs in the background (retried with backoff) so a Telegram outage never delays the start

@@ -23,6 +23,18 @@ const statusNl = (status: string) => STATUS_NL[status] ?? status;
 const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 const clock = (date: Date) => date.toLocaleTimeString("nl-NL", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Amsterdam" });
 
+/** Types that no longer exist (stored in old preferences, sent back by older apps) */
+export const REMOVED_NOTIFICATION_TYPES = ["hunt-deadline"] as const;
+
+/**
+ * Only the switchable types that exist, without duplicates: older apps send back removed types ("hunt-deadline"),
+ * which are dropped instead of rejecting the whole save.
+ */
+export function knownOptionalTypes(types: unknown): string[] {
+  if (!Array.isArray(types)) return [];
+  return [...new Set(types.filter((type): type is string => typeof type === "string" && (OPTIONAL_NOTIFICATION_TYPES as readonly string[]).includes(type)))];
+}
+
 export function isTypeEnabled(type: string, disabledTypes: readonly string[]): boolean {
   return type === "broadcast" || !disabledTypes.includes(type);
 }

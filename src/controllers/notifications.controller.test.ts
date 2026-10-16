@@ -4,7 +4,7 @@ import { AppNotification } from "../models/notification.model";
 import { PushSubscription } from "../models/push-subscription.model";
 import { User } from "../models/user.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
-import { broadcast, getCounterHunt, getPreferences, listNotifications, putPreferences, subscribe, unsubscribe } from "./notifications.controller";
+import { broadcast, dropRemovedNotificationTypes, getCounterHunt, getPreferences, listNotifications, putPreferences, subscribe, unsubscribe } from "./notifications.controller";
 
 function fakeRes() {
   const res = { statusCode: 200, body: undefined as unknown, status(code: number) { res.statusCode = code; return res; }, json(body: unknown) { res.body = body; return res; }, end() { return res; } };
@@ -45,6 +45,17 @@ describe("preferences", () => {
     await call(putPreferences, { user, body: { disabledTypes: ["hint"], promptedVersion: 2 } });
     const res = await call(putPreferences, { user, body: { promptedVersion: 1 } });
     expect(res.body).toEqual({ disabledTypes: ["hint"], promptedVersion: 2 });
+  });
+
+  test("removed types (hunt-deadline) are never shown, dropped on save and pulled at startup", async () => {
+    const user = await User.create({ name: "A", notificationPrefs: { disabledTypes: ["hunt-deadline", "hint"] } });
+    expect((await call(getPreferences, { user })).body).toEqual({ disabledTypes: ["hint"], promptedVersion: 0 });
+    const res = await call(putPreferences, { user, body: { disabledTypes: ["hunt-deadline", "article", "nonsense"] } });
+    expect(res.body).toEqual({ disabledTypes: ["article"], promptedVersion: 0 });
+
+    const other = await User.create({ name: "B", notificationPrefs: { disabledTypes: ["hunt-deadline", "fox-status"] } });
+    expect(await dropRemovedNotificationTypes()).toBe(1);
+    expect((await User.findById(other._id).lean())?.notificationPrefs?.disabledTypes).toEqual(["fox-status"]);
   });
 });
 

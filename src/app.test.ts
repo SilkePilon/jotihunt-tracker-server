@@ -339,3 +339,12 @@ describe("hints: clearing an answer", () => {
     expect(await res.json()).toMatchObject({ area: "alpha", status: "open" });
   });
 });
+
+describe("notification preferences", () => {
+  test("PUT drops unknown or removed types instead of rejecting them", async () => {
+    const user = await createUser();
+    const res = await request("/notifications/preferences", { method: "PUT", token: tokenFor(user), json: { disabledTypes: ["hunt-deadline", "hint", 5] } });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { disabledTypes: string[] }).disabledTypes).toEqual(["hint"]);
+  });
+});
