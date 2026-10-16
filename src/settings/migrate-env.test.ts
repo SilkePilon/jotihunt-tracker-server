@@ -43,6 +43,18 @@ test("copies env values into the DB without overwriting DB values; second run is
   expect((await migrateEnvSettings("migration")).copied).toEqual([]);
 });
 
+test("vehicle groups partly stored: the env-only vehicles are copied, stored ones kept", async () => {
+  await initAppConfig(connection, { GROUP_CAR_ID: "3", GROUP_BIKE_ID: "4", GROUP_WALKING_ID: "5" });
+  await setGeneral({ vehicleGroups: { walking: 9 } }, null);
+  expect(adminConfig().general.vehicleGroups.source).toBe("db");
+  const result = await migrateEnvSettings("migration");
+  expect(result.copied).toEqual(expect.arrayContaining(["vehicleGroups.car", "vehicleGroups.bike"]));
+  expect(result.copied).not.toContain("vehicleGroups.walking");
+  resetAppConfig();
+  await initAppConfig(connection, {});
+  expect(adminConfig().general.vehicleGroups.value).toEqual({ walking: 9, bike: 4, car: 3, motorcycle: null });
+});
+
 test("without SETTINGS_KEY secrets are skipped, the rest is copied", async () => {
   await initAppConfig(connection, { ...ENV, SETTINGS_KEY: "" });
   const result = await migrateEnvSettings("migration");

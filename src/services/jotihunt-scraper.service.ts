@@ -8,6 +8,8 @@ const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 
 
 /** One browser with a logged-in page, kept between scraper runs (launching Chromium and logging in every minute is heavy). */
 let session: Promise<Page> | undefined;
+/** The login the kept browser used (JSON), to tell a changed login from other secret changes */
+let lastLogin: string | null = null;
 
 /** The site login (Beheer → Algemeen, else JOTIHUNT_WEB_USERNAME/PASSWORD); null when incomplete */
 export function jotihuntLogin(): { username: string; password: string } | null {
@@ -50,7 +52,9 @@ async function launch(): Promise<Page> {
   try {
     const page = await browser.newPage();
     await page.setUserAgent({ userAgent });
-    await logIn(page);
+    const login = jotihuntLogin();
+    lastLogin = JSON.stringify(login);
+    await logIn(page, login);
     return page;
   } catch (error) {
     await browser.close().catch(() => undefined);
@@ -79,9 +83,10 @@ export async function closeScraper(): Promise<void> {
   await page?.browser().close().catch(() => undefined);
 }
 
-// A changed login applies at the next scrape: close the logged-in browser
+// A changed login applies at the next scrape: close the logged-in browser (other secrets leave it alone)
 onAppConfigChange((part) => {
-  if (part === "secrets") void closeScraper();
+  if (part !== "secrets" || !session || JSON.stringify(jotihuntLogin()) === lastLogin) return;
+  void closeScraper();
 });
 
 /** Try a login in a fresh browser (Beheer → "Inloggen testen"); closes it afterwards. */

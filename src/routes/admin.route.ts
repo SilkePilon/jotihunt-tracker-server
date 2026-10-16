@@ -153,7 +153,7 @@ router.put(
       body(`models.${slot}`)
         .optional({ values: "null" })
         .isString()
-        .matches(/^[a-z0-9.\-]{3,80}$/)
+        .matches(/^[a-z0-9.-]{3,80}$/)
         .withMessage("Ongeldig model."),
     ),
   ]),

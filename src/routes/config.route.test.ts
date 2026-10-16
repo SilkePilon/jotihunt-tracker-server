@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -77,6 +77,20 @@ describe("admin config", () => {
     expect(JSON.stringify(await bad.json())).toContain("Einde moet na de start liggen.");
     const badUrl = await fetch(`${base}/admin/config/general`, json(admin, "PUT", { discordUrl: "javascript:alert(1)" }));
     expect(badUrl.status).toBe(400);
+    // A protocol-relative URL is another host, not a site path
+    expect((await fetch(`${base}/admin/config/general`, json(admin, "PUT", { logoUrl: "//evil.host/logo.png" }))).status).toBe(400);
+    expect((await fetch(`${base}/admin/config/general`, json(admin, "PUT", { logoUrl: "/logo.png" }))).status).toBe(200);
+  });
+
+  test("PUT general with one side of the hunt window compares with the saved other side", async () => {
+    expect((await fetch(`${base}/admin/config/general`, json(admin, "PUT", { huntStart: "2026-10-17T09:00:00+02:00" }))).status).toBe(200);
+    const bad = await fetch(`${base}/admin/config/general`, json(admin, "PUT", { huntEnd: "2026-10-16T09:00:00+02:00" }));
+    expect(bad.status).toBe(400);
+    expect((await bad.json()).errors[0].msg).toBe("Einde moet na de start liggen.");
+    expect((await fetch(`${base}/admin/config/general`, json(admin, "PUT", { huntEnd: "2026-10-18T15:00:00+02:00" }))).status).toBe(200);
+    expect((await fetch(`${base}/admin/config/general`, json(admin, "PUT", { huntStart: "2026-10-19T09:00:00+02:00" }))).status).toBe(400);
+    // Clearing the start lifts the check
+    expect((await fetch(`${base}/admin/config/general`, json(admin, "PUT", { huntStart: null }))).status).toBe(200);
   });
 
   test("secrets: saved, never echoed, cleared", async () => {
@@ -84,8 +98,12 @@ describe("admin config", () => {
     expect(put.status).toBe(200);
     const text = await put.text();
     expect(text).not.toContain("AIzaSyD4k9Qe1v7Xw2LmT0pR8sN3bH6cY5uJfZ");
-    expect(JSON.parse(text).secrets.geminiApiKey).toEqual({ set: true, hint: "AIza…fZ", source: "db" });
+    expect(JSON.parse(text).secrets.geminiApiKey).toEqual({ set: true, hint: "AIza…fZ", source: "db", undecryptable: false });
     expect((await fetch(`${base}/admin/config/secrets/nope`, json(admin, "PUT", { value: "x" }))).status).toBe(400);
+    const tooLong = "AIza" + "x".repeat(596);
+    const long = await fetch(`${base}/admin/config/secrets/geminiApiKey`, json(admin, "PUT", { value: tooLong }));
+    expect(long.status).toBe(400);
+    expect(await long.text()).not.toContain("x".repeat(50));
     const del = await fetch(`${base}/admin/config/secrets/geminiApiKey`, as(admin, { method: "DELETE" }));
     expect((await del.json()).secrets.geminiApiKey.set).toBe(false);
   });
@@ -99,6 +117,14 @@ describe("admin config", () => {
     const logo = await fetch(`${base}/branding/logo`);
     expect(logo.status).toBe(200);
     expect(logo.headers.get("content-type")).toContain("image/png");
+  });
+
+  test("a stray logo file with an unknown extension is a 404, not a 500", async () => {
+    const dir = path.join(uploads, "branding");
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, "logo.gif"), "GIF89a");
+    expect((await fetch(`${base}/branding/logo`)).status).toBe(404);
   });
 
   test("logo upload rejects non-images", async () => {

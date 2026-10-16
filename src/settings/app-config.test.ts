@@ -100,10 +100,10 @@ describe("secrets", () => {
     expect(raw).not.toContain("AIzaSyD4k9Qe1v7Xw2LmT0pR8sN3bH6cY5uJfZ");
     const view = adminConfig();
     expect(JSON.stringify(view)).not.toContain("AIzaSyD4k9Qe1v7Xw2LmT0pR8sN3bH6cY5uJfZ");
-    expect(view.secrets.geminiApiKey).toEqual({ set: true, hint: "AIza…fZ", source: "db" });
+    expect(view.secrets.geminiApiKey).toEqual({ set: true, hint: "AIza…fZ", source: "db", undecryptable: false });
     await setSecret("geminiApiKey", null, "Sanne");
     expect(secret("geminiApiKey")).toBe("env-key-12345");
-    expect(adminConfig().secrets.geminiApiKey).toEqual({ set: true, hint: "env-…45", source: "env" });
+    expect(adminConfig().secrets.geminiApiKey).toEqual({ set: true, hint: "env-…45", source: "env", undecryptable: false });
   });
 
   test("passwords get a fixed hint", async () => {
@@ -125,8 +125,16 @@ describe("secrets", () => {
     await initAppConfig(connection, { SETTINGS_KEY: KEY });
     await setSecret("geminiApiKey", "db-key", null);
     resetAppConfig();
-    await initAppConfig(connection, { SETTINGS_KEY: Buffer.alloc(32, 9).toString("base64"), GEMINI_API_KEY: "env-key" });
+    const { undecryptable } = await initAppConfig(connection, { SETTINGS_KEY: Buffer.alloc(32, 9).toString("base64"), GEMINI_API_KEY: "env-key" });
     expect(secret("geminiApiKey")).toBe("env-key");
+    // Flagged (for the startup warning and Beheer), never silently
+    expect(undecryptable).toEqual(["geminiApiKey"]);
+    expect(adminConfig().secrets.geminiApiKey).toMatchObject({ source: "env", undecryptable: true });
+    expect(adminConfig().secrets.telegramApiHash.undecryptable).toBe(false);
+    // Without any SETTINGS_KEY the stored secret is undecryptable too
+    resetAppConfig();
+    expect((await initAppConfig(connection, {})).undecryptable).toEqual(["geminiApiKey"]);
+    expect(adminConfig().secrets.geminiApiKey).toMatchObject({ set: false, source: "default", undecryptable: true });
   });
 });
 

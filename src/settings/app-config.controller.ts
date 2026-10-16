@@ -7,7 +7,7 @@ import { logger } from "../logger";
 import { detectPhotoType } from "../middleware/photo-upload.middleware";
 import { testJotihuntLogin } from "../services/jotihunt-scraper.service";
 import * as traccarService from "../services/traccar.service";
-import { adminConfig, publicConfig, setGeneral, setPlain, setSecret, type SecretName } from "./app-config";
+import { adminConfig, general, publicConfig, setGeneral, setPlain, setSecret, type SecretName } from "./app-config";
 
 const by = (req: Request) => req.user?.name ?? null;
 const MAX_LOGO_BYTES = 1024 * 1024;
@@ -27,7 +27,19 @@ export function getAdminConfig(_req: Request, res: Response) {
   return res.status(200).json(adminConfig());
 }
 
+/** The other side of the hunt window comes from the current config when the request sends only one (null clears it) */
+function huntWindowOk(body: Record<string, unknown>): boolean {
+  const side = (key: "huntStart" | "huntEnd") => (key in body ? (body[key] as string | null | undefined) || null : general(key).value);
+  const start = side("huntStart");
+  const end = side("huntEnd");
+  return !start || !end || new Date(end) > new Date(start);
+}
+
 export async function putGeneral(req: Request, res: Response) {
+  if (("huntStart" in req.body || "huntEnd" in req.body) && !huntWindowOk(req.body)) {
+    // Same shape as the validate middleware
+    return res.status(400).json({ errors: [{ type: "field", msg: "Einde moet na de start liggen.", path: "huntEnd", location: "body" }] });
+  }
   await setGeneral(req.body, by(req));
   logger.info(`General settings changed by ${by(req)}: ${Object.keys(req.body).join(", ")}`);
   return res.status(200).json(adminConfig());
@@ -88,10 +100,12 @@ export async function postLogo(req: Request, res: Response) {
 
 export async function getLogo(_req: Request, res: Response) {
   const dir = brandingDir();
-  const file = (await readdir(dir).catch(() => [] as string[])).find((name) => name.startsWith("logo."));
-  if (!file) return res.status(404).json({ message: "Geen logo geüpload." });
-  const ext = file.split(".").pop()!;
-  const type = Object.entries(LOGO_TYPES).find(([, e]) => e === ext)![0];
+  // Only a known extension: a stray logo.<other> file is ignored
+  const known = (await readdir(dir).catch(() => [] as string[]))
+    .map((name) => ({ name, type: Object.entries(LOGO_TYPES).find(([, ext]) => name === `logo.${ext}`)?.[0] }))
+    .find((entry) => entry.type);
+  if (!known?.type) return res.status(404).json({ message: "Geen logo geüpload." });
+  const { name: file, type } = known;
   res.setHeader("Content-Type", type);
   // SVG may hold scripts: never run them in our origin
   res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox");

@@ -1,4 +1,4 @@
-import { adminConfig, AI_SLOTS, PLAIN_NAMES, SECRET_NAMES, secret, setAiModels, setGeneral, setPlain, setSecret, settingsKeyOk, VEHICLE_KEYS, type GeneralSettings } from "./app-config";
+import { adminConfig, AI_SLOTS, PLAIN_NAMES, SECRET_NAMES, secret, setAiModels, setGeneral, setPlain, setSecret, settingsKeyOk, VEHICLE_KEYS, vehicleGroupSources, type GeneralSettings } from "./app-config";
 
 /**
  * One-off: copy every setting that still comes from env into the database (Beheer), so the env vars can be removed.
@@ -11,14 +11,17 @@ export async function migrateEnvSettings(by: string): Promise<{ copied: string[]
 
   const generalPatch: GeneralSettings = {};
   for (const [key, sourced] of Object.entries(view.general) as [keyof typeof view.general, { value: unknown; source: string }][]) {
+    if (key === "vehicleGroups") continue;
     if (sourced.source !== "env") continue;
-    if (key === "vehicleGroups") {
-      const ids = sourced.value as Record<(typeof VEHICLE_KEYS)[number], number | null>;
-      generalPatch.vehicleGroups = Object.fromEntries(VEHICLE_KEYS.filter((v) => ids[v] !== null).map((v) => [v, ids[v]]));
-    } else {
-      (generalPatch as Record<string, unknown>)[key] = sourced.value;
-    }
+    (generalPatch as Record<string, unknown>)[key] = sourced.value;
     copied.push(key);
+  }
+  // Per vehicle: the group may be partly stored already (its overall source is then "db")
+  const vehicles = vehicleGroupSources();
+  const envVehicles = VEHICLE_KEYS.filter((v) => vehicles[v].source === "env");
+  if (envVehicles.length) {
+    generalPatch.vehicleGroups = Object.fromEntries(envVehicles.map((v) => [v, vehicles[v].value]));
+    copied.push(...envVehicles.map((v) => `vehicleGroups.${v}`));
   }
   if (Object.keys(generalPatch).length) await setGeneral(generalPatch, by);
 

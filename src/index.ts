@@ -85,7 +85,9 @@ await initDemoMode(db, { logger: serviceLogger }).then((state) => {
 await initPredictionSetting(getDemoStateStore());
 await initHuntableAreas(getDemoStateStore());
 // Settings moved from env to Beheer (env stays the fallback); secrets need SETTINGS_KEY
-await initAppConfig(getDemoStateStore().connection);
+const { undecryptable } = await initAppConfig(getDemoStateStore().connection);
+// Names only, never values: these fall back to env until saved again with the current SETTINGS_KEY
+for (const name of undecryptable) logger.warn(`Stored secret ${name} can't be decrypted with the current SETTINGS_KEY (missing or rotated): using the env value instead. Save it again in Beheer.`);
 syncVehicleGroups(vehicleGroups);
 if (!settingsKeyOk()) logger.warn("SETTINGS_KEY is missing or not 32 bytes (base64): keys and passwords can't be saved in Beheer. Generate one with: openssl rand -base64 32");
 // Sessions, invites and herstel-links live in the real database, also while demo mode is on

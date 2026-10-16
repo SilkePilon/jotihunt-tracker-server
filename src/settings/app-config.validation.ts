@@ -3,7 +3,7 @@ import { PLAIN_NAMES, SECRET_NAMES, VEHICLE_KEYS } from "./app-config";
 
 const optionalNullable = { values: "null" as const };
 /** http(s) URL or a site path; never javascript: etc. */
-const isSafeUrl = (value: string) => value === "" || value.startsWith("/") || /^https?:\/\/[^\s]+$/i.test(value);
+const isSafeUrl = (value: string) => value === "" || (value.startsWith("/") && !value.startsWith("//")) || /^https?:\/\/[^\s]+$/i.test(value);
 
 export const generalValidation = [
   body("huntStart").optional(optionalNullable).isISO8601().withMessage("Start is geen geldige datum."),
@@ -24,7 +24,8 @@ export const generalValidation = [
 
 export const secretValidation = [
   param("name").isIn(SECRET_NAMES).withMessage("Onbekende instelling."),
-  body("value").isString().trim().isLength({ min: 1, max: 500 }).withMessage("Vul een waarde in."),
+  // hide(): express-validator echoes the value in its errors; a secret must never come back
+  body("value").hide().isString().trim().isLength({ min: 1, max: 500 }).withMessage("Vul een waarde in."),
 ];
 
 export const secretNameValidation = [param("name").isIn(SECRET_NAMES).withMessage("Onbekende instelling.")];

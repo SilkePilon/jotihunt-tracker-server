@@ -126,6 +126,15 @@ describe("Jotihunt website login", () => {
     expect(launches).toBe(2);
   });
 
+  test("another secrets change keeps the logged-in browser", async () => {
+    await scrapeHunts();
+    await setPlain({ telegramApiId: "12345" }, "test");
+    await Bun.sleep(0);
+    expect(closes).toBe(0);
+    await scrapeHunts();
+    expect(launches).toBe(1);
+  });
+
   test("test-login tries the given login in a fresh browser and closes it", async () => {
     await scrapeHunts();
     expect(await testJotihuntLogin({ username: "new@example.nl", password: "pw" })).toEqual({ ok: true });

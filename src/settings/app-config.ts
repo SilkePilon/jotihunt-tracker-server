@@ -54,6 +54,8 @@ export interface SecretView {
   set: boolean;
   hint: string | null;
   source: Source;
+  /** A stored secret exists but can't be decrypted (SETTINGS_KEY missing or rotated): the env value is used instead */
+  undecryptable: boolean;
 }
 
 export interface AdminConfig {
@@ -119,10 +121,12 @@ function pick<T>(db: T | null | undefined, fromEnv: T | null, fallback: T): Sour
   return { value: fallback, source: "default" };
 }
 
-export async function initAppConfig(conn: Connection, environment: Env = process.env): Promise<void> {
+/** Loads the cached config; returns the names of stored secrets that can't be decrypted (for a startup warning). */
+export async function initAppConfig(conn: Connection, environment: Env = process.env): Promise<{ undecryptable: SecretName[] }> {
   connection = conn;
   env = environment;
   doc = ((await conn.collection<AppConfigDoc>("settings").findOne({ key: DOC_KEY }, { projection: { _id: 0 } })) as AppConfigDoc | null) ?? { key: DOC_KEY };
+  return { undecryptable: SECRET_NAMES.filter(isUndecryptable) };
 }
 
 /** Tests only */
@@ -164,6 +168,12 @@ export function general<K extends keyof GeneralValues>(key: K): Sourced<GeneralV
   }
 }
 
+/** Where each vehicle group id comes from (the vehicleGroups source is "db" as soon as one of them is stored) */
+export function vehicleGroupSources(): Record<VehicleKey, Sourced<number | null>> {
+  const stored = doc.general?.vehicleGroups ?? {};
+  return Object.fromEntries(VEHICLE_KEYS.map((v) => [v, pick(positiveInt(stored[v]), positiveInt(env[VEHICLE_ENV[v]]), null)])) as Record<VehicleKey, Sourced<number | null>>;
+}
+
 const GENERAL_KEYS = ["huntStart", "huntEnd", "homeTeamApiId", "groupName", "logoUrl", "discordUrl", "vehicleGroups"] as const satisfies readonly (keyof GeneralValues)[];
 
 export function publicConfig(): PublicConfig {
@@ -186,6 +196,10 @@ function dbSecret(name: SecretName): string | null {
   }
 }
 
+function isUndecryptable(name: SecretName): boolean {
+  return Boolean(doc.secrets?.encrypted?.[name]) && dbSecret(name) === null;
+}
+
 export function secret(name: SecretName): string | null {
   return dbSecret(name) ?? text(env[SECRET_ENV[name]]);
 }
@@ -197,10 +211,11 @@ function hintFor(name: SecretName, value: string): string {
 
 function secretView(name: SecretName): SecretView {
   const db = dbSecret(name);
-  if (db !== null) return { set: true, hint: doc.secrets!.encrypted![name]!.hint, source: "db" };
+  if (db !== null) return { set: true, hint: doc.secrets!.encrypted![name]!.hint, source: "db", undecryptable: false };
+  const undecryptable = isUndecryptable(name);
   const fromEnv = text(env[SECRET_ENV[name]]);
-  if (fromEnv !== null) return { set: true, hint: hintFor(name, fromEnv), source: "env" };
-  return { set: false, hint: null, source: "default" };
+  if (fromEnv !== null) return { set: true, hint: hintFor(name, fromEnv), source: "env", undecryptable };
+  return { set: false, hint: null, source: "default", undecryptable };
 }
 
 function plainSourced(name: PlainName): Sourced<string | null> {
