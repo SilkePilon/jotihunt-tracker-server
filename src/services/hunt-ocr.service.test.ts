@@ -34,7 +34,7 @@ function setup(reader: StickerReader | null) {
   const sleeps: number[] = [];
   const errors: unknown[] = [];
   const ocr = createHuntOcr({
-    reader,
+    reader: () => reader,
     loadPhoto: async () => PHOTO,
     sleep: async (ms) => {
       sleeps.push(ms);
@@ -192,7 +192,7 @@ describe("createHuntOcr", () => {
 
   test("a throwing onError does not stall the queue", async () => {
     const { reader } = fakeReader(new Error("boom"), reading);
-    const ocr = createHuntOcr({ reader, loadPhoto: async () => PHOTO, sleep: async () => undefined, onError: () => { throw new Error("logger down"); } });
+    const ocr = createHuntOcr({ reader: () => reader, loadPhoto: async () => PHOTO, sleep: async () => undefined, onError: () => { throw new Error("logger down"); } });
     const first = await upload();
     const second = await upload();
     ocr.enqueue(first._id);
@@ -220,7 +220,7 @@ describe("createHuntOcr", () => {
   test("a missing photo fails the report", async () => {
     const { reader, calls } = fakeReader(reading);
     const ocr = createHuntOcr({
-      reader,
+      reader: () => reader,
       loadPhoto: async () => {
         throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
       },
@@ -239,7 +239,7 @@ describe("createHuntOcr", () => {
     const report = await upload();
     ocr.enqueue(report._id);
     await ocr.idle();
-    expect((await stored(report._id)).ocr).toMatchObject({ status: "failed", error: "Geen GEMINI_API_KEY ingesteld" });
+    expect((await stored(report._id)).ocr).toMatchObject({ status: "failed", error: "Geen Gemini-sleutel ingesteld" });
   });
 
   test("a report deleted before its turn is skipped", async () => {
@@ -266,7 +266,7 @@ describe("createHuntOcr", () => {
         return reading;
       },
     };
-    const ocr = createHuntOcr({ reader, loadPhoto: async (name) => (order.push(name), PHOTO), sleep: async () => undefined });
+    const ocr = createHuntOcr({ reader: () => reader, loadPhoto: async (name) => (order.push(name), PHOTO), sleep: async () => undefined });
     const reports = [await upload(), await upload(), await upload()];
     for (const report of reports) ocr.enqueue(report._id);
     ocr.enqueue(reports[2]._id);
@@ -309,7 +309,7 @@ describe("createHuntOcr", () => {
         return reading;
       },
     };
-    const ocr = createHuntOcr({ reader, loadPhoto: async () => PHOTO, sleep: async () => undefined });
+    const ocr = createHuntOcr({ reader: () => reader, loadPhoto: async () => PHOTO, sleep: async () => undefined });
     const report = await upload();
     ocr.enqueue(report._id);
     await started;

@@ -1,6 +1,7 @@
 import express from "express";
 import * as adminController from "../controllers/admin.controller";
 import * as adminAuthController from "../auth/admin-auth.controller";
+import * as aiAdminController from "../controllers/ai-admin.controller";
 import { INVITE_EXPIRY_KEYS, INVITE_MAX_USES } from "../auth/invites";
 import * as buildingsController from "../controllers/buildings.controller";
 import * as jotiboardController from "../controllers/jotiboard.controller";
@@ -13,6 +14,9 @@ import verifyToken, { isAdmin } from "../middleware/auth.middleware";
 import { body, param } from "express-validator";
 import { User } from "../models/user.model";
 import { validate } from "../middleware/validate.middleware";
+import { AI_SLOTS } from "../settings/app-config";
+import * as configController from "../settings/app-config.controller";
+import { generalValidation, plainValidation, secretNameValidation, secretValidation } from "../settings/app-config.validation";
 
 // Validations
 const userExists = (value: string) =>
@@ -126,5 +130,35 @@ router.put(
   validate([param("id").isInt({ min: 1 }).withMessage("Ongeldig toestel-ID."), body("vehicle").isIn(VEHICLES).withMessage("Voertuig moet walking, bike, car of motorcycle zijn.")]),
   trackerController.putDeviceVehicle,
 );
+// Settings that used to be env vars (Beheer → Algemeen / AI / Koppelingen)
+router.get("/config", configController.getAdminConfig);
+router.put("/config/general", validate(generalValidation), configController.putGeneral);
+router.put("/config/plain", validate(plainValidation), configController.putPlain);
+router.put("/config/secrets/:name", validate(secretValidation), configController.putSecret);
+router.delete("/config/secrets/:name", validate(secretNameValidation), configController.deleteSecret);
+router.post("/config/logo", configController.parseLogo, configController.postLogo);
+router.get("/traccar/groups", configController.getTraccarGroups);
+// Beheer → Algemeen: try the Jotihunt website login (posted or saved) in a fresh browser
+router.post("/jotihunt/test-login", configController.postJotihuntTestLogin);
+// Beheer → AI: Google's model list, the model per AI function, and a test call per function
+router.get("/ai/models", aiAdminController.getModels);
+router.put(
+  "/ai/models",
+  validate([
+    body("models").isObject().withMessage("Modellen zijn ongeldig."),
+    body("models")
+      .custom((models) => Object.keys(models).every((slot) => (AI_SLOTS as readonly string[]).includes(slot)))
+      .withMessage("Onbekende AI-functie."),
+    ...AI_SLOTS.map((slot) =>
+      body(`models.${slot}`)
+        .optional({ values: "null" })
+        .isString()
+        .matches(/^[a-z0-9.-]{3,80}$/)
+        .withMessage("Ongeldig model."),
+    ),
+  ]),
+  aiAdminController.putModels,
+);
+router.post("/ai/test/:slot", validate([param("slot").isIn(AI_SLOTS).withMessage("Onbekende AI-functie.")]), aiAdminController.testModel);
 
 export default router;

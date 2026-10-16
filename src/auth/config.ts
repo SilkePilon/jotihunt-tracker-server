@@ -1,3 +1,5 @@
+import { general } from "../settings/app-config";
+
 type Env = Record<string, string | undefined>;
 
 export interface WebauthnConfig {
@@ -26,8 +28,7 @@ export function publicAppUrl(env: Env = process.env): string {
   return url;
 }
 
-/** The own group, shown on the invite page. */
-export function groupConfig(env: Env = process.env): { homeTeamApiId: number | null; groupName: string | null } {
-  const id = Number(env.HOME_TEAM_API_ID);
-  return { homeTeamApiId: Number.isInteger(id) && id > 0 ? id : null, groupName: env.GROUP_NAME?.trim() || null };
+/** The own group (Beheer → Algemeen, else HOME_TEAM_API_ID / GROUP_NAME). */
+export function groupConfig(): { homeTeamApiId: number | null; groupName: string | null } {
+  return { homeTeamApiId: general("homeTeamApiId").value, groupName: general("groupName").value };
 }

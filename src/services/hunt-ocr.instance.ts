@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { logger } from "../logger";
 import { onDemoSwitch } from "../demo/database-switch";
 import { runTracked } from "../demo/demo-mode";
-import { createModels } from "./ai/model";
+import { aiModel } from "./ai/model";
 import { createGeminiClient, GeminiError } from "./gemini.client";
 import { createHuntOcr, type HuntOcr } from "./hunt-ocr.service";
 import { removeOrphanPhotos, restoreMissingHuntMarkers } from "./hunt-report.service";
@@ -15,11 +15,12 @@ function describeOcrError(error: unknown): string {
   return "unknown error";
 }
 
-const models = createModels();
-
-/** Background reading of hunt codes and times; without GEMINI_API_KEY every reading fails with a clear message. */
+/** Background reading of hunt codes and times; without a Gemini key every reading fails with a clear message. */
 const queue = createHuntOcr({
-  reader: models ? createGeminiClient({ model: models("ocr") }) : null,
+  reader: () => {
+    const model = aiModel("ocr");
+    return model ? createGeminiClient({ model }) : null;
+  },
   loadPhoto: (name) => readFile(photoFilePath(name)),
   onError: (error, reportId) => logger.warn(`OCR of hunt report ${reportId} failed: ${describeOcrError(error)}`),
 });

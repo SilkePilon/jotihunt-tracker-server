@@ -1,3 +1,5 @@
+import { general } from "../settings/app-config";
+
 /** Vehicle a hunter uses; drives the Traccar group (and so the map icon). */
 export type Vehicle = "walking" | "bike" | "car" | "motorcycle";
 export const VEHICLES: readonly Vehicle[] = ["walking", "bike", "car", "motorcycle"];
@@ -65,20 +67,17 @@ export function buildDeepLink(clientUrl: string, uniqueId: string): string {
   return `org.traccar.client://?${params.toString()}`;
 }
 
-function parseGroupId(value: string | undefined): number | undefined {
-  if (!value?.trim()) return undefined;
-  const id = Number(value);
-  return Number.isInteger(id) && id > 0 ? id : undefined;
-}
-
-/** Traccar group ids per vehicle from GROUP_WALKING_ID / GROUP_BIKE_ID / GROUP_CAR_ID / GROUP_MOTORCYCLE_ID. */
-export function vehicleGroupsFromEnv(env: Record<string, string | undefined> = process.env): VehicleGroups {
-  return {
-    walking: parseGroupId(env.GROUP_WALKING_ID),
-    bike: parseGroupId(env.GROUP_BIKE_ID),
-    car: parseGroupId(env.GROUP_CAR_ID),
-    motorcycle: parseGroupId(env.GROUP_MOTORCYCLE_ID),
-  };
+/**
+ * Copy the configured Traccar group id per vehicle (Beheer, else GROUP_*_ID) into `target`. The onboarding service
+ * and the tracker controller share one object, so syncing it in place updates them all.
+ */
+export function syncVehicleGroups(target: VehicleGroups): void {
+  const ids = general("vehicleGroups").value;
+  for (const vehicle of VEHICLES) {
+    const id = ids[vehicle];
+    if (id) target[vehicle] = id;
+    else delete target[vehicle];
+  }
 }
 
 /** Traccar uses groupId 0 for "no group". */

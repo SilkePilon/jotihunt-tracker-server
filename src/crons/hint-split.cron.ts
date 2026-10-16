@@ -1,22 +1,19 @@
 import { logger } from "../logger";
 import { currentGeneration, runTracked } from "../demo/demo-mode";
-import { createModels } from "../services/ai/model";
+import { aiAvailable, requireAiModel } from "../services/ai/model";
 import { GeminiError } from "../services/ai/gemini-error";
 import { createHintSplitJob, createHintSplitter } from "../services/hint-split.service";
 
-const models = createModels();
-
-// Without GEMINI_API_KEY the hint cells keep the split made by the rule (hint-parser)
-const job = models
-  ? createHintSplitJob({
-      splitter: createHintSplitter({ model: models("summary") }),
-      // Only into the database the run started on (skipped when a demo switch happened meanwhile)
-      beginRun: () => {
-        const generation = currentGeneration();
-        return (fn) => runTracked(fn, { generation });
-      },
-    })
-  : null;
+// Without a Gemini key the hint cells keep the split made by the rule (hint-parser).
+// Built once (the job keeps its backoff); the model is read per article, so a key or model set in Beheer applies at once
+const job = createHintSplitJob({
+  splitter: { split: (article, areas) => createHintSplitter({ model: requireAiModel("split") }).split(article, areas) },
+  // Only into the database the run started on (skipped when a demo switch happened meanwhile)
+  beginRun: () => {
+    const generation = currentGeneration();
+    return (fn) => runTracked(fn, { generation });
+  },
+});
 
 /**
  * A GeminiError carries our own message. Every error of an AI call is wrapped in one (the raw API error holds the
@@ -30,7 +27,7 @@ function describe(error: unknown): string {
 
 /** Let Gemini correct the per-area split of new or changed hint articles (one per run) */
 export default async function splitHints() {
-  if (!job) return;
+  if (!aiAvailable()) return;
   const { done, failed } = await job.run();
   if (done.length > 0) logger.info(`(CRON) Split hint articles ${done.join(", ")}`);
   for (const failure of failed) {

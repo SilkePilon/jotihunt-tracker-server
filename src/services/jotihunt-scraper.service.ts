@@ -1,20 +1,29 @@
 import puppeteer, { Page } from "puppeteer";
 import { logger } from "../logger";
+import { onAppConfigChange, plain, secret } from "../settings/app-config";
 import { WebHunt } from "../types/api";
 
 const websiteUrl = process.env.JOTIHUNT_WEB_URL as string;
-const websiteUsername = process.env.JOTIHUNT_WEB_USERNAME as string;
-const websitePassword = process.env.JOTIHUNT_WEB_PASSWORD as string;
 const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
 
 /** One browser with a logged-in page, kept between scraper runs (launching Chromium and logging in every minute is heavy). */
 let session: Promise<Page> | undefined;
+/** The login the kept browser used (JSON), to tell a changed login from other secret changes */
+let lastLogin: string | null = null;
 
-async function logIn(page: Page): Promise<void> {
-  logger.info("(SCRAPER) Logging in to Jotihunt website with e-mail: " + websiteUsername);
+/** The site login (Beheer → Algemeen, else JOTIHUNT_WEB_USERNAME/PASSWORD); null when incomplete */
+export function jotihuntLogin(): { username: string; password: string } | null {
+  const username = plain("jotihuntWebUsername");
+  const password = secret("jotihuntWebPassword");
+  return username && password ? { username, password } : null;
+}
+
+async function logIn(page: Page, login = jotihuntLogin()): Promise<void> {
+  if (!login) throw new Error("No Jotihunt website login set");
+  logger.info("(SCRAPER) Logging in to Jotihunt website with e-mail: " + login.username);
   await page.goto(websiteUrl + "/login", { waitUntil: "networkidle2" });
-  await page.type('input[name="email"]', websiteUsername);
-  await page.type('input[name="password"]', websitePassword);
+  await page.type('input[name="email"]', login.username);
+  await page.type('input[name="password"]', login.password);
   await Promise.all([page.click("button.btn"), page.waitForNavigation({ waitUntil: "networkidle2" })]);
 
   if (page.url().endsWith("/login")) {
@@ -24,22 +33,28 @@ async function logIn(page: Page): Promise<void> {
   logger.info("(SCRAPER) Logged in to Jotihunt website.");
 }
 
-async function launch(): Promise<Page> {
+function launchBrowser() {
   // Prefer an explicit PUPPETEER_EXECUTABLE_PATH (set in the Docker image to the system chromium),
   // fall back to the system chromium in production and to puppeteer's bundled browser otherwise.
   const isProduction = process.env.NODE_ENV === "production";
   const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || (isProduction ? "/usr/bin/chromium" : undefined);
-  const browser = await puppeteer.launch({
+  return puppeteer.launch({
     args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
     ...(executablePath && { executablePath }),
   });
+}
+
+async function launch(): Promise<Page> {
+  const browser = await launchBrowser();
   browser.once("disconnected", () => {
     session = undefined;
   });
   try {
     const page = await browser.newPage();
     await page.setUserAgent({ userAgent });
-    await logIn(page);
+    const login = jotihuntLogin();
+    lastLogin = JSON.stringify(login);
+    await logIn(page, login);
     return page;
   } catch (error) {
     await browser.close().catch(() => undefined);
@@ -66,6 +81,29 @@ export async function closeScraper(): Promise<void> {
   session = undefined;
   const page = await current?.catch(() => undefined);
   await page?.browser().close().catch(() => undefined);
+}
+
+// A changed login applies at the next scrape: close the logged-in browser (other secrets leave it alone)
+onAppConfigChange((part) => {
+  if (part !== "secrets" || !session || JSON.stringify(jotihuntLogin()) === lastLogin) return;
+  void closeScraper();
+});
+
+/** Try a login in a fresh browser (Beheer → "Inloggen testen"); closes it afterwards. */
+export async function testJotihuntLogin(login = jotihuntLogin()): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!websiteUrl) return { ok: false, error: "JOTIHUNT_WEB_URL is niet ingesteld op de server." };
+  if (!login) return { ok: false, error: "Vul gebruikersnaam en wachtwoord in." };
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setUserAgent({ userAgent });
+    await logIn(page, login);
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "Inloggen mislukt: controleer gebruikersnaam en wachtwoord." };
+  } finally {
+    await browser.close().catch(() => undefined);
+  }
 }
 
 /**

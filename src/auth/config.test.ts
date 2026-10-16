@@ -1,4 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import mongoose, { type Connection } from "mongoose";
+import { initAppConfig, resetAppConfig } from "../settings/app-config";
 import { groupConfig, publicAppUrl, webauthnConfig } from "./config";
 
 describe("webauthnConfig", () => {
@@ -30,10 +32,26 @@ describe("publicAppUrl", () => {
 });
 
 describe("groupConfig", () => {
-  test("parses the home team id and group name", () => {
-    expect(groupConfig({ HOME_TEAM_API_ID: "66", GROUP_NAME: " Scouting De Bever " })).toEqual({ homeTeamApiId: 66, groupName: "Scouting De Bever" });
+  const uri = process.env.MONGO_URI_TEST ?? "mongodb://localhost:27017/jotihunt-test";
+  let connection: Connection;
+  beforeAll(async () => {
+    connection = await mongoose.createConnection(uri).asPromise();
   });
-  test("missing or invalid values are null", () => {
-    expect(groupConfig({ HOME_TEAM_API_ID: "abc" })).toEqual({ homeTeamApiId: null, groupName: null });
+  beforeEach(async () => {
+    await connection.collection("settings").deleteMany({});
+    resetAppConfig();
+  });
+  afterAll(async () => {
+    resetAppConfig();
+    await connection.close();
+  });
+
+  test("parses the home team id and group name", async () => {
+    await initAppConfig(connection, { HOME_TEAM_API_ID: "66", GROUP_NAME: " Scouting De Bever " });
+    expect(groupConfig()).toEqual({ homeTeamApiId: 66, groupName: "Scouting De Bever" });
+  });
+  test("missing or invalid values are null", async () => {
+    await initAppConfig(connection, { HOME_TEAM_API_ID: "abc" });
+    expect(groupConfig()).toEqual({ homeTeamApiId: null, groupName: null });
   });
 });

@@ -8,11 +8,16 @@ import { setAuthConnection } from "./auth/auth-db";
 import { ensurePasswordless } from "./auth/migrate";
 import { initPredictionSetting } from "./settings/prediction-setting";
 import { initHuntableAreas } from "./settings/huntable-areas-setting";
+import { initAppConfig, onAppConfigChange, settingsKeyOk } from "./settings/app-config";
+import { aiAvailable } from "./services/ai/model";
 import { getDemoStateStore, initDemoMode, onDemoSwitch } from "./demo/database-switch";
 import { installDemoWorld } from "./demo/demo-world";
 import { huntOcr } from "./services/hunt-ocr.instance";
+import { syncVehicleGroups } from "./services/tracker-onboarding.helpers";
+import { vehicleGroups } from "./services/tracker-onboarding.instance";
 import { isTraccarConfigured, usesLegacyTraccarEnv } from "./services/traccar-http";
-import { setTelegramService, telegramConfigFromEnv, TelegramService } from "./services/telegram.service";
+import { isValidSessionKey } from "./services/session-crypto";
+import { setTelegramService, telegramConfigFromSettings, TelegramService } from "./services/telegram.service";
 import { createMtcuteGateway } from "./services/telegram.gateway";
 import { HappyHourService } from "./services/happy-hour.service";
 import { JotiboardClient } from "./services/jotiboard.client";
@@ -79,6 +84,12 @@ await initDemoMode(db, { logger: serviceLogger }).then((state) => {
 // Global settings live in the real database (also in demo mode); cached in memory from here on
 await initPredictionSetting(getDemoStateStore());
 await initHuntableAreas(getDemoStateStore());
+// Settings moved from env to Beheer (env stays the fallback); secrets need SETTINGS_KEY
+const { undecryptable } = await initAppConfig(getDemoStateStore().connection);
+// Names only, never values: these fall back to env until saved again with the current SETTINGS_KEY
+for (const name of undecryptable) logger.warn(`Stored secret ${name} can't be decrypted with the current SETTINGS_KEY (missing or rotated): using the env value instead. Save it again in Beheer.`);
+syncVehicleGroups(vehicleGroups);
+if (!settingsKeyOk()) logger.warn("SETTINGS_KEY is missing or not 32 bytes (base64): keys and passwords can't be saved in Beheer. Generate one with: openssl rand -base64 32");
 // Sessions, invites and herstel-links live in the real database, also while demo mode is on
 setAuthConnection(getDemoStateStore().connection);
 // The passwordless migration runs at every start (idempotent), so the deploy order doesn't matter. Also on the demo
@@ -112,12 +123,12 @@ onDemoSwitch(async () => {
 const happyHour = new HappyHourService({ logger: serviceLogger });
 await happyHour.rebuild().catch((error) => logger.error("Could not schedule the happy hour alerts", error));
 onDemoSwitch(() => happyHour.rebuild());
-const telegramConfig = telegramConfigFromEnv(process.env, (message) => logger.warn(message));
-if (!process.env.TELEGRAM_API_ID?.trim() || !process.env.TELEGRAM_API_HASH?.trim()) {
-  logger.warn("TELEGRAM_API_ID/TELEGRAM_API_HASH not set, tegenhunts are not read from Telegram");
-}
+const telegramWarn = (message: string) => logger.warn(message);
+const telegramConfig = telegramConfigFromSettings(process.env, telegramWarn);
+if (!telegramConfig) logger.warn("No Telegram app credentials (Beheer → Koppelingen or TELEGRAM_API_ID/TELEGRAM_API_HASH): tegenhunts are not read from Telegram");
 const telegram = new TelegramService({
   config: telegramConfig,
+  sessionKeyOk: isValidSessionKey(process.env.TELEGRAM_SESSION_KEY?.trim() ?? ""),
   connection: getDemoStateStore().connection,
   gateway: createMtcuteGateway,
   logger: serviceLogger,
@@ -125,6 +136,15 @@ const telegram = new TelegramService({
 });
 setTelegramService(telegram);
 telegram.start().catch((error) => logger.error("Could not start the Telegram listener", error));
+// New app credentials in Beheer: reconnect with them
+let telegramKey = JSON.stringify(telegramConfig);
+onAppConfigChange((part) => {
+  if (part !== "secrets") return;
+  const next = telegramConfigFromSettings(process.env, telegramWarn);
+  if (JSON.stringify(next) === telegramKey) return;
+  telegramKey = JSON.stringify(next);
+  telegram.reconfigure(next).catch((error) => logger.error("Could not restart Telegram with the new app credentials", error));
+});
 
 // Life360: team members without our app share their location through a Life360 circle. The link lives in the real
 // database like the Telegram link; polling runs in the background so Life360 never delays the start
@@ -152,8 +172,8 @@ await huntOcr
   .resumePending()
   .then((count) => count > 0 && logger.info(`Resumed reading ${count} hunt report photo(s)`))
   .catch((error) => logger.error("Could not resume hunt report reading", error));
-if (!process.env.GEMINI_API_KEY?.trim()) {
-  logger.warn("GEMINI_API_KEY not set, hunt photos are not read, fox predictions are off and articles get no summary, and hints are split by rule only");
+if (!aiAvailable()) {
+  logger.warn("No Gemini key (Beheer → AI or GEMINI_API_KEY): hunt photos are not read, fox predictions are off, articles get no summary and hints are split by rule only");
 }
 if (!isTraccarConfigured) {
   logger.warn("TRACCAR_API_URL/TRACCAR_API_TOKEN not set, tracker endpoints will return 503");

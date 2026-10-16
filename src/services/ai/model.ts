@@ -1,31 +1,41 @@
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { createGoogleGenerativeAI, type GoogleGenerativeAIProvider } from "@ai-sdk/google";
 import type { LanguageModel } from "ai";
+import { aiModelId, secret, type AiSlot } from "../../settings/app-config";
+import { GeminiError } from "./gemini-error";
 
-/** What a Gemini call is for; each purpose has its own model setting */
-export type AiPurpose = "ocr" | "prediction" | "chat" | "summary";
+export { DEFAULT_GEMINI_MODEL, DEFAULT_PREDICTION_MODEL } from "../../settings/app-config";
+/** What a Gemini call is for; each has its own model in Beheer → AI */
+export type AiPurpose = AiSlot;
 
-/** Default model for reading stickers (OCR), summaries and chat */
-export const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
-/** Default model for the fox prediction */
-export const DEFAULT_PREDICTION_MODEL = "gemini-pro-latest";
+export const NO_KEY_MESSAGE = "Geen Gemini-sleutel ingesteld";
 
-const MODEL_SETTING: Record<AiPurpose, { variable: string; fallback: string }> = {
-  ocr: { variable: "GEMINI_MODEL", fallback: DEFAULT_GEMINI_MODEL },
-  summary: { variable: "GEMINI_MODEL", fallback: DEFAULT_GEMINI_MODEL },
-  chat: { variable: "GEMINI_CHAT_MODEL", fallback: DEFAULT_GEMINI_MODEL },
-  prediction: { variable: "GEMINI_PREDICTION_MODEL", fallback: DEFAULT_PREDICTION_MODEL },
-};
+let provider: { apiKey: string; baseURL: string | undefined; google: GoogleGenerativeAIProvider } | null = null;
+let baseURLOverride: string | undefined;
 
-/**
- * The Gemini models of this server, by purpose. Null without GEMINI_API_KEY: every AI feature is then off.
- * `baseURL` is only for tests (a local server in place of Google).
- */
-export function createModels(env: Record<string, string | undefined> = process.env, baseURL?: string): ((purpose: AiPurpose) => LanguageModel) | null {
-  const apiKey = env.GEMINI_API_KEY?.trim();
+/** Tests only: a local server in place of Google */
+export function setAiBaseUrl(url: string | undefined) {
+  baseURLOverride = url;
+  provider = null;
+}
+
+/** True when a Gemini key is set (Beheer, else GEMINI_API_KEY) */
+export function aiAvailable(): boolean {
+  return secret("geminiApiKey") !== null;
+}
+
+/** The model for `slot`, read now (a key or model changed in Beheer applies to the next call); null without a key. */
+export function aiModel(slot: AiSlot): LanguageModel | null {
+  const apiKey = secret("geminiApiKey");
   if (!apiKey) return null;
-  const google = createGoogleGenerativeAI({ apiKey, baseURL });
-  return (purpose) => {
-    const { variable, fallback } = MODEL_SETTING[purpose];
-    return google(env[variable]?.trim() || fallback);
-  };
+  if (!provider || provider.apiKey !== apiKey || provider.baseURL !== baseURLOverride) {
+    provider = { apiKey, baseURL: baseURLOverride, google: createGoogleGenerativeAI({ apiKey, baseURL: baseURLOverride }) };
+  }
+  return provider.google(aiModelId(slot).value);
+}
+
+/** Like aiModel, but a missing key is a (non-retryable) GeminiError, as for any other failed call */
+export function requireAiModel(slot: AiSlot): LanguageModel {
+  const model = aiModel(slot);
+  if (!model) throw new GeminiError(NO_KEY_MESSAGE, false);
+  return model;
 }

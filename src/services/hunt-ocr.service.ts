@@ -9,11 +9,11 @@ import { resolveReadTime, type StickerReading } from "./sticker-ocr.helpers";
 export const MAX_ATTEMPTS = 3;
 /** Wait before the 2nd and 3rd attempt */
 export const RETRY_DELAYS_MS = [5_000, 20_000];
-export const NO_KEY_ERROR = "Geen GEMINI_API_KEY ingesteld";
+export const NO_KEY_ERROR = "Geen Gemini-sleutel ingesteld";
 
 export interface HuntOcrDeps {
-  /** null when GEMINI_API_KEY is not set: every reading fails with NO_KEY_ERROR */
-  reader: StickerReader | null;
+  /** The reader right now; null without a Gemini key: every reading then fails with NO_KEY_ERROR */
+  reader: () => StickerReader | null;
   /** Photo bytes by stored file name */
   loadPhoto: (name: string) => Promise<Buffer>;
   sleep?: (ms: number) => Promise<void>;
@@ -106,7 +106,8 @@ export function createHuntOcr(deps: HuntOcrDeps): HuntOcr {
       await fail(id, generation, report.ocr?.error || "Lezen mislukt na meerdere pogingen.");
       return null;
     }
-    if (!deps.reader) {
+    const reader = deps.reader();
+    if (!reader) {
       await fail(id, generation, NO_KEY_ERROR);
       return null;
     }
@@ -123,7 +124,7 @@ export function createHuntOcr(deps: HuntOcrDeps): HuntOcr {
     }
 
     try {
-      const reading = await deps.reader.readSticker(photo.toString("base64"), photoMimeType(report.photo));
+      const reading = await reader.readSticker(photo.toString("base64"), photoMimeType(report.photo));
       await apply(id, generation, reading, attempts);
       return null;
     } catch (error) {
