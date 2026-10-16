@@ -3,7 +3,7 @@ import { PLAIN_NAMES, SECRET_NAMES, VEHICLE_KEYS } from "./app-config";
 
 const optionalNullable = { values: "null" as const };
 /** http(s) URL or a site path; never javascript: etc. */
-const isSafeUrl = (value: string) => value === "" || (value.startsWith("/") && !value.startsWith("//")) || /^https?:\/\/[^\s]+$/i.test(value);
+const isSafeUrl = (value: string) => value === "" || (value.startsWith("/") && !/^\/[\\/]/.test(value)) || /^https?:\/\/[^\s]+$/i.test(value);
 
 export const generalValidation = [
   body("huntStart").optional(optionalNullable).isISO8601().withMessage("Start is geen geldige datum."),
