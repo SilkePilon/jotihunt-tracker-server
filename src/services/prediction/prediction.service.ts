@@ -66,7 +66,7 @@ function errorMessage(error: unknown): string {
  */
 export function createPredictionService(deps: PredictionDeps) {
   const now = deps.now ?? (() => new Date());
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const sleep = deps.sleep ?? Bun.sleep;
   let queue: Promise<unknown> = Promise.resolve();
   const pending = new Map<string, Promise<PredictionDto>>();
   // Circuit breaker for Gemini (see isOverloaded)

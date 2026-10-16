@@ -32,7 +32,7 @@ export interface HuntOcr {
   reset(): void;
 }
 
-const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const defaultSleep = (ms: number) => Bun.sleep(ms);
 
 /**
  * In-process queue that reads the hunt code and handwritten time from report photos, one photo at a time. Every

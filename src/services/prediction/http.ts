@@ -28,7 +28,7 @@ export interface ThrottleClock {
  */
 export function createThrottle(minIntervalMs: number, clock: ThrottleClock = {}): Schedule {
   const now = clock.now ?? (() => Date.now());
-  const sleep = clock.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const sleep = clock.sleep ?? Bun.sleep;
   let chain: Promise<unknown> = Promise.resolve();
   let lastStart = Number.NEGATIVE_INFINITY;
 
@@ -83,7 +83,7 @@ export class MinuteBudget {
   constructor(limit: number, clock: ThrottleClock = {}) {
     this.limit = limit;
     this.now = clock.now ?? (() => Date.now());
-    this.sleep = clock.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    this.sleep = clock.sleep ?? Bun.sleep;
   }
 
   async acquire(): Promise<void> {
