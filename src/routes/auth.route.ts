@@ -1,5 +1,5 @@
 import express from "express";
-import * as authController from "../controllers/auth.controller";
+import * as tutorialController from "../auth/tutorial.controller";
 import * as pairingController from "../controllers/pairing.controller";
 import * as loginController from "../auth/login.controller";
 import * as qrController from "../auth/qr.controller";
@@ -75,7 +75,7 @@ router.post(
 );
 router.post("/qr/scan/:code/deny", [verifyToken, requireWebSession], qrController.deny);
 
-router.post("/tutorial", [verifyToken, validate(tutorialValidator)], authController.updateTutorial);
+router.post("/tutorial", [verifyToken, validate(tutorialValidator)], tutorialController.updateTutorial);
 
 // Android app: pair with a one-time code (no session), refresh its device token and manage paired phones
 router.post("/pair", pairLimiter, validate(pairValidator), pairingController.pair);
