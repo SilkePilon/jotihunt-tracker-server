@@ -106,9 +106,10 @@ export async function storeHunts(scraped: ScrapedHunt[], now = new Date()): Prom
       .select("_id siteKey huntTime location")
       .lean();
     const byKey = new Map(hunts.map((hunt) => [hunt.siteKey, hunt]));
-    const documents = drafts.flatMap((draft) => {
+    // One millisecond apart, in page order: the log pages by `at`, and "approved" sorts above its own "new"
+    const documents = drafts.flatMap((draft, index) => {
       const hunt = byKey.get(draft.siteKey);
-      return hunt ? [{ ...draft, huntId: hunt._id, huntTime: hunt.huntTime ?? null, location: hunt.location ?? null, initial }] : [];
+      return hunt ? [{ ...draft, at: new Date(draft.at.getTime() + index), huntId: hunt._id, huntTime: hunt.huntTime ?? null, location: hunt.location ?? null, initial }] : [];
     });
     events = (await HuntSyncEvent.insertMany(documents)).map((event) => event.toObject() as HuntSyncEventDoc);
   }

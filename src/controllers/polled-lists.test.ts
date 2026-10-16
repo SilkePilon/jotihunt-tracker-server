@@ -9,6 +9,7 @@ import { Marker, MarkerType } from "../models/marker.model";
 import { User } from "../models/user.model";
 import { createHuntReport, listHuntReports } from "../services/hunt-report.service";
 import { invalidateResponseCache } from "../services/response-cache";
+import { listSyncedHunts } from "../services/hunt-sync.view";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { getArticles } from "./articles.controller";
 import { getHuntReports, getPhoto } from "./hunt-reports.controller";
@@ -82,7 +83,7 @@ describe("polled list endpoints", () => {
     expect(markers.headers["content-type"]).toBe("application/json; charset=utf-8");
     expect(JSON.parse(markers.body as string)).toEqual(asJson(await Marker.find().lean()));
     expect(JSON.parse((await call(getArticles)).body as string)).toEqual(asJson(await Article.find(publicArticlesFilter()).sort({ publishAt: -1 })));
-    expect(JSON.parse((await call(getHunts)).body as string)).toEqual(asJson(await Hunt.find().sort({ updatedAt: -1 })));
+    expect(JSON.parse((await call(getHunts)).body as string)).toEqual(asJson(await listSyncedHunts()));
     const reports = JSON.parse((await call(getHuntReports)).body as string);
     // Status depends on the time of the call: compare everything else
     expect(reports.map((report: { status: string }) => ({ ...report, status: "" }))).toEqual(asJson((await listHuntReports()).map((report) => ({ ...report, status: "" }))));
