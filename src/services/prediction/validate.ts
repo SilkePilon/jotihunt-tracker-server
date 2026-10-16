@@ -1,6 +1,7 @@
 import { MAX_PIN_DISTANCE_M, MAX_WHY_LENGTH } from "./constants";
 import type { AreaFacts } from "./facts";
 import { distanceM } from "./geo";
+import { isRecord } from "../../utils/is-record";
 
 export type Confidence = "low" | "medium" | "high";
 
@@ -19,7 +20,6 @@ export class InvalidPredictionError extends Error {
   }
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
 /** Turn Gemini's raw JSON into a safe prediction, or throw InvalidPredictionError. */

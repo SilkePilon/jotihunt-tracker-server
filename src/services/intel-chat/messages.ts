@@ -1,5 +1,6 @@
 import type { ModelMessage, UIMessage } from "ai";
 import type { FetchedImage } from "../article-media";
+import { isRecord } from "../../utils/is-record";
 
 /** Messages sent to the model per turn (the newest ones) */
 export const MAX_HISTORY_TO_MODEL = 40;
@@ -16,7 +17,6 @@ export const MAX_STORED_TOOL_TEXT = 4096;
 /** A stored chat stays below this JSON size (MongoDB documents max out at 16 MB); the oldest messages go first */
 export const MAX_STORED_BYTES = 8 * 1024 * 1024;
 
-const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** Decoded size of base64 data */
 const base64Bytes = (data: string) => Math.floor((data.length * 3) / 4) - (data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0);
@@ -26,13 +26,13 @@ const base64Bytes = (data: string) => Math.floor((data.length * 3) / 4) - (data.
  * non-empty text part (max 4000 chars) and at most one file part (jpeg/png/webp as a base64 data: URL, max 2 MB).
  */
 export function parseIncomingMessage(value: unknown): UIMessage | null {
-  if (!isObject(value)) return null;
+  if (!isRecord(value)) return null;
   const { id, role, parts } = value;
   if (typeof id !== "string" || !id || id.length > 100 || role !== "user" || !Array.isArray(parts)) return null;
   let text: string | null = null;
   let file: UIMessage["parts"][number] | null = null;
   for (const part of parts) {
-    if (!isObject(part)) return null;
+    if (!isRecord(part)) return null;
     if (part.type === "text" && typeof part.text === "string" && text === null) {
       text = part.text.trim();
     } else if (part.type === "file" && file === null) {
@@ -67,7 +67,7 @@ const hasContent = (message: UIMessage) => message.parts.some((part) => part.typ
 function capStrings(value: unknown): unknown {
   if (typeof value === "string") return value.length > MAX_STORED_TOOL_TEXT ? `${value.slice(0, MAX_STORED_TOOL_TEXT)}…` : value;
   if (Array.isArray(value)) return value.map(capStrings);
-  if (isObject(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, capStrings(item)]));
+  if (isRecord(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, capStrings(item)]));
   return value;
 }
 

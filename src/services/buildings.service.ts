@@ -249,8 +249,7 @@ export class BuildingsService {
 
 const slot = serviceSlot<BuildingsService>("3D-gebouwen zijn niet beschikbaar op de server.");
 
-/** The service of this process; null before startup wiring (index.ts) and in tests that don't set one. */
-export const getBuildingsService = slot.get;
+/** Sets the service of this process (startup wiring in index.ts, tests) */
 export const setBuildingsService = slot.set;
 /** The service, or a 503 when none is wired up */
 export const requireBuildingsService = slot.require;

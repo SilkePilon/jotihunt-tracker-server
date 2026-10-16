@@ -2,6 +2,7 @@ import { readCapped } from "../article-media";
 import { insideNl, type LatLng } from "./geo";
 import type { Trip, TripStop } from "./ov-trip";
 import { BUDGET_EXHAUSTED, ToolInputError } from "./tools/context";
+import { isRecord } from "../../utils/is-record";
 
 /** OVapi (KV78Turbo, no key, HTTP only): bus, tram, metro and boat stop areas and their current/upcoming passes */
 export const OVAPI_BASE_URL = "http://v0.ovapi.nl";
@@ -153,7 +154,6 @@ async function getJson(s: OvSession, source: "OVapi" | "NS-API", url: string, mi
   }
 }
 
-const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const text = (value: unknown): string | null => (typeof value === "string" && value.trim() ? value.trim() : typeof value === "number" ? String(value) : null);
 const latLngOf = (lat: unknown, lng: unknown): LatLng | null => {
   const point = { lat: Number(lat), lng: Number(lng) };
@@ -183,8 +183,8 @@ export async function loadStopAreas(s: OvSession): Promise<OvStopInfo[]> {
   if (hit) return hit;
   const body = await getJson(s, "OVapi", `${OVAPI_BASE_URL}/stopareacode`);
   const areas: OvStopInfo[] = [];
-  for (const [code, value] of Object.entries(isObject(body) ? body : {})) {
-    if (!isObject(value)) continue;
+  for (const [code, value] of Object.entries(isRecord(body) ? body : {})) {
+    if (!isRecord(value)) continue;
     const latLng = latLngOf(value.Latitude, value.Longitude);
     const name = text(value.TimingPointName);
     if (latLng && name) areas.push({ id: code, name, town: text(value.TimingPointTown), latLng, source: "OVAPI" });
@@ -202,12 +202,12 @@ export async function loadNsStations(s: OvSession): Promise<OvStopInfo[]> {
   const hit = cached<OvStopInfo[]>(s, key);
   if (hit) return hit;
   const body = await getJson(s, "NS-API", `${NS_BASE_URL}/stations`);
-  const list = isObject(body) && Array.isArray(body.payload) ? body.payload : [];
+  const list = isRecord(body) && Array.isArray(body.payload) ? body.payload : [];
   const stations = list.flatMap((station: unknown): OvStopInfo[] => {
-    if (!isObject(station) || station.land !== "NL") return [];
+    if (!isRecord(station) || station.land !== "NL") return [];
     const latLng = latLngOf(station.lat, station.lng);
     const code = text(station.code);
-    const name = isObject(station.namen) ? text(station.namen.lang) : null;
+    const name = isRecord(station.namen) ? text(station.namen.lang) : null;
     return latLng && code && name ? [{ id: `NS:${code}`, name, town: null, latLng, source: "NS", uic: text(station.UICCode) ?? undefined, big: BIG_STATION.test(String(station.stationType)) }] : [];
   });
   store(s, key, stations, NS_STATIONS_TTL_MS);
@@ -269,13 +269,13 @@ export async function ovapiPasses(s: OvSession, codes: string[]): Promise<OvPass
   if (missing.length > 0) {
     const body = await getJson(s, "OVapi", `${OVAPI_BASE_URL}/stopareacode/${missing.map(encodeURIComponent).join(",")}`);
     const byCode = new Map<string, OvPass[]>(missing.map((code) => [code, []]));
-    for (const [code, timingPoints] of Object.entries(isObject(body) ? body : {})) {
-      if (!isObject(timingPoints)) continue;
+    for (const [code, timingPoints] of Object.entries(isRecord(body) ? body : {})) {
+      if (!isRecord(timingPoints)) continue;
       const passes = byCode.get(code) ?? [];
       for (const timingPoint of Object.values(timingPoints)) {
-        if (!isObject(timingPoint) || !isObject(timingPoint.Passes)) continue;
-        const stop = isObject(timingPoint.Stop) ? timingPoint.Stop : undefined;
-        for (const [key, pass] of Object.entries(timingPoint.Passes)) if (isObject(pass)) passes.push({ ...toPass(key, pass, stop), stopAreaCode: code });
+        if (!isRecord(timingPoint) || !isRecord(timingPoint.Passes)) continue;
+        const stop = isRecord(timingPoint.Stop) ? timingPoint.Stop : undefined;
+        for (const [key, pass] of Object.entries(timingPoint.Passes)) if (isRecord(pass)) passes.push({ ...toPass(key, pass, stop), stopAreaCode: code });
       }
       byCode.set(code, passes);
     }
@@ -294,9 +294,9 @@ export async function ovapiJourneyStops(s: OvSession, key: string): Promise<OvPa
   if (hit) return hit;
   if (journeyEmptyUntil > s.now().getTime()) return [];
   const body = await getJson(s, "OVapi", `${OVAPI_BASE_URL}/journey/${encodeURIComponent(key)}`, []);
-  const stops = isObject(body) && isObject(body[key]) && isObject(body[key].Stops) ? body[key].Stops : {};
+  const stops = isRecord(body) && isRecord(body[key]) && isRecord(body[key].Stops) ? body[key].Stops : {};
   const passes = Object.values(stops)
-    .filter(isObject)
+    .filter(isRecord)
     .map((pass) => toPass(key, pass))
     .sort((a, b) => a.order - b.order);
   if (passes.length === 0) journeyEmptyUntil = s.now().getTime() + JOURNEY_EMPTY_SKIP_MS;
@@ -327,10 +327,10 @@ export async function nsDepartures(s: OvSession, code: string, from?: Date): Pro
   const hit = cached<NsDeparture[]>(s, url);
   if (hit) return hit;
   const body = await getJson(s, "NS-API", url);
-  const list = isObject(body) && isObject(body.payload) && Array.isArray(body.payload.departures) ? body.payload.departures : [];
+  const list = isRecord(body) && isRecord(body.payload) && Array.isArray(body.payload.departures) ? body.payload.departures : [];
   const departures = list.flatMap((departure: unknown): NsDeparture[] => {
-    if (!isObject(departure)) return [];
-    const product = isObject(departure.product) ? departure.product : {};
+    if (!isRecord(departure)) return [];
+    const product = isRecord(departure.product) ? departure.product : {};
     const train = text(product.number);
     const planned = parseOvTime(departure.plannedDateTime);
     if (!train || !planned) return [];
@@ -360,17 +360,17 @@ export async function nsJourney(s: OvSession, train: string, date: string): Prom
   const hit = cached<Trip>(s, url);
   if (hit) return hit;
   const body = await getJson(s, "NS-API", url);
-  const list = isObject(body) && isObject(body.payload) && Array.isArray(body.payload.stops) ? body.payload.stops : [];
+  const list = isRecord(body) && isRecord(body.payload) && Array.isArray(body.payload.stops) ? body.payload.stops : [];
   let line = `trein ${train}`;
   let destination: string | null = null;
   const stops: TripStop[] = list.flatMap((entry: unknown): TripStop[] => {
-    if (!isObject(entry) || !isObject(entry.stop) || entry.status === "PASSING") return [];
-    const arrival = Array.isArray(entry.arrivals) && isObject(entry.arrivals[0]) ? entry.arrivals[0] : null;
-    const departure = Array.isArray(entry.departures) && isObject(entry.departures[0]) ? entry.departures[0] : null;
+    if (!isRecord(entry) || !isRecord(entry.stop) || entry.status === "PASSING") return [];
+    const arrival = Array.isArray(entry.arrivals) && isRecord(entry.arrivals[0]) ? entry.arrivals[0] : null;
+    const departure = Array.isArray(entry.departures) && isRecord(entry.departures[0]) ? entry.departures[0] : null;
     if (!arrival && !departure) return [];
-    const product = isObject(departure?.product) ? departure.product : isObject(arrival?.product) ? arrival.product : null;
+    const product = isRecord(departure?.product) ? departure.product : isRecord(arrival?.product) ? arrival.product : null;
     if (product && text(product.categoryCode)) line = `${text(product.categoryCode)} ${train}`;
-    const goal = isObject(departure?.destination) ? departure.destination : isObject(arrival?.destination) ? arrival.destination : null;
+    const goal = isRecord(departure?.destination) ? departure.destination : isRecord(arrival?.destination) ? arrival.destination : null;
     if (goal && text(goal.name)) destination = text(goal.name);
     return [
       {
