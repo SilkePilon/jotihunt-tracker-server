@@ -8,9 +8,12 @@ import { setAuthConnection } from "./auth/auth-db";
 import { ensurePasswordless } from "./auth/migrate";
 import { initPredictionSetting } from "./settings/prediction-setting";
 import { initHuntableAreas } from "./settings/huntable-areas-setting";
+import { initAppConfig, settingsKeyOk } from "./settings/app-config";
 import { getDemoStateStore, initDemoMode, onDemoSwitch } from "./demo/database-switch";
 import { installDemoWorld } from "./demo/demo-world";
 import { huntOcr } from "./services/hunt-ocr.instance";
+import { syncVehicleGroups } from "./services/tracker-onboarding.helpers";
+import { vehicleGroups } from "./services/tracker-onboarding.instance";
 import { isTraccarConfigured, usesLegacyTraccarEnv } from "./services/traccar-http";
 import { setTelegramService, telegramConfigFromEnv, TelegramService } from "./services/telegram.service";
 import { createMtcuteGateway } from "./services/telegram.gateway";
@@ -79,6 +82,10 @@ await initDemoMode(db, { logger: serviceLogger }).then((state) => {
 // Global settings live in the real database (also in demo mode); cached in memory from here on
 await initPredictionSetting(getDemoStateStore());
 await initHuntableAreas(getDemoStateStore());
+// Settings moved from env to Beheer (env stays the fallback); secrets need SETTINGS_KEY
+await initAppConfig(getDemoStateStore().connection);
+syncVehicleGroups(vehicleGroups);
+if (!settingsKeyOk()) logger.warn("SETTINGS_KEY is missing or not 32 bytes (base64): keys and passwords can't be saved in Beheer. Generate one with: openssl rand -base64 32");
 // Sessions, invites and herstel-links live in the real database, also while demo mode is on
 setAuthConnection(getDemoStateStore().connection);
 // The passwordless migration runs at every start (idempotent), so the deploy order doesn't matter. Also on the demo

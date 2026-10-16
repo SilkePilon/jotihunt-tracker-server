@@ -17,6 +17,7 @@ import {
   setSecret,
   settingsKeyOk,
 } from "./app-config";
+import { syncVehicleGroups, type VehicleGroups } from "../services/tracker-onboarding.helpers";
 
 const uri = process.env.MONGO_URI_TEST ?? "mongodb://localhost:27017/jotihunt-test";
 const KEY = Buffer.alloc(32, 7).toString("base64");
@@ -30,6 +31,8 @@ beforeEach(async () => {
   resetAppConfig();
 });
 afterAll(async () => {
+  // Bun shares modules between test files: don't leave a custom env behind for the next file
+  resetAppConfig();
   await connection.collection("settings").deleteMany({});
   await connection.close();
 });
@@ -160,5 +163,17 @@ describe("plain credentials, public view and change events", () => {
     off();
     await setGeneral({ groupName: "y" }, null);
     expect(heard).toEqual(["general", "ai", "secrets", "secrets"]);
+  });
+});
+
+describe("vehicle groups sync", () => {
+  test("the shared object follows the config, dropping cleared vehicles", async () => {
+    await initAppConfig(connection, { GROUP_CAR_ID: "3" });
+    const shared = { walking: 9 } as VehicleGroups;
+    syncVehicleGroups(shared);
+    expect(shared as Partial<VehicleGroups>).toEqual({ car: 3 });
+    await setGeneral({ vehicleGroups: { walking: 1, car: null } }, null);
+    syncVehicleGroups(shared);
+    expect(shared as Partial<VehicleGroups>).toEqual({ walking: 1, car: 3 });
   });
 });

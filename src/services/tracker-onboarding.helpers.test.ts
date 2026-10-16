@@ -9,8 +9,8 @@ import {
   normalizeClientUrl,
   startOfDay,
   vehicleForGroupId,
-  vehicleGroupsFromEnv,
   withVehicle,
+  type VehicleGroups,
 } from "./tracker-onboarding.helpers";
 
 const SETTINGS = "accuracy=highest&distance=5&interval=5&heartbeat=30&buffer=true&wakelock=true&stop_detection=true";
@@ -55,11 +55,8 @@ describe("buildQrUrl / buildDeepLink", () => {
 });
 
 describe("vehicle groups", () => {
-  const groups = vehicleGroupsFromEnv({ GROUP_WALKING_ID: "3", GROUP_BIKE_ID: "5", GROUP_CAR_ID: "", GROUP_MOTORCYCLE_ID: "abc" });
+  const groups: VehicleGroups = { walking: 3, bike: 5, car: undefined, motorcycle: undefined };
 
-  test("parses positive integer ids, ignores empty/invalid ones", () => {
-    expect(groups).toEqual({ walking: 3, bike: 5, car: undefined, motorcycle: undefined });
-  });
   test("missing id maps to 0 (no group)", () => {
     expect(groupIdForVehicle("walking", groups)).toBe(3);
     expect(groupIdForVehicle("car", groups)).toBe(0);
