@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { Article } from "../models/article.model";
 import { HintCell, HintCellStatus } from "../models/hint-cell.model";
@@ -5,7 +6,7 @@ import { Marker, MarkerType } from "../models/marker.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { ServiceError } from "../http/service-error";
 import { nextGeneration } from "../demo/demo-mode";
-import { getBoard, getBoardJson, invalidateBoardCache, solveCell } from "./hint-board.service";
+import { getBoard, getBoardJson, invalidateBoardCache, reopenImportedCell, solveCell } from "./hint-board.service";
 
 const slotTime = new Date("2026-10-17T12:00:00.000Z");
 
@@ -246,3 +247,43 @@ async function expectConsistent(area: string) {
     expect(cell!.markerId).toBeFalsy();
   }
 }
+
+describe("solvedAt", () => {
+  test("is set on the first solve and kept when the answer changes", async () => {
+    await makeCell();
+    const before = Date.now();
+    const first = await solveCell(1, "alpha", "2126 4692");
+    expect(first.solvedAt).toBeInstanceOf(Date);
+    expect(first.solvedAt!.getTime()).toBeGreaterThanOrEqual(before);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const second = await solveCell(1, "alpha", "kerk");
+    expect(second.solvedAt!.getTime()).toBe(first.solvedAt!.getTime());
+  });
+
+  test("an open cell has none", async () => {
+    await makeCell();
+    const board = await getBoard();
+    expect(board.cells[0].solvedAt).toBeUndefined();
+  });
+
+  test("reopening an imported cell clears it", async () => {
+    const cell = await makeCell();
+    await solveCell(1, "alpha", "kerk");
+    expect(await reopenImportedCell(cell._id, "kerk")).toBe(true);
+    const stored = await HintCell.findById(cell._id).lean();
+    expect(stored?.solvedAt).toBeUndefined();
+  });
+
+  test("an old solved cell without solvedAt gets its marker's creation time", async () => {
+    const markerId = new mongoose.Types.ObjectId();
+    await HintCell.create({ articleId: 1, area: "alpha", publishAt: slotTime, slotTime, status: HintCellStatus.Solved, answer: "x", answerKind: "rd", markerId });
+    const board = await getBoard();
+    expect(new Date(board.cells[0].solvedAt!).getTime()).toBe(markerId.getTimestamp().getTime());
+  });
+
+  test("an old solved text answer without marker stays without", async () => {
+    await HintCell.create({ articleId: 1, area: "alpha", publishAt: slotTime, slotTime, status: HintCellStatus.Solved, answer: "kerk", answerKind: "text" });
+    const board = await getBoard();
+    expect(board.cells[0].solvedAt).toBeUndefined();
+  });
+});

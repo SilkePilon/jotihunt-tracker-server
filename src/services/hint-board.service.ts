@@ -14,9 +14,14 @@ const LEGACY_FIELDS = ["claimedBy", "claimedAt", "check", "checkedBy", "notes"] 
 const HIDE_LEGACY = Object.fromEntries(LEGACY_FIELDS.map((field) => [field, 0])) as Record<(typeof LEGACY_FIELDS)[number], 0>;
 const UNSET_LEGACY = Object.fromEntries(LEGACY_FIELDS.map((field) => [field, 1])) as Record<(typeof LEGACY_FIELDS)[number], 1>;
 
-/** A cell as sent to clients: a legacy "solving" cell counts as open */
-function shown<T extends { status: string }>(cell: T): T {
-  return cell.status === "solving" ? { ...cell, status: HintCellStatus.Open } : cell;
+/**
+ * A cell as sent to clients: a legacy "solving" cell counts as open; a solved cell from before `solvedAt` existed gets
+ * its marker's creation time (the marker is made by the solve), a text answer without marker stays without.
+ */
+function shown<T extends { status: string; solvedAt?: Date | null; markerId?: mongoose.Types.ObjectId | null }>(cell: T): T {
+  if (cell.status === "solving") return { ...cell, status: HintCellStatus.Open };
+  if (cell.status === HintCellStatus.Solved && !cell.solvedAt && cell.markerId) return { ...cell, solvedAt: cell.markerId.getTimestamp() };
+  return cell;
 }
 
 async function findCellOr404(articleId: number, area: string) {
@@ -227,6 +232,8 @@ export async function solveCell(articleId: number, area: string, answer: string,
           answer: trimmedAnswer,
           answerKind: rd ? "rd" : "text",
           status: HintCellStatus.Solved,
+          // First solve only: changing the answer later keeps the original time
+          ...(cell.status !== HintCellStatus.Solved ? { solvedAt: new Date() } : {}),
           ...(rd ? { answerLocation: [rd.lng, rd.lat] } : {}),
         },
         $unset: unset,
@@ -254,7 +261,7 @@ export async function reopenImportedCell(cellId: mongoose.Types.ObjectId, answer
   if (!cell) return false;
   const updated = await HintCell.updateOne(
     { _id: cellId, status: HintCellStatus.Solved, answer },
-    { $set: { status: HintCellStatus.Open }, $unset: { answer: 1, answerKind: 1, answerLocation: 1, markerId: 1 } },
+    { $set: { status: HintCellStatus.Open }, $unset: { answer: 1, answerKind: 1, answerLocation: 1, markerId: 1, solvedAt: 1 } },
   );
   if (updated.modifiedCount === 0) return false;
   if (cell.markerId) await deleteMarkerIfUnlinked(cell.markerId);

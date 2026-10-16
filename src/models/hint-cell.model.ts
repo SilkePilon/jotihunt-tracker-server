@@ -28,6 +28,8 @@ const HintCellSchema = new mongoose.Schema({
   answerKind: { type: String, enum: ["rd", "text"] },
   answerLocation: { type: [Number], default: undefined }, // [lng, lat] for RD answers
   markerId: { type: mongoose.Schema.Types.ObjectId, ref: "Marker" },
+  /** When the cell was first solved (kept when the answer changes); missing on cells solved before this field existed */
+  solvedAt: { type: Date },
   articleChanged: { type: Boolean, default: false, required: true },
 });
 

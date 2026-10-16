@@ -89,7 +89,7 @@ async function createDemoUsers() {
 async function applyCellPlans(plans: CellPlan[], routes: Map<DemoArea, FoxRoute>) {
   const areaByLower = new Map(DEMO_AREAS.map((area) => [area.toLowerCase(), area]));
   const cellKey = (articleId: number, area: string) => `${articleId}|${area}`;
-  const cells = await HintCell.find({}, { articleId: 1, area: 1, slotTime: 1 }).lean();
+  const cells = await HintCell.find({}, { articleId: 1, area: 1, slotTime: 1, publishAt: 1 }).lean();
   const cellByKey = new Map(cells.map((cell) => [cellKey(cell.articleId, cell.area), cell]));
 
   const updates: { cellId: mongoose.Types.ObjectId; set: Record<string, unknown>; unset: Record<string, 1> }[] = [];
@@ -106,7 +106,9 @@ async function applyCellPlans(plans: CellPlan[], routes: Map<DemoArea, FoxRoute>
       const rd = parseRdAnswer(answer)!;
       const location = { type: "Point" as const, coordinates: [rd.lng, rd.lat] };
       solved.push({ marker: { area: plan.area, time: cell.slotTime, type: MarkerType.Hint, location }, set });
-      Object.assign(set, { answer, answerKind: "rd", answerLocation: [rd.lng, rd.lat], markerId: null });
+      // A believable solve time (8–37 min after publish), the same for a cell on every run
+      const minutes = 8 + ((plan.articleId * 31 + plan.area.charCodeAt(0) * 7) % 30);
+      Object.assign(set, { answer, answerKind: "rd", answerLocation: [rd.lng, rd.lat], markerId: null, solvedAt: new Date(cell.publishAt.getTime() + minutes * 60_000) });
     }
     updates.push({ cellId: cell._id, set, unset });
   }
