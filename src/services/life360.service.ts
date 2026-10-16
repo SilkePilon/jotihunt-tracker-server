@@ -15,7 +15,7 @@ import {
   type Life360Members,
   type ParsedLife360Member,
 } from "./life360.helpers";
-import { decryptSession, encryptSession } from "./telegram.helpers";
+import { decryptSession, encryptSession } from "./session-crypto";
 import { errorText } from "../utils/error-text";
 import type { ServiceLogger } from "../utils/service-logger";
 import { serviceSlot } from "../utils/service-slot";

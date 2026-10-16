@@ -1,7 +1,7 @@
 import distance from "@turf/distance";
 import { knownAreaName, type AreaName } from "../constants/areas";
 import { MarkerType } from "../models/marker.model";
-import { decodeSessionKey } from "./telegram.helpers";
+import { isValidSessionKey } from "./session-crypto";
 
 /**
  * Jotiboard (jotiboard.nl, our own app) keeps its data in Firebase: Auth (email/password) and the Realtime Database.
@@ -24,9 +24,7 @@ export interface JotiboardConfig {
 export function jotiboardConfigFromEnv(env: Record<string, string | undefined>, warn: (message: string) => void): JotiboardConfig | null {
   const sessionKey = env.JOTIBOARD_SESSION_KEY?.trim();
   if (!sessionKey) return null;
-  try {
-    decodeSessionKey(sessionKey);
-  } catch {
+  if (!isValidSessionKey(sessionKey)) {
     warn("JOTIBOARD_SESSION_KEY is not 32 bytes (base64), the Jotiboard sync is off. Generate one with: openssl rand -base64 32");
     return null;
   }

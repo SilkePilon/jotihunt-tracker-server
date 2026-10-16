@@ -7,7 +7,7 @@ import { telegramLinkModel } from "../models/telegram-link.model";
 import { telegramMessageModel } from "../models/telegram-message.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { FakeGateway, SESSION } from "../test/telegram-gateway";
-import { decryptSession, encryptSession } from "./telegram.helpers";
+import { decryptSession, encryptSession } from "./session-crypto";
 import { SessionRevokedError, telegramConfigFromEnv, TelegramService, type TelegramConfig, type TelegramIncomingMessage } from "./telegram.service";
 
 const KEY = randomBytes(32).toString("base64");

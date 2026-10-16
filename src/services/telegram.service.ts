@@ -9,14 +9,12 @@ import {
   buildTelegramCounterHuntNotification,
   classifyBotMessage,
   COUNTER_HUNT_WINDOW_MS,
-  decodeSessionKey,
-  decryptSession,
-  encryptSession,
   isBotMessage,
   maskPhone,
   parseCounterHuntDirection,
   type BotMessageKind,
 } from "./telegram.helpers";
+import { decryptSession, encryptSession, isValidSessionKey } from "./session-crypto";
 import { errorText } from "../utils/error-text";
 import type { ServiceLogger } from "../utils/service-logger";
 import { serviceSlot } from "../utils/service-slot";
@@ -109,9 +107,7 @@ export function telegramConfigFromEnv(env: Record<string, string | undefined>, w
     return null;
   }
   const sessionKey = env.TELEGRAM_SESSION_KEY?.trim() ?? "";
-  try {
-    decodeSessionKey(sessionKey);
-  } catch {
+  if (!isValidSessionKey(sessionKey)) {
     warn("TELEGRAM_SESSION_KEY is missing or not 32 bytes (base64), Telegram is off. Generate one with: openssl rand -base64 32");
     return null;
   }

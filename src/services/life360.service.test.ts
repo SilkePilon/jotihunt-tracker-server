@@ -7,7 +7,7 @@ import { DEVICE_FIX_ISO, FIX_ISO, FIX_TIME, rawDeviceLocation, rawMember } from 
 import { Life360BlockedError, Life360CodeInvalidError, Life360NetworkError, Life360NotFoundError, Life360RateLimitedError, Life360UnauthorizedError, Life360UpstreamError } from "./life360.client";
 import type { Life360Config } from "./life360.helpers";
 import { Life360Service, type Life360ServiceOptions } from "./life360.service";
-import { decryptSession } from "./telegram.helpers";
+import { decryptSession } from "./session-crypto";
 
 const KEY = randomBytes(32).toString("base64");
 const EMAIL = "jotihunt@example.nl";

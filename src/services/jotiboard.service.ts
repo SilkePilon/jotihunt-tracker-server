@@ -5,7 +5,7 @@ import { JOTIBOARD_LINK_KEY, jotiboardLinkModel, type JotiboardLinkDoc } from ".
 import { JotiboardAuthError, JotiboardLoginError, JotiboardUpstreamError, type JotiboardApi, type JotiboardSession } from "./jotiboard.client";
 import { parseHintSolves, parsePins, type JotiboardConfig } from "./jotiboard.helpers";
 import { jotiboardImporter, type JotiboardCounts, type JotiboardImporter } from "./jotiboard.import";
-import { decryptSession, encryptSession } from "./telegram.helpers";
+import { decryptSession, encryptSession } from "./session-crypto";
 import { errorText } from "../utils/error-text";
 import type { ServiceLogger } from "../utils/service-logger";
 import { serviceSlot } from "../utils/service-slot";

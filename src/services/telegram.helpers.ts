@@ -1,4 +1,3 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { buildCounterHuntNotification, COUNTER_HUNT_DIRECTIONS, type CounterHuntDirection, type NotificationInput } from "./notifier.helpers";
 
 /** What a @Jotihunt_bot message is about (decides the marker in the client's card; only tegenhunts alert). */
@@ -114,34 +113,6 @@ export function isBotMessage(message: { senderUsername?: string | null; senderIs
 }
 
 // --- Session ------------------------------------------------------------------------------------------------------
-
-export interface EncryptedSession {
-  ciphertext: string;
-  iv: string;
-  tag: string;
-}
-
-/** TELEGRAM_SESSION_KEY: base64 of exactly 32 bytes (AES-256). Throws otherwise. */
-export function decodeSessionKey(keyB64: string): Buffer {
-  const key = Buffer.from(keyB64.trim(), "base64");
-  if (key.length !== 32) throw new Error("TELEGRAM_SESSION_KEY must be 32 bytes, base64 encoded");
-  return key;
-}
-
-/** AES-256-GCM with a fresh 12-byte iv; all parts base64. */
-export function encryptSession(plain: string, keyB64: string): EncryptedSession {
-  const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", decodeSessionKey(keyB64), iv);
-  const ciphertext = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
-  return { ciphertext: ciphertext.toString("base64"), iv: iv.toString("base64"), tag: cipher.getAuthTag().toString("base64") };
-}
-
-/** Throws on a wrong key or tampered data (GCM authentication). */
-export function decryptSession(encrypted: EncryptedSession, keyB64: string): string {
-  const decipher = createDecipheriv("aes-256-gcm", decodeSessionKey(keyB64), Buffer.from(encrypted.iv, "base64"));
-  decipher.setAuthTag(Buffer.from(encrypted.tag, "base64"));
-  return Buffer.concat([decipher.update(Buffer.from(encrypted.ciphertext, "base64")), decipher.final()]).toString("utf8");
-}
 
 /** "+31612345612" → "+31 6 ••• 12": enough for an admin to recognise the account. */
 export function maskPhone(phone: string): string {

@@ -1,4 +1,4 @@
-import { decodeSessionKey } from "./telegram.helpers";
+import { isValidSessionKey } from "./session-crypto";
 /**
  * Life360: pure helpers and the API contract types (docs/superpowers/specs/2026-10-13-life360-api-contract.md).
  * Members of GET /v3/circles/{cid}/members are parsed here; addresses, place names, e-mail addresses, phone numbers and
@@ -266,7 +266,7 @@ export function liveCount(members: Life360Member[], now: Date): number {
 // --- Config ---------------------------------------------------------------------------------------------------------
 
 export interface Life360Config {
-  /** LIFE360_SESSION_KEY: base64 of 32 bytes, encrypts the stored token (AES-256-GCM, same helpers as Telegram) */
+  /** LIFE360_SESSION_KEY: base64 of 32 bytes, encrypts the stored token (AES-256-GCM, session-crypto.ts) */
   sessionKey: string;
 }
 
@@ -274,9 +274,7 @@ export interface Life360Config {
 export function life360ConfigFromEnv(env: Record<string, string | undefined>, warn: (message: string) => void): Life360Config | null {
   const sessionKey = env.LIFE360_SESSION_KEY?.trim();
   if (!sessionKey) return null;
-  try {
-    decodeSessionKey(sessionKey);
-  } catch {
+  if (!isValidSessionKey(sessionKey)) {
     warn("LIFE360_SESSION_KEY is not 32 bytes (base64), Life360 is off. Generate one with: openssl rand -base64 32");
     return null;
   }

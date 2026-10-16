@@ -5,7 +5,7 @@ import { jotiboardLinkModel } from "../models/jotiboard-link.model";
 import { FakeImporter, FakeJotiboardClient, PASSWORD } from "../test/jotiboard-client";
 import { JotiboardAuthError, JotiboardLoginError, JotiboardUpstreamError } from "./jotiboard.client";
 import { JotiboardService, POLL_INTERVAL_MS, type JotiboardServiceOptions } from "./jotiboard.service";
-import { decryptSession } from "./telegram.helpers";
+import { decryptSession } from "./session-crypto";
 import { setDemoModeFlag } from "../demo/demo-mode";
 
 const KEY = randomBytes(32).toString("base64");

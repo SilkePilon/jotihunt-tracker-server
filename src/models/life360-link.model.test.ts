@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import mongoose, { type Connection } from "mongoose";
-import { decryptSession, encryptSession } from "../services/telegram.helpers";
+import { decryptSession, encryptSession } from "../services/session-crypto";
 import { LIFE360_LINK_KEY, life360LinkModel } from "./life360-link.model";
 
 const uri = process.env.MONGO_URI_TEST ?? "mongodb://localhost:27017/jotihunt-test";
