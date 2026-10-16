@@ -1,7 +1,8 @@
 import { logger } from "../logger";
 import { currentGeneration, runTracked, skipInDemoMode } from "../demo/demo-mode";
 import { Hunt } from "../models/hunt.model";
-import { closeScraper, scrapeHunts } from "../services/jotihunt-scraper.service";
+import { closeScraper, jotihuntLogin, scrapeHunts } from "../services/jotihunt-scraper.service";
+import { markSyncFailure, markSyncStart, markSyncSuccess } from "../services/hunt-sync-state";
 import { linkScrapedHunts } from "../services/hunt-report-sync.service";
 import { deadline } from "../services/http-limits";
 import { assignSiteKeys, type ScrapedHunt } from "../services/jotihunt-hunts.parse";
@@ -84,19 +85,28 @@ export default async function scrapeJotihuntWebsite() {
     return;
   }
 
+  if (!jotihuntLogin()) {
+    // Not linked (Beheer → Algemeen): nothing to sync; the sync card shows "Niet gekoppeld"
+    await closeScraper();
+    return;
+  }
+
   logger.debug("(CRON) Scraping required data from Jotihunt website...");
   const generation = currentGeneration();
+  markSyncStart(new Date());
 
   let webHunts: ScrapedHunt[];
   try {
     webHunts = await deadline(scrapeHunts(), SCRAPE_DEADLINE_MS, `Scraping took longer than ${SCRAPE_DEADLINE_MS / 1000} s`);
   } catch (error) {
+    markSyncFailure(error, new Date());
     // Start from a fresh browser next run; a broken page or login would otherwise keep failing
     await closeScraper();
     logger.error("(CRON) Scraping hunts failed:", error);
     return;
   }
   if (webHunts.length === 0) {
+    markSyncSuccess(new Date());
     logger.debug("(CRON) The hunts table is empty; stored hunts are kept");
     return;
   }
@@ -109,9 +119,11 @@ export default async function scrapeJotihuntWebsite() {
       // Upsert by code (else area + time) and drop hunts the website no longer lists: /hunts is never briefly empty
       await storeHunts(hunts)
         .then(({ deleted }) => {
+          markSyncSuccess(new Date());
           if (!deleted) logger.warn(`(CRON) Scraped only ${hunts.length} hunts, far fewer than stored; kept the stored hunts`);
         })
         .catch((error) => {
+          markSyncFailure(error, new Date());
           logger.error("(CRON) Error storing hunts in database:", error);
         });
 

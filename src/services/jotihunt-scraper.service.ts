@@ -1,7 +1,7 @@
 import puppeteer, { Page } from "puppeteer";
 import { logger } from "../logger";
 import { onAppConfigChange, plain, secret } from "../settings/app-config";
-import { extractHuntsPage, parseHuntsPage, type ScrapedHunt } from "./jotihunt-hunts.parse";
+import { extractHuntsPage, parseHuntDetail, parseHuntsPage, type ParsedLocation, type ScrapedHunt } from "./jotihunt-hunts.parse";
 
 const websiteUrl = process.env.JOTIHUNT_WEB_URL as string;
 const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
@@ -128,8 +128,55 @@ export async function scrapeHunts(): Promise<ScrapedHunt[]> {
   const raw = extractHuntsPage(html);
   if (raw.rows.length === 0 && raw.headers.length === 0 && NOT_THE_HUNTS_PAGE.test(html)) throw new Error(`No hunts page on ${page.url()}`);
   const { hunts, warning } = parseHuntsPage(raw);
-  if (warning) logger.warn(`(SCRAPER) ${warning}`);
+  if (warning) {
+    // Once per distinct warning: the cron runs every minute
+    if (warning !== lastWarning) logger.warn(`(SCRAPER) ${warning}`);
+  }
+  lastWarning = warning;
 
+  await addDetails(page, hunts);
   logger.debug(`(SCRAPER) Found ${hunts.length} hunts from website.`);
   return hunts;
+}
+
+let lastWarning: string | null = null;
+
+/** Detail pages opened per run at most (each takes a page load) */
+export const MAX_DETAIL_PAGES = 5;
+/** A detail page without a location is opened again after this long */
+const DETAIL_RETRY_MS = 5 * 60 * 1000;
+/** What a detail page gave, by its URL; a page with a location is not opened again */
+const details = new Map<string, { location: ParsedLocation | null; qrCode: string | null; at: number }>();
+
+/**
+ * Hunts whose list row has no location get it (and their QR code) from their own page, when the list links one. At most
+ * MAX_DETAIL_PAGES pages per run; a failing page is skipped. The siteKey stays the list page's.
+ */
+async function addDetails(page: Page, hunts: ScrapedHunt[], now = Date.now()): Promise<void> {
+  let opened = 0;
+  for (const hunt of hunts) {
+    if (hunt.location || !hunt.detailUrl) continue;
+    const url = new URL(hunt.detailUrl, websiteUrl + "/hunts").href;
+    let found = details.get(url);
+    if (!found || (!found.location && now - found.at > DETAIL_RETRY_MS)) {
+      if (opened >= MAX_DETAIL_PAGES) continue;
+      opened++;
+      try {
+        await page.goto(url, { waitUntil: "networkidle2" });
+        found = { ...parseHuntDetail(await page.content()), at: now };
+        details.set(url, found);
+      } catch (error) {
+        logger.warn(`(SCRAPER) Could not read hunt page ${url}:`, error);
+        continue;
+      }
+    }
+    hunt.location = found.location;
+    hunt.qrCode ??= found.qrCode;
+  }
+}
+
+/** For tests */
+export function forgetHuntDetails(): void {
+  details.clear();
+  lastWarning = null;
 }

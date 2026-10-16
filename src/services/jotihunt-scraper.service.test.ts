@@ -11,6 +11,11 @@ let closes = 0;
 let huntsRedirect: string | null = null;
 /** When set, submitting the login form stays on /login (wrong credentials) */
 let rejectLogin = false;
+const TABLE = "<table><tr><th>Deelgebied</th><th>Huntcode</th><th>Status</th><th>Punten</th><th>Tijdstip</th></tr><tr><td>Alpha</td><td>abc</td><td>ok</td><td>1</td><td>12:00</td></tr></table>";
+/** HTML per page path; /hunts defaults to TABLE */
+let pages: Record<string, string> = {};
+/** Every page opened */
+let visited: string[] = [];
 
 function fakeBrowser() {
   let connected = true;
@@ -26,11 +31,15 @@ function fakeBrowser() {
       url = rejectLogin ? "https://jh.test/login" : "https://jh.test/dashboard";
     },
     goto: async (target: string) => {
+      visited.push(target);
       url = target.endsWith("/hunts") && huntsRedirect ? huntsRedirect : target;
       huntsRedirect = null;
     },
     url: () => url,
-    content: async () => "<table><tr><th>Deelgebied</th><th>Huntcode</th><th>Status</th><th>Punten</th><th>Tijdstip</th></tr><tr><td>Alpha</td><td>abc</td><td>ok</td><td>1</td><td>12:00</td></tr></table>",
+    content: async () => {
+      const path = new URL(url).pathname;
+      return pages[path] ?? (path === "/hunts" ? TABLE : "<p>Niet gevonden</p>");
+    },
   };
   const browser = {
     get connected() {
@@ -59,7 +68,7 @@ mock.module("../logger", () => ({ logger: { info() {}, debug() {}, error() {}, w
 // A fresh instance: another test file may have loaded the service already (before JOTIHUNT_WEB_URL was set,
 // and resetAppConfig in the settings tests drops its config listener)
 const freshService = "./jotihunt-scraper.service?fresh";
-const { closeScraper, jotihuntLogin, scrapeHunts, testJotihuntLogin } = (await import(freshService)) as typeof import("./jotihunt-scraper.service");
+const { closeScraper, forgetHuntDetails, jotihuntLogin, scrapeHunts, testJotihuntLogin } = (await import(freshService)) as typeof import("./jotihunt-scraper.service");
 
 /** A settings collection with only the plain username stored; the env holds the login */
 function fakeConnection(): Connection {
@@ -82,6 +91,9 @@ beforeEach(async () => {
   closes = 0;
   huntsRedirect = null;
   rejectLogin = false;
+  pages = {};
+  visited = [];
+  forgetHuntDetails();
 });
 afterAll(resetAppConfig);
 
@@ -107,6 +119,31 @@ describe("scrapeHunts", () => {
     await closeScraper();
     await scrapeHunts();
     expect(launches).toBe(2);
+  });
+});
+
+describe("hunt detail pages", () => {
+  const card = (id: number, area: string, attrs = "") => `<div class="hunt" ${attrs}><h3>Vossenteam ${area}</h3><p>Tijd: 21:${String(id % 60).padStart(2, "0")}</p><a href="/hunts/${id}">Details</a></div>`;
+  const detail = (lat: number) => `<main><dl><dt>QR-code</dt><dd>Q${lat}</dd><dt>Locatie</dt><dd>${lat}, 5.65</dd><dt>Nauwkeurigheid</dt><dd>9 m</dd></dl></main>`;
+
+  test("a hunt without a location gets it (and its QR code) from its own page; the key stays", async () => {
+    pages["/hunts"] = `<main>${card(1, "Alpha", 'data-lat="52.01" data-lng="5.98"')}${card(2, "Bravo")}</main>`;
+    pages["/hunts/2"] = detail(52.05);
+    const hunts = await scrapeHunts();
+    expect(hunts[0]).toMatchObject({ siteKey: "id:1", location: { lat: 52.01, lng: 5.98, accuracy: null } });
+    expect(hunts[1]).toMatchObject({ siteKey: "id:2", qrCode: "Q52.05", location: { lat: 52.05, lng: 5.65, accuracy: 9 } });
+    expect(visited.filter((target) => target.includes("/hunts/"))).toEqual(["https://jh.test/hunts/2"]);
+  });
+
+  test("at most 5 detail pages per run; a page with a location is not opened again", async () => {
+    pages["/hunts"] = `<main>${[1, 2, 3, 4, 5, 6, 7].map((id) => card(id, "Charlie")).join("")}</main>`;
+    for (const id of [1, 2, 3, 4, 5, 6, 7]) pages[`/hunts/${id}`] = detail(52 + id / 100);
+    const first = await scrapeHunts();
+    expect(first.filter((hunt) => hunt.location)).toHaveLength(5);
+    visited = [];
+    const second = await scrapeHunts();
+    expect(second.filter((hunt) => hunt.location)).toHaveLength(7);
+    expect(visited.filter((target) => target.includes("/hunts/"))).toEqual(["https://jh.test/hunts/6", "https://jh.test/hunts/7"]);
   });
 });
 
