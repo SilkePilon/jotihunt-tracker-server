@@ -30,7 +30,7 @@ function fakeBrowser() {
       huntsRedirect = null;
     },
     url: () => url,
-    evaluate: async () => ({ headers: ["Deelgebied", "Huntcode", "Status", "Punten", "Tijdstip"], rows: [["Alpha", "abc", "ok", "1", "12:00"]] }),
+    content: async () => "<table><tr><th>Deelgebied</th><th>Huntcode</th><th>Status</th><th>Punten</th><th>Tijdstip</th></tr><tr><td>Alpha</td><td>abc</td><td>ok</td><td>1</td><td>12:00</td></tr></table>",
   };
   const browser = {
     get connected() {

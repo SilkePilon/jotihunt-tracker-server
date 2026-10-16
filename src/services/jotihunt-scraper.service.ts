@@ -1,8 +1,7 @@
 import puppeteer, { Page } from "puppeteer";
 import { logger } from "../logger";
 import { onAppConfigChange, plain, secret } from "../settings/app-config";
-import { WebHunt } from "../types/api";
-import { parseHuntsTable } from "./jotihunt-hunts.parse";
+import { extractHuntsPage, parseHuntsPage, type ScrapedHunt } from "./jotihunt-hunts.parse";
 
 const websiteUrl = process.env.JOTIHUNT_WEB_URL as string;
 const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
@@ -107,10 +106,14 @@ export async function testJotihuntLogin(login = jotihuntLogin()): Promise<{ ok: 
   }
 }
 
+/** Signs that /hunts did not load: a Cloudflare challenge or a server error page */
+const NOT_THE_HUNTS_PAGE = /just a moment|cf-challenge|challenge-platform|captcha|502 bad gateway|503 service|server error/i;
+
 /**
- * Scrape the last 15 hunts from the Jotihunt website, logging in again when the session expired.
+ * Scrape the hunts from the logged-in /hunts page, logging in again when the session expired. The page HTML is parsed
+ * in Node (jotihunt-hunts.parse) so the parser can be tested against saved pages.
  */
-export async function scrapeHunts(): Promise<WebHunt[]> {
+export async function scrapeHunts(): Promise<ScrapedHunt[]> {
   logger.debug("(SCRAPER) Scraping hunts from Jotihunt website...");
   const page = await scraperPage();
 
@@ -121,19 +124,10 @@ export async function scrapeHunts(): Promise<WebHunt[]> {
     await page.goto(websiteUrl + "/hunts", { waitUntil: "networkidle2" });
   }
 
-  const table = await page.evaluate(() => {
-    // No table at all: not the hunts page (e.g. a Cloudflare challenge or an error page)
-    const element = document.querySelector("table");
-    if (!element) return null;
-    // No helper functions in here: the callback is serialised into the page as is
-    const headerRow = element.querySelector("thead tr") ?? element.querySelector("tr");
-    const headers = headerRow ? Array.from(headerRow.querySelectorAll("th"), (cell) => (cell.textContent ?? "").replace(/\s+/g, " ").trim()) : [];
-    const rows = Array.from(element.querySelectorAll("tbody tr"), (row) => Array.from(row.querySelectorAll("td"), (cell) => (cell.textContent ?? "").replace(/\s+/g, " ").trim()));
-    return { headers, rows };
-  });
-  if (table === null) throw new Error(`No hunts table on ${page.url()}`);
-  // Rows without a hunt code are kept: since 16 Oct 2026 hunts are confirmed with the fox's QR code
-  const { hunts, warning } = parseHuntsTable(table);
+  const html = await page.content();
+  const raw = extractHuntsPage(html);
+  if (raw.rows.length === 0 && raw.headers.length === 0 && NOT_THE_HUNTS_PAGE.test(html)) throw new Error(`No hunts page on ${page.url()}`);
+  const { hunts, warning } = parseHuntsPage(raw);
   if (warning) logger.warn(`(SCRAPER) ${warning}`);
 
   logger.debug(`(SCRAPER) Found ${hunts.length} hunts from website.`);

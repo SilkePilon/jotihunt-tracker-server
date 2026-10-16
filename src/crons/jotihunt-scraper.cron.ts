@@ -4,8 +4,7 @@ import { Hunt } from "../models/hunt.model";
 import { closeScraper, scrapeHunts } from "../services/jotihunt-scraper.service";
 import { linkScrapedHunts } from "../services/hunt-report-sync.service";
 import { deadline } from "../services/http-limits";
-import { siteKeyOf } from "../services/jotihunt-hunts.parse";
-import { WebHunt } from "../types/api";
+import { assignSiteKeys, type ScrapedHunt } from "../services/jotihunt-hunts.parse";
 
 /** A whole scrape (browser start, login, page load) may take this long; then the browser is closed and the run ends */
 export const SCRAPE_DEADLINE_MS = 120_000;
@@ -34,37 +33,33 @@ const CLOCK_ONLY = /^\d{1,2}[:.]\d{2}(?::\d{2})?$/;
  * A time the site shows as a clock only ("09:15") is dated to its most recent occurrence, so on Sunday a Saturday
  * 09:15 would become Sunday 09:15. Rows already stored (same area, same text) keep their stored date. Mutates `time`.
  */
-export async function keepStoredDates(webHunts: WebHunt[]): Promise<void> {
-  const clockOnly = webHunts.filter((hunt) => CLOCK_ONLY.test(hunt.huntTime.trim()));
+export async function keepStoredDates(scraped: ScrapedHunt[]): Promise<void> {
+  const clockOnly = scraped.filter((hunt) => CLOCK_ONLY.test(hunt.huntTimeText.trim()));
   if (clockOnly.length === 0) return;
-  const stored = await Hunt.find({ huntTimeText: { $in: [...new Set(clockOnly.map((hunt) => hunt.huntTime.trim()))] }, huntTime: { $type: "date" } })
+  const stored = await Hunt.find({ huntTimeText: { $in: [...new Set(clockOnly.map((hunt) => hunt.huntTimeText.trim()))] }, huntTime: { $type: "date" } })
     .select("area huntTimeText huntTime")
     .sort({ huntTime: -1 })
     .lean();
   for (const hunt of clockOnly) {
-    const match = stored.find((entry) => entry.area.toLowerCase() === hunt.area.toLowerCase() && entry.huntTimeText === hunt.huntTime.trim());
-    if (match?.huntTime) hunt.time = match.huntTime;
+    const match = stored.find((entry) => entry.area.toLowerCase() === hunt.area.toLowerCase() && entry.huntTimeText === hunt.huntTimeText.trim());
+    if (match?.huntTime) hunt.huntTime = match.huntTime;
   }
+  // A re-dated time changes a time-based key
+  assignSiteKeys(scraped);
 }
 
-/** The scraped hunts with their store key; a key seen twice in one scrape (same fox, same minute, no code) gets a suffix. */
-export function toStoredHunts(webHunts: WebHunt[], now = new Date()): StoredHunt[] {
-  const seen = new Map<string, number>();
-  return webHunts.map((webHunt) => {
-    const key = siteKeyOf(webHunt);
-    const count = (seen.get(key) ?? 0) + 1;
-    seen.set(key, count);
-    return {
-      siteKey: count === 1 ? key : `${key}#${count}`,
-      area: webHunt.area,
-      huntCode: webHunt.huntCode,
-      status: webHunt.status,
-      points: webHunt.points,
-      huntTime: webHunt.time,
-      huntTimeText: webHunt.huntTime.trim(),
-      updatedAt: now,
-    };
-  });
+/** The scraped hunts as stored. */
+export function toStoredHunts(scraped: ScrapedHunt[], now = new Date()): StoredHunt[] {
+  return scraped.map((hunt) => ({
+    siteKey: hunt.siteKey,
+    area: hunt.area,
+    huntCode: hunt.huntCode,
+    status: hunt.statusText,
+    points: hunt.points,
+    huntTime: hunt.huntTime,
+    huntTimeText: hunt.huntTimeText,
+    updatedAt: now,
+  }));
 }
 
 /**
@@ -92,7 +87,7 @@ export default async function scrapeJotihuntWebsite() {
   logger.debug("(CRON) Scraping required data from Jotihunt website...");
   const generation = currentGeneration();
 
-  let webHunts: WebHunt[];
+  let webHunts: ScrapedHunt[];
   try {
     webHunts = await deadline(scrapeHunts(), SCRAPE_DEADLINE_MS, `Scraping took longer than ${SCRAPE_DEADLINE_MS / 1000} s`);
   } catch (error) {
@@ -121,7 +116,7 @@ export default async function scrapeJotihuntWebsite() {
         });
 
       // Copy status and points to the app's own reports; they keep them after the scraper forgets older hunts
-      await linkScrapedHunts(webHunts).catch((error) => {
+      await linkScrapedHunts(webHunts.map((hunt) => ({ huntCode: hunt.huntCode, status: hunt.statusText, points: hunt.points, area: hunt.area, time: hunt.huntTime }))).catch((error) => {
         logger.error("(CRON) Error linking scraped hunts to hunt reports:", error);
       });
     },
