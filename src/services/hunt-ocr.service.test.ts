@@ -272,7 +272,7 @@ describe("createHuntOcr", () => {
     ocr.enqueue(reports[2]._id);
     await ocr.idle();
     expect(maxActive).toBe(1);
-    const photos = await Promise.all(reports.map(async (report) => (await stored(report._id)).photo));
+    const photos = await Promise.all(reports.map(async (report) => (await stored(report._id)).photo ?? ""));
     expect(order).toEqual(photos);
   });
 

@@ -7,8 +7,20 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_PHOTO_BYTES, files: 2 },
   // Disallowed types are dropped (req.file stays undefined) and rejected by the controller with a clear message
-  fileFilter: (_req, file, callback) => callback(null, resolvePhotoExtension(file.mimetype) !== null),
+  fileFilter: (req, file, callback) => {
+    const allowed = resolvePhotoExtension(file.mimetype) !== null;
+    // The photo is optional now: remember a refused one, so it is not mistaken for a hunt without a photo
+    if (!allowed && file.fieldname === "photo") (req as PhotoUploadRequest).photoRefused = true;
+    callback(null, allowed);
+  },
 });
+
+type PhotoUploadRequest = Request & { photoRefused?: boolean };
+
+/** True when the request sent a `photo` file of a disallowed type (dropped by photoUpload). */
+export function photoRefused(req: Request): boolean {
+  return (req as PhotoUploadRequest).photoRefused === true;
+}
 
 /** The image type the bytes actually are (JPEG, PNG or WebP), or null. The declared type can not be trusted. */
 export function detectPhotoType(buffer: Buffer): "image/jpeg" | "image/png" | "image/webp" | null {

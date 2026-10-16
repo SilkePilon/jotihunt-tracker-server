@@ -79,17 +79,27 @@ describe("runNotifier", () => {
   test("deadline warning once", async () => {
     await run();
     const user = await User.create({ name: "Sam" });
-    await HuntReport.create({ area: "bravo", photo: "p.jpg", reportedBy: user._id, reportedByName: "Sam", huntTime: new Date(now.getTime() - 21 * MIN), createdAt: new Date(now.getTime() - 21 * MIN) });
-    await HuntReport.create({ area: "alpha", photo: "q.jpg", reportedBy: user._id, reportedByName: "Sam", huntTime: new Date(now.getTime() - 21 * MIN), createdAt: new Date(now.getTime() - 21 * MIN), submittedAt: now });
+    await HuntReport.create({ area: "bravo", photo: "p.jpg", reportedBy: user._id, reportedByName: "Sam", huntTime: new Date(now.getTime() - 11 * MIN), createdAt: new Date(now.getTime() - 11 * MIN) });
+    await HuntReport.create({ area: "alpha", photo: "q.jpg", reportedBy: user._id, reportedByName: "Sam", huntTime: new Date(now.getTime() - 11 * MIN), createdAt: new Date(now.getTime() - 11 * MIN), submittedAt: now });
     const created = await run();
     expect(created.map((notification) => notification.type)).toEqual(["hunt-deadline"]);
     expect(await run()).toHaveLength(0);
   });
 
+  test("a hunt without a photo is warned to confirm, unless jotihunt.nl already lists it", async () => {
+    await run();
+    const user = await User.create({ name: "Sam" });
+    const at = new Date(now.getTime() - 11 * MIN);
+    await HuntReport.create({ area: "bravo", reportedBy: user._id, reportedByName: "Sam", huntTime: at, createdAt: at });
+    await HuntReport.create({ area: "alpha", reportedBy: user._id, reportedByName: "Sam", huntTime: at, createdAt: at, site: { status: "Goedgekeurd", points: 6, seenAt: now } });
+    const created = await run();
+    expect(created.map((notification) => notification.title)).toEqual(["Bevestig hunt Bravo op jotihunt.nl, nog 4 min"]);
+  });
+
   test("a failed insert releases the deadline claim so the next run warns", async () => {
     await run();
     const user = await User.create({ name: "Sam" });
-    const report = await HuntReport.create({ area: "bravo", photo: "p.jpg", reportedBy: user._id, reportedByName: "Sam", huntTime: new Date(now.getTime() - 21 * MIN), createdAt: new Date(now.getTime() - 21 * MIN) });
+    const report = await HuntReport.create({ area: "bravo", photo: "p.jpg", reportedBy: user._id, reportedByName: "Sam", huntTime: new Date(now.getTime() - 11 * MIN), createdAt: new Date(now.getTime() - 11 * MIN) });
     const spy = spyOn(AppNotification, "insertMany").mockRejectedValueOnce(new Error("boom"));
     try {
       await expect(run()).rejects.toThrow("boom");

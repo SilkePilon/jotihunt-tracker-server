@@ -102,6 +102,11 @@ export function createHuntOcr(deps: HuntOcrDeps): HuntOcr {
   async function attempt(id: string, generation: number): Promise<number | null> {
     const report = await HuntReport.findById(id);
     if (!report) return null;
+    // A hunt without a photo (QR flow) has nothing to read
+    if (!report.photo) {
+      if (currentGeneration() === generation) await HuntReport.updateOne({ _id: id }, { $set: { "ocr.status": "done" } });
+      return null;
+    }
     if ((report.ocr?.attempts ?? 0) >= MAX_ATTEMPTS) {
       await fail(id, generation, report.ocr?.error || "Lezen mislukt na meerdere pogingen.");
       return null;

@@ -115,9 +115,9 @@ const HUNT_SLOTS: { kind: HuntKind; ageMin: number; points?: number }[] = [
   { kind: "submitted", ageMin: 140 },
   { kind: "submitted", ageMin: 100 },
   { kind: "overdue", ageMin: 55 },
-  { kind: "review", ageMin: 26 },
-  { kind: "to_submit", ageMin: 17 },
-  { kind: "to_submit", ageMin: 6 },
+  { kind: "review", ageMin: 11 },
+  { kind: "to_submit", ageMin: 8 },
+  { kind: "to_submit", ageMin: 3 },
 ];
 
 function toMinute(time: number): Date {

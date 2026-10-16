@@ -1,8 +1,8 @@
 /** Fox teams a hunt can be registered for (lowercase, like Marker.area). */
 export { AREAS as HUNT_AREAS } from "../constants/areas";
 
-/** A hunt code must be entered on jotihunt.nl within 30 minutes of the hunt (spelregels §5). */
-export const SUBMIT_WINDOW_MS = 30 * 60 * 1000;
+/** A hunt must be confirmed on jotihunt.nl within 15 minutes (rule change of 16 Oct 2026: QR code instead of a hunt code). */
+export const SUBMIT_WINDOW_MS = 15 * 60 * 1000;
 export const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
 /** The phone sends a small list thumbnail (~320 px) next to the photo; anything bigger is dropped */
 export const MAX_THUMB_BYTES = 300 * 1024;
@@ -33,7 +33,7 @@ export function submitDeadline(huntTime: Date): Date {
 
 /**
  * Status of a report: judged (the scraped site has it) > submitted (HQ clicked "Ingestuurd") > within the
- * 30-minute window > overdue.
+ * 15-minute window > overdue.
  */
 export function huntReportStatus(report: { huntTime: Date; submittedAt?: Date | null; site?: { status: string } | null }, now: Date): HuntReportStatus {
   if (report.site) return "judged";

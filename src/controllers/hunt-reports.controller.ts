@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import { existsSync } from "node:fs";
 import { respond, ServiceError } from "../http/service-error";
-import { uploadedThumb } from "../middleware/photo-upload.middleware";
+import { photoRefused, uploadedThumb } from "../middleware/photo-upload.middleware";
 import { huntOcr } from "../services/hunt-ocr.instance";
 import {
   createHuntReport,
@@ -26,10 +26,12 @@ export function getHuntReports(_req: Request, res: Response) {
   return sendCachedJson(res, "huntReports", () => listHuntReports());
 }
 
+/** The photo is optional (QR flow: "Foto bij hunt" off); a photo of a disallowed type, or a thumb without a photo, is refused. */
 export function postHuntReport(req: Request, res: Response) {
-  if (!req.file) return res.status(400).json({ message: "Foto ontbreekt of is geen JPEG, PNG of WebP." });
-  const { area, huntCode, huntTime, takenAt, lng, lat, uploadId } = req.body as Record<string, string | undefined>;
+  if (photoRefused(req)) return res.status(400).json({ message: "Foto is geen JPEG, PNG of WebP." });
   const thumb = uploadedThumb(req);
+  if (!req.file && thumb) return res.status(400).json({ message: "Foto ontbreekt." });
+  const { area, huntCode, huntTime, takenAt, lng, lat, uploadId } = req.body as Record<string, string | undefined>;
   const location: [number, number] | undefined = lng !== undefined && lat !== undefined ? [Number(lng), Number(lat)] : undefined;
   return respond(res, 201, async () =>
     queueReading(
@@ -39,7 +41,7 @@ export function postHuntReport(req: Request, res: Response) {
           huntCode: huntCode || undefined,
           huntTime: huntTime ? new Date(huntTime) : undefined,
           takenAt: takenAt ? new Date(takenAt) : undefined,
-          photo: { buffer: req.file!.buffer, mimetype: req.file!.mimetype },
+          photo: req.file ? { buffer: req.file.buffer, mimetype: req.file.mimetype } : undefined,
           thumb: thumb ? { buffer: thumb.buffer, mimetype: thumb.mimetype } : undefined,
           location,
           uploadId: uploadId || undefined,

@@ -34,17 +34,18 @@ describe("newArticles", () => {
 
 describe("dueDeadlineWarnings", () => {
   const report = (minutesAgo: number, extra: object = {}) => ({ huntTime: new Date(now.getTime() - minutesAgo * MIN), createdAt: new Date(now.getTime() - minutesAgo * MIN), ...extra });
-  test("window is 20 (inclusive) to 30 (exclusive) minutes", () => {
-    expect(dueDeadlineWarnings([report(19.99)], now)).toHaveLength(0);
-    expect(dueDeadlineWarnings([report(20)], now)).toHaveLength(1);
-    expect(dueDeadlineWarnings([report(29.99)], now)).toHaveLength(1);
-    expect(dueDeadlineWarnings([report(30)], now)).toHaveLength(0);
+  test("window is 10 (inclusive) to 15 (exclusive) minutes", () => {
+    expect(dueDeadlineWarnings([report(9.99)], now)).toHaveLength(0);
+    expect(dueDeadlineWarnings([report(10)], now)).toHaveLength(1);
+    expect(dueDeadlineWarnings([report(14.99)], now)).toHaveLength(1);
+    expect(dueDeadlineWarnings([report(15)], now)).toHaveLength(0);
   });
-  test("skips submitted and already warned reports", () => {
-    expect(dueDeadlineWarnings([report(25, { submittedAt: now }), report(25, { deadlineWarnedAt: now })], now)).toHaveLength(0);
+  test("skips submitted, confirmed (on jotihunt.nl) and already warned reports", () => {
+    const site = { status: "Goedgekeurd", points: 6, seenAt: now };
+    expect(dueDeadlineWarnings([report(12, { submittedAt: now }), report(12, { deadlineWarnedAt: now }), report(12, { site })], now)).toHaveLength(0);
   });
   test("uses createdAt when the hunt time is unknown", () => {
-    expect(dueDeadlineWarnings([{ huntTime: null, createdAt: new Date(now.getTime() - 22 * MIN) }], now)).toHaveLength(1);
+    expect(dueDeadlineWarnings([{ huntTime: null, createdAt: new Date(now.getTime() - 12 * MIN) }], now)).toHaveLength(1);
   });
 });
 
@@ -65,12 +66,26 @@ describe("builders", () => {
     });
     expect(buildArticleNotification({ id: 3, title: "Info", type: "news" })).toMatchObject({ type: "article", title: "Nieuw bericht" });
   });
-  test("deadline", () => {
+  test("deadline of a photo report", () => {
     const notification = buildDeadlineNotification(
-      { _id: "r1", area: "bravo", huntTime: new Date(now.getTime() - 20 * MIN), createdAt: now, reportedByName: "Sam" },
+      { _id: "r1", area: "bravo", huntTime: new Date(now.getTime() - 10 * MIN), createdAt: now, reportedByName: "Sam", photo: "p.jpg" },
       now,
     );
-    expect(notification).toMatchObject({ type: "hunt-deadline", title: "Hunt Bravo moet over 10 min ingestuurd zijn", data: { area: "bravo", huntReportId: "r1" } });
+    expect(notification).toMatchObject({
+      type: "hunt-deadline",
+      title: "Hunt Bravo moet over 5 min ingestuurd zijn",
+      body: "Geregistreerd door Sam, nog niet ingestuurd.",
+      data: { area: "bravo", huntReportId: "r1" },
+    });
+  });
+  test("deadline of a hunt without a photo: confirm with the QR code", () => {
+    const notification = buildDeadlineNotification({ _id: "r2", area: "charlie", huntTime: new Date(now.getTime() - 10 * MIN), createdAt: now, reportedByName: "Sam" }, now);
+    expect(notification).toMatchObject({
+      type: "hunt-deadline",
+      title: "Bevestig hunt Charlie op jotihunt.nl, nog 5 min",
+      body: "Gemeld door Sam.",
+      data: { area: "charlie", huntReportId: "r2" },
+    });
   });
   test("broadcast", () => {
     expect(buildBroadcastNotification("Terug naar HQ", "Kim")).toMatchObject({ type: "broadcast", urgent: true, title: "Bericht van HQ", body: "Terug naar HQ", data: { from: "Kim" } });
@@ -106,7 +121,7 @@ test("isTypeEnabled: broadcast always on", () => {
 describe("dueDeadlineWarnings with takenAt", () => {
   test("counts from the photo time when the sticker time is unknown", () => {
     const now = new Date("2026-10-17T14:30:00Z");
-    const report = { huntTime: null, takenAt: new Date("2026-10-17T14:05:00Z"), createdAt: new Date("2026-10-17T14:25:00Z"), submittedAt: null, deadlineWarnedAt: null };
-    expect(dueDeadlineWarnings([report], now)).toHaveLength(1); // 25 min after the photo, 5 min after the upload
+    const report = { huntTime: null, takenAt: new Date("2026-10-17T14:18:00Z"), createdAt: new Date("2026-10-17T14:27:00Z"), submittedAt: null, deadlineWarnedAt: null };
+    expect(dueDeadlineWarnings([report], now)).toHaveLength(1); // 12 min after the photo, 3 min after the upload
   });
 });

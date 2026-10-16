@@ -32,9 +32,12 @@ export interface HuntReportView {
   createdAt: string;
   status: HuntReportStatus;
   deadline: string;
-  photoUrl: string;
-  /** Small list thumbnail; serves the full photo when the report has none */
-  thumbUrl: string;
+  /** False for hunts reported without a photo (QR flow): no OCR, confirmed on jotihunt.nl by scanning the fox's QR code */
+  hasPhoto: boolean;
+  /** null without a photo */
+  photoUrl: string | null;
+  /** Small list thumbnail; serves the full photo when the report has none. null without a photo */
+  thumbUrl: string | null;
   ocrStatus: OcrStatus;
   ocrError: string | null;
   codeConfidence: number | null;
@@ -48,12 +51,12 @@ export interface HuntReportView {
 /** The stored fields the view is built from: a hydrated document, or a lean object selected with VIEW_FIELDS. */
 export type HuntReportViewSource = Pick<
   HuntReportRecord,
-  "_id" | "area" | "huntCode" | "huntTime" | "takenAt" | "huntCodeSource" | "huntTimeSource" | "reportedBy" | "reportedByName" | "submittedAt" | "submittedByName" | "site" | "ocr"
+  "_id" | "area" | "huntCode" | "huntTime" | "takenAt" | "huntCodeSource" | "huntTimeSource" | "reportedBy" | "reportedByName" | "submittedAt" | "submittedByName" | "site" | "ocr" | "photo"
 >;
 
 /** Projection for lean queries feeding toHuntReportView (and compareAge) */
 export const VIEW_FIELDS =
-  "area huntCode huntTime takenAt huntCodeSource huntTimeSource reportedBy reportedByName submittedAt submittedByName site createdAt ocr.status ocr.error ocr.codeConfidence ocr.timeConfidence ocr.stickerBox";
+  "area photo huntCode huntTime takenAt huntCodeSource huntTimeSource reportedBy reportedByName submittedAt submittedByName site createdAt ocr.status ocr.error ocr.codeConfidence ocr.timeConfidence ocr.stickerBox";
 
 /** Upload time (timestamps); a document getter or a lean field */
 export function createdAtOf(report: object): Date {
@@ -64,6 +67,7 @@ export function toHuntReportView(report: HuntReportViewSource, now: Date, duplic
   const id = report._id.toString();
   const huntTime = effectiveHuntTime({ huntTime: report.huntTime, takenAt: report.takenAt, createdAt: createdAtOf(report) });
   const ocr = report.ocr ?? null;
+  const hasPhoto = Boolean(report.photo);
   return {
     _id: id,
     area: report.area,
@@ -80,14 +84,16 @@ export function toHuntReportView(report: HuntReportViewSource, now: Date, duplic
     createdAt: createdAtOf(report).toISOString(),
     status: huntReportStatus({ huntTime, submittedAt: report.submittedAt, site: report.site }, now),
     deadline: submitDeadline(huntTime).toISOString(),
-    photoUrl: `/hunt-reports/${id}/photo`,
-    thumbUrl: `/hunt-reports/${id}/photo?size=thumb`,
+    hasPhoto,
+    photoUrl: hasPhoto ? `/hunt-reports/${id}/photo` : null,
+    thumbUrl: hasPhoto ? `/hunt-reports/${id}/photo?size=thumb` : null,
     ocrStatus: (ocr?.status as OcrStatus | undefined) ?? "done",
     ocrError: ocr?.error ?? null,
     codeConfidence: ocr?.codeConfidence ?? null,
     timeConfidence: ocr?.timeConfidence ?? null,
     stickerBox: ocr?.stickerBox?.length === 4 ? ([...ocr.stickerBox] as HuntReportView["stickerBox"]) : null,
-    needsReview: needsReview(report),
+    // Nothing to check without a photo: no code or time is read
+    needsReview: hasPhoto && needsReview(report),
     duplicateOf,
   };
 }

@@ -38,6 +38,15 @@ function input(overrides: Partial<NewHuntReport> = {}): NewHuntReport {
   };
 }
 
+function photoFile(name: string, ageMs: number, dir = process.env.UPLOADS_DIR!) {
+  mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, name);
+  writeFileSync(file, "x");
+  const time = new Date(Date.now() - ageMs);
+  utimesSync(file, time, time);
+  return file;
+}
+
 async function makeUser(name: string, admin = false) {
   return User.create({ name, admin });
 }
@@ -186,7 +195,7 @@ describe("createHuntReport", () => {
     const view = await createHuntReport(input({ huntCode: undefined, huntTime: undefined, location: [5.9, 52.2] }), user);
     expect(view).toMatchObject({ huntCode: null, huntTimeKnown: false, huntCodeSource: null, huntTimeSource: null, ocrStatus: "pending", needsReview: false });
     expect(view.huntTime).toBe(view.createdAt);
-    expect(view.deadline).toBe(new Date(new Date(view.createdAt).getTime() + 30 * 60 * 1000).toISOString());
+    expect(view.deadline).toBe(new Date(new Date(view.createdAt).getTime() + 15 * 60 * 1000).toISOString());
     const [marker] = await Marker.find();
     expect(marker.time.getTime()).toBeGreaterThanOrEqual(before - 60_000);
     expect(marker.time.getTime()).toBeLessThanOrEqual(Date.now());
@@ -219,6 +228,69 @@ describe("createHuntReport", () => {
     const user = await makeUser("old");
     const view = await createHuntReport(input({ huntCode: undefined, huntTime: undefined, takenAt: new Date(Date.now() - 3 * 24 * 3600 * 1000) }), user);
     expect(Math.abs(new Date(view.huntTime).getTime() - Date.now())).toBeLessThan(60_000);
+  });
+});
+
+describe("hunts without a photo (QR flow)", () => {
+  const photoless = (overrides: Partial<NewHuntReport> = {}) => input({ photo: undefined, huntCode: undefined, huntTime: undefined, ...overrides });
+
+  test("stores no photo, reads nothing, the hunt time is the tap time and the deadline 15 minutes later", async () => {
+    const user = await makeUser("merida");
+    const takenAt = new Date(Date.now() - 2 * 60 * 1000 - 1234);
+    const view = await createHuntReport(photoless({ takenAt, location: [5.9, 52.2] }), user);
+    expect(view).toMatchObject({ hasPhoto: false, photoUrl: null, thumbUrl: null, ocrStatus: "done", needsReview: false, huntCode: null, huntTimeKnown: true, huntTimeSource: "manual", status: "to_submit" });
+    expect(view.huntTime).toBe(takenAt.toISOString());
+    expect(view.deadline).toBe(new Date(takenAt.getTime() + 15 * 60 * 1000).toISOString());
+    const stored = await HuntReport.findById(view._id).lean();
+    expect(stored!.photo).toBeUndefined();
+    expect(stored!.ocr).toMatchObject({ status: "done" });
+    const marker = await Marker.findById(stored!.markerId).lean();
+    const minute = new Date(takenAt);
+    minute.setSeconds(0, 0);
+    expect(marker!.time.getTime()).toBe(minute.getTime());
+    expect(existsSync(process.env.UPLOADS_DIR!) ? readdirSync(process.env.UPLOADS_DIR!) : []).toHaveLength(0);
+  });
+
+  test("without takenAt the hunt time is now; a retried upload returns the same report", async () => {
+    const user = await makeUser("merida");
+    const uploadId = "6f1c1e7a-2b3c-4d5e-8f90-123456789abd";
+    const view = await createHuntReport(photoless({ uploadId }), user);
+    expect(Math.abs(new Date(view.huntTime).getTime() - Date.now())).toBeLessThan(5_000);
+    expect((await createHuntReport(photoless({ uploadId }), user))._id).toBe(view._id);
+    expect(await HuntReport.countDocuments()).toBe(1);
+  });
+
+  test("a thumb without a photo is refused", async () => {
+    const user = await makeUser("merida");
+    await expectReportError(createHuntReport(photoless({ thumb: { buffer: Buffer.from([0xff, 0xd8, 0xff]), mimetype: "image/jpeg" } }), user), 400);
+  });
+
+  test("photo is 404, reading again is 409, deleting works", async () => {
+    const user = await makeUser("merida");
+    const admin = await makeUser("admin", true);
+    const view = await createHuntReport(photoless({ location: [5.9, 52.2] }), user);
+    await expectReportError(huntReportPhotoPath(view._id), 404);
+    await expectReportError(huntReportPhotoPath(view._id, "thumb"), 404);
+    await expectReportError(requestHuntReportRead(view._id, admin), 409);
+    await deleteHuntReport(view._id, admin);
+    expect(await HuntReport.countDocuments()).toBe(0);
+    expect(await Marker.countDocuments()).toBe(0);
+  });
+
+  test("listed with the photo reports; orphan cleanup and marker repair tolerate them", async () => {
+    const user = await makeUser("merida");
+    await createHuntReport(photoless({ location: [5.9, 52.2] }), user);
+    const list = await listHuntReports();
+    expect(list.map((report) => report.hasPhoto)).toEqual([false]);
+    // Only photo-less reports: no photo reference, so nothing is removed
+    const orphan = photoFile("orphan.jpg", ORPHAN_PHOTO_AGE_MS + 60_000);
+    expect(await removeOrphanPhotos()).toBe(0);
+    expect(existsSync(orphan)).toBe(true);
+    await createHuntReport(input(), user);
+    expect(await removeOrphanPhotos()).toBe(1);
+    await Marker.deleteMany({});
+    await HuntReport.collection.updateMany({}, { $set: { createdAt: new Date(Date.now() - 5 * 60 * 1000) } });
+    expect(await restoreMissingHuntMarkers()).toBe(1);
   });
 });
 
@@ -481,7 +553,7 @@ describe("listHuntReports", () => {
     const views = await listHuntReports(new Date("2026-10-17T12:10:00Z"));
     expect(views.map((view) => view.huntCode)).toEqual(["NEW1", "OLD1"]);
     expect(views.map((view) => view.status)).toEqual(["to_submit", "overdue"]);
-    expect(views[0].deadline).toBe("2026-10-17T12:30:00.000Z");
+    expect(views[0].deadline).toBe("2026-10-17T12:15:00.000Z");
   });
 
   test("sorts by the effective time: an unread report uses its upload time", async () => {
@@ -650,15 +722,6 @@ describe("crash safety of uploads", () => {
   });
 
   /** A photo file in the uploads directory, `ageMs` old */
-  function photoFile(name: string, ageMs: number, dir = process.env.UPLOADS_DIR!) {
-    mkdirSync(dir, { recursive: true });
-    const file = path.join(dir, name);
-    writeFileSync(file, "x");
-    const time = new Date(Date.now() - ageMs);
-    utimesSync(file, time, time);
-    return file;
-  }
-
   test("removeOrphanPhotos removes old photos without a report only", async () => {
     const merida = await makeUser("merida");
     const report = await createHuntReport(input(), merida);

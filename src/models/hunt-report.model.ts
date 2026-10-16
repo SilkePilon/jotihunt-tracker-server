@@ -45,8 +45,8 @@ const HuntReportSchema = new mongoose.Schema(
     /** Missing on reports from before OCR (entered by hand, so manual) */
     huntCodeSource: { type: String, enum: FIELD_SOURCES, required: false },
     huntTimeSource: { type: String, enum: FIELD_SOURCES, required: false },
-    /** File name in UPLOADS_DIR */
-    photo: { type: String, required: true },
+    /** File name in UPLOADS_DIR; missing on hunts reported without a photo (QR flow, "Foto bij hunt" off) */
+    photo: { type: String, required: false },
     /** File name of the small list thumbnail the phone sent with the photo; missing on old and demo reports */
     thumb: { type: String, required: false },
     reportedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },

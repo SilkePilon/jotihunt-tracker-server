@@ -1,13 +1,13 @@
-import { effectiveHuntTime } from "./hunt-report.helpers";
+import { effectiveHuntTime, SUBMIT_WINDOW_MS } from "./hunt-report.helpers";
 
 export const NOTIFICATION_TYPES = ["fox-status", "hint", "article", "hunt-deadline", "broadcast", "counter-hunt", "happy-hour"] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 /** Types a user can switch off; broadcasts from HQ always come through. */
 export const OPTIONAL_NOTIFICATION_TYPES = NOTIFICATION_TYPES.filter((type) => type !== "broadcast");
 
-/** A registered hunt must be submitted within 30 minutes; warn when 10 minutes are left. */
-export const HUNT_SUBMIT_WINDOW_MS = 30 * 60 * 1000;
-export const DEADLINE_WARNING_AFTER_MS = 20 * 60 * 1000;
+/** A registered hunt must be confirmed within 15 minutes; warn 10 minutes after the hunt (5 minutes left). */
+export const HUNT_SUBMIT_WINDOW_MS = SUBMIT_WINDOW_MS;
+export const DEADLINE_WARNING_AFTER_MS = 10 * 60 * 1000;
 
 export interface NotificationInput {
   type: NotificationType;
@@ -53,12 +53,14 @@ interface DeadlineReport {
   createdAt: Date;
   submittedAt?: Date | null;
   deadlineWarnedAt?: Date | null;
+  /** Set once jotihunt.nl lists the hunt (confirmed): no warning needed */
+  site?: unknown;
 }
 
-/** Reports that reached 10 minutes before their submit deadline and were neither submitted nor warned about. */
+/** Reports that reached 5 minutes before their deadline and were neither submitted, confirmed nor warned about. */
 export function dueDeadlineWarnings<T extends DeadlineReport>(reports: T[], now: Date): T[] {
   return reports.filter((report) => {
-    if (report.submittedAt || report.deadlineWarnedAt) return false;
+    if (report.submittedAt || report.deadlineWarnedAt || report.site) return false;
     const age = now.getTime() - effectiveHuntTime(report).getTime();
     return age >= DEADLINE_WARNING_AFTER_MS && age < HUNT_SUBMIT_WINDOW_MS;
   });
@@ -83,16 +85,18 @@ export function buildArticleNotification(article: { id: number; title: string; t
   return { type: "article", title: "Nieuw bericht", body: article.title, urgent: false, data };
 }
 
+/** Photo reports are sent in by HQ; hunts without a photo are confirmed by the hunter with the fox's QR code. */
 export function buildDeadlineNotification(
-  report: { _id: unknown; area: string; huntTime?: Date | null; takenAt?: Date | null; createdAt: Date; reportedByName: string },
+  report: { _id: unknown; area: string; huntTime?: Date | null; takenAt?: Date | null; createdAt: Date; reportedByName: string; photo?: string | null },
   now: Date,
 ): NotificationInput {
   const deadline = effectiveHuntTime(report).getTime() + HUNT_SUBMIT_WINDOW_MS;
   const minutes = Math.max(1, Math.ceil((deadline - now.getTime()) / 60000));
+  const area = capitalize(report.area);
   return {
     type: "hunt-deadline",
-    title: `Hunt ${capitalize(report.area)} moet over ${minutes} min ingestuurd zijn`,
-    body: `Geregistreerd door ${report.reportedByName}, nog niet ingestuurd.`,
+    title: report.photo ? `Hunt ${area} moet over ${minutes} min ingestuurd zijn` : `Bevestig hunt ${area} op jotihunt.nl, nog ${minutes} min`,
+    body: report.photo ? `Geregistreerd door ${report.reportedByName}, nog niet ingestuurd.` : `Gemeld door ${report.reportedByName}.`,
     urgent: false,
     data: { area: report.area, huntReportId: String(report._id) },
   };

@@ -13,17 +13,18 @@ describe("normalizeHuntCode", () => {
 });
 
 describe("submitDeadline", () => {
-  test("is 30 minutes after the hunt time", () => {
+  test("is 15 minutes after the hunt time", () => {
+    expect(SUBMIT_WINDOW_MS).toBe(15 * 60 * 1000);
     expect(submitDeadline(huntTime).getTime() - huntTime.getTime()).toBe(SUBMIT_WINDOW_MS);
   });
 });
 
 describe("huntReportStatus", () => {
   test("to_submit up to and including the deadline", () => {
-    expect(huntReportStatus({ huntTime }, new Date("2026-10-17T12:30:00Z"))).toBe("to_submit");
+    expect(huntReportStatus({ huntTime }, new Date("2026-10-17T12:15:00Z"))).toBe("to_submit");
   });
   test("overdue after the deadline", () => {
-    expect(huntReportStatus({ huntTime }, new Date("2026-10-17T12:30:01Z"))).toBe("overdue");
+    expect(huntReportStatus({ huntTime }, new Date("2026-10-17T12:15:01Z"))).toBe("overdue");
   });
   test("submitted wins over the deadline", () => {
     expect(huntReportStatus({ huntTime, submittedAt: new Date("2026-10-17T12:40:00Z") }, new Date("2026-10-17T13:00:00Z"))).toBe("submitted");

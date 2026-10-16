@@ -100,3 +100,34 @@ describe("hunt report thumbnails", () => {
     expect((await photo(auth, `${view.photoUrl}?size=huge`)).status).toBe(400);
   });
 });
+
+describe("hunts without a photo (QR flow)", () => {
+  function report(auth: string, fields: Record<string, string>, file?: { blob: Blob; name: string }) {
+    const form = new FormData();
+    if (file) form.append("photo", file.blob, file.name);
+    for (const [key, value] of Object.entries(fields)) form.append(key, value);
+    return fetch(`${base}/hunt-reports`, { method: "POST", body: form, headers: { Authorization: `Bearer ${auth}` } });
+  }
+
+  test("a multipart body without a photo stores a photo-less hunt at the tap time", async () => {
+    const auth = await token();
+    const takenAt = new Date(Date.now() - 60_000).toISOString();
+    const response = await report(auth, { area: "bravo", takenAt, lng: "5.9", lat: "52.2" });
+    expect(response.status).toBe(201);
+    const view = (await response.json()) as { _id: string; hasPhoto: boolean; photoUrl: string | null; thumbUrl: string | null; ocrStatus: string; huntTime: string; status: string };
+    expect(view).toMatchObject({ hasPhoto: false, photoUrl: null, thumbUrl: null, ocrStatus: "done", huntTime: takenAt, status: "to_submit" });
+    expect((await photo(auth, `/hunt-reports/${view._id}/photo`)).status).toBe(404);
+  });
+
+  test("a photo of a disallowed type is refused, not stored as a hunt without a photo", async () => {
+    const auth = await token();
+    const response = await report(auth, { area: "bravo" }, { blob: new Blob(["GIF89a"], { type: "image/gif" }), name: "hunt.gif" });
+    expect(response.status).toBe(400);
+  });
+
+  test("a photo upload still works and has a photo", async () => {
+    const auth = await token();
+    const view = (await (await upload(auth, { photo: PHOTO })).json()) as { hasPhoto: boolean };
+    expect(view.hasPhoto).toBe(true);
+  });
+});

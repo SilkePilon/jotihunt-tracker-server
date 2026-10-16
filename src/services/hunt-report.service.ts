@@ -19,9 +19,10 @@ export interface NewHuntReport {
   huntCode?: string;
   /** Optional: normally read from the photo by OCR */
   huntTime?: Date;
-  /** Photo time from the phone; used until the sticker time is read */
+  /** Photo time from the phone (without a photo: the tap time); used until the sticker time is read */
   takenAt?: Date;
-  photo: { buffer: Buffer; mimetype: string };
+  /** Optional: without a photo nothing is read, the hunt time is takenAt (else now) */
+  photo?: { buffer: Buffer; mimetype: string };
   /** Optional small list thumbnail made by the phone; ignored when not an allowed type */
   thumb?: { buffer: Buffer; mimetype: string };
   /** [lng, lat] of the phone at registration */
@@ -80,15 +81,19 @@ async function existingUpload(uploadId: string | undefined, user: UserType): Pro
 /**
  * Store a new report. Code and time are optional (normally read from the photo by OCR); when one is missing the
  * report gets `ocr.status: "pending"` and the caller queues the reading. Duplicate codes are allowed (flagged in the view).
+ * Without a photo (QR flow) nothing is read: the hunt time is the given time, else the tap time (takenAt), else now.
  */
 export async function createHuntReport(input: NewHuntReport, user: UserType): Promise<HuntReportView> {
   const retried = await existingUpload(input.uploadId, user);
   if (retried) return retried;
+  const now = new Date();
   const huntCode = input.huntCode ? normalizeHuntCode(input.huntCode) || null : null;
-  const huntTime = input.huntTime ? toMinute(input.huntTime) : null;
-  const takenAt = acceptedTakenAt(input.takenAt, new Date()) ?? null;
-  const extension = resolvePhotoExtension(input.photo.mimetype);
-  if (!extension) throw new ServiceError(400, "Foto moet een JPEG, PNG of WebP zijn.");
+  const takenAt = acceptedTakenAt(input.takenAt, now) ?? null;
+  // Without a photo the tap time is the hunt time (to the second: the 15-minute countdown starts there)
+  const huntTime = input.huntTime ? toMinute(input.huntTime) : input.photo ? null : (takenAt ?? now);
+  const extension = input.photo ? resolvePhotoExtension(input.photo.mimetype) : null;
+  if (input.photo && !extension) throw new ServiceError(400, "Foto moet een JPEG, PNG of WebP zijn.");
+  if (!input.photo && input.thumb) throw new ServiceError(400, "Foto ontbreekt.");
 
   const thumbExtension = input.thumb ? resolvePhotoExtension(input.thumb.mimetype) : null;
 
@@ -100,8 +105,8 @@ export async function createHuntReport(input: NewHuntReport, user: UserType): Pr
   const markerId = input.location ? new mongoose.Types.ObjectId() : undefined;
 
   try {
-    photo = await savePhoto(input.photo.buffer, extension);
-    if (input.thumb && thumbExtension) thumb = await savePhoto(input.thumb.buffer, `.thumb${thumbExtension}`);
+    if (input.photo && extension) photo = await savePhoto(input.photo.buffer, extension);
+    if (photo && input.thumb && thumbExtension) thumb = await savePhoto(input.thumb.buffer, `.thumb${thumbExtension}`);
     report = await HuntReport.create({
       area: input.area as (typeof HUNT_AREAS)[number],
       huntCode,
@@ -109,14 +114,15 @@ export async function createHuntReport(input: NewHuntReport, user: UserType): Pr
       takenAt,
       huntCodeSource: huntCode ? "manual" : undefined,
       huntTimeSource: huntTime ? "manual" : undefined,
-      photo,
+      photo: photo ?? undefined,
       thumb: thumb ?? undefined,
       reportedBy: user._id,
       reportedByName: user.name,
       location: input.location ? { type: "Point", coordinates: input.location } : undefined,
       markerId,
       uploadId: input.uploadId,
-      ocr: { status: huntCode && huntTime ? "done" : "pending", attempts: 0 },
+      // Nothing to read without a photo
+      ocr: { status: !photo || (huntCode && huntTime) ? "done" : "pending", attempts: 0 },
     });
     if (markerId && input.location) {
       // Until the time is read the marker uses the photo time (else the upload time); the OCR queue moves it to the read time
@@ -214,6 +220,7 @@ export async function setHuntReportFields(id: string, fields: { huntCode?: strin
 export async function requestHuntReportRead(id: string, user: UserType): Promise<HuntReportView> {
   requireAdmin(user);
   const report = await findReport(id);
+  if (!report.photo) throw new ServiceError(409, "Deze hunt heeft geen foto om te lezen.");
   report.huntCode = null;
   report.huntCodeSource = undefined;
   report.huntTime = null;
@@ -237,15 +244,19 @@ export async function deleteHuntReport(id: string, user: UserType): Promise<void
     throw new ServiceError(409, "Deze hunt is net ingestuurd of staat al op jotihunt.nl en kan niet meer verwijderd worden.");
   }
   if (report.markerId) await Marker.deleteOne({ _id: report.markerId });
-  await deletePhoto(report.photo).catch(() => undefined);
+  if (report.photo) await deletePhoto(report.photo).catch(() => undefined);
   if (report.thumb) await deletePhoto(report.thumb).catch(() => undefined);
 }
 
 export type PhotoSize = "full" | "thumb";
 
-/** Path of the report's photo; the thumb size falls back to the full photo when the report has no (stored) thumbnail. */
+/**
+ * Path of the report's photo; the thumb size falls back to the full photo when the report has no (stored) thumbnail.
+ * 404 for a report without a photo.
+ */
 export async function huntReportPhotoPath(id: string, size: PhotoSize = "full"): Promise<string> {
   const report = await findReport(id);
+  if (!report.photo) throw new ServiceError(404, "Deze hunt heeft geen foto.");
   if (size === "thumb" && report.thumb) {
     const thumb = photoFilePath(report.thumb);
     if (existsSync(thumb)) return thumb;
@@ -269,10 +280,11 @@ export async function removeOrphanPhotos(now = Date.now()): Promise<number> {
   });
   const files = entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
   if (files.length === 0) return 0;
-  const photos: string[] = await HuntReport.distinct("photo");
+  // Reports without a photo (QR flow) don't count: without any photo reference nothing is removed
+  const photos = ((await HuntReport.distinct("photo")) as unknown[]).filter((name): name is string => typeof name === "string");
   if (photos.length === 0) return 0;
   // A thumbnail is kept through its report: orphan thumbnails go like orphan photos
-  const thumbs: string[] = await HuntReport.distinct("thumb");
+  const thumbs = ((await HuntReport.distinct("thumb")) as unknown[]).filter((name): name is string => typeof name === "string");
   const referenced = new Set<string>([...photos, ...thumbs]);
   let removed = 0;
   for (const name of files) {

@@ -153,7 +153,7 @@ describe("demo world generator (full run)", () => {
     expect(reports.every((report) => report.ocrStatus === "done" && report.huntCode && report.duplicateOf === null)).toBe(true);
     const photos = await readdir(demoUploadsDir());
     const stored = (await HuntReport.find().lean()).map((report) => report.photo);
-    expect(stored.every((photo) => photos.includes(photo))).toBe(true);
+    expect(stored.every((photo) => photos.includes(photo ?? ""))).toBe(true);
     expect(await Hunt.countDocuments({ status: "Goedgekeurd" })).toBe(3);
 
     // Simulated trackers
