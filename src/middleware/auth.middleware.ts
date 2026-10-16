@@ -35,19 +35,10 @@ export default async function verifyToken(req: Request, res: Response, next: Nex
 
   if (decoded.sid !== undefined) {
     if (!isObjectIdString(decoded.sid)) return denied(res);
-    let session;
-    try {
-      session = await useSession(decoded.sid);
-    } catch (error) {
-      return next(error);
-    }
+    // Database errors reject: Express 5 passes them to the error handler
+    const session = await useSession(decoded.sid);
     if (!session) return denied(res);
-    let user;
-    try {
-      user = await User.findById(session.user, WITHOUT_READ_STATE);
-    } catch (error) {
-      return next(error);
-    }
+    const user = await User.findById(session.user, WITHOUT_READ_STATE);
     if (!user) return denied(res);
     req.user = user;
     res.locals.sessionId = decoded.sid;
@@ -56,12 +47,7 @@ export default async function verifyToken(req: Request, res: Response, next: Nex
 
   // Device tokens (paired phones) stay valid only while the device is still registered on the user
   if (!isObjectIdString(decoded._id) || typeof decoded.did !== "string") return denied(res);
-  let user;
-  try {
-    user = await User.findById(decoded._id, WITHOUT_READ_STATE);
-  } catch (error) {
-    return next(error);
-  }
+  const user = await User.findById(decoded._id, WITHOUT_READ_STATE);
   if (!user) {
     logger.warn(`User not found with ID ${decoded._id}`);
     return denied(res);
@@ -92,7 +78,7 @@ export function requireWebSession(_req: Request, res: Response, next: NextFuncti
   next();
 }
 
-export async function isAdmin(req: Request, res: Response, next: NextFunction) {
+export function isAdmin(req: Request, res: Response, next: NextFunction) {
   if (!req.user) return res.status(401).json({ message: "Access denied" });
   if (!req.user.admin) return res.status(403).json({ message: "Access denied" });
   next();
