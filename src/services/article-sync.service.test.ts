@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { Article, hintSplitKey, legacySummaryKey, summaryKey, TEXT_DEBOUNCE_MS } from "../models/article.model";
 import { Area } from "../models/area.model";
@@ -250,5 +250,33 @@ describe("syncArticles", () => {
     await syncArticles([apiArticle(24, "news", "<div>nieuw</div>")], { now: () => LATER });
 
     expect(await stored(24)).toMatchObject({ summary: "Oud.", summaryHash: legacySummaryKey("oude-hash"), textHash: articleTextHash("<div>nieuw</div>"), textChangedAt: LATER });
+  });
+
+  test("an unchanged article is not written again; a changed field is", async () => {
+    const article = { ...apiArticle(30, "news", "<div>Zelfde</div>"), message: { content: "<div>Zelfde</div>", type: null, max_points: 5, end_time: "2026-10-17 20:00:00" } } as unknown as ApiArticle;
+    await syncArticles([article], { now: () => NOW });
+    const before = await stored(30);
+    const original = Article.updateOne.bind(Article);
+    let calls = 0;
+    const counting = spyOn(Article, "updateOne").mockImplementation(((...args: Parameters<typeof Article.updateOne>) => {
+      calls++;
+      return original(...args);
+    }) as never);
+    try {
+      expect((await syncArticles([article], { now: () => LATER })).upserted).toBe(1);
+      expect(calls).toBe(0);
+      expect(await stored(30)).toEqual(before);
+      await syncArticles([{ ...article, title: "Nieuwe titel" } as ApiArticle], { now: () => LATER });
+      expect(calls).toBe(1);
+      expect((await stored(30)).title).toBe("Nieuwe titel");
+    } finally {
+      counting.mockRestore();
+    }
+  });
+
+  test("an article listed twice in one run sees its first write", async () => {
+    await syncArticles([apiArticle(31, "hint", hintHtml), apiArticle(31, "hint", "<div>Alpha: ander</div>")], { now: () => NOW });
+    expect((await stored(31)).content).toBe("<div>Alpha: ander</div>");
+    expect(await HintCell.countDocuments({ articleId: 31, articleChanged: true })).toBeGreaterThan(0);
   });
 });

@@ -34,8 +34,8 @@ export async function getAreaNames(): Promise<string[]> {
  * created.
  * @returns The number of cells created
  */
-export async function ensureHintCells(article: { id: number; publishAt: Date; content: string }): Promise<number> {
-  const areaNames = await getAreaNames();
+export async function ensureHintCells(article: { id: number; publishAt: Date; content: string }, areaNames?: string[]): Promise<number> {
+  areaNames ??= await getAreaNames();
   const existing = await HintCell.find({ articleId: article.id }, { area: 1 }).lean();
   const existingAreas = new Set(existing.map((cell) => cell.area));
   const missingAreas = areaNames.filter((area) => !existingAreas.has(area));
@@ -66,6 +66,40 @@ export async function ensureHintCells(article: { id: number; publishAt: Date; co
   return cells.length;
 }
 
+/** The stored fields syncArticles reads or writes */
+const STORED_FIELDS = {
+  _id: 0,
+  id: 1,
+  title: 1,
+  type: 1,
+  publishAt: 1,
+  content: 1,
+  messageType: 1,
+  maxPoints: 1,
+  endTime: 1,
+  contentHash: 1,
+  textHash: 1,
+  summaryHash: 1,
+  hintSplitHash: 1,
+} as const;
+
+/**
+ * True when writing `fields` would change nothing: every value, cast like the update casts it, equals the stored one.
+ * Mongoose drops undefined values from a $set (the field is left alone); a null is stored as null.
+ */
+function isStored(previous: Record<string, unknown>, fields: Record<string, unknown>): boolean {
+  const cast = Article.castObject(fields) as Record<string, unknown>;
+  return Object.keys(fields).every((key) => {
+    const raw = fields[key];
+    const current = previous[key];
+    if (raw === undefined) return true;
+    if (raw === null) return current === null;
+    const next = cast[key];
+    if (next instanceof Date) return current instanceof Date && current.getTime() === next.getTime();
+    return next !== undefined && current === next;
+  });
+}
+
 /**
  * Upsert articles from the Jotihunt API (never deletes, so older hints are kept),
  * create hint cells for new hint articles and flag cells of hint articles whose text changed.
@@ -77,6 +111,16 @@ export async function ensureHintCells(article: { id: number; publishAt: Date; co
 export async function syncArticles(apiArticles: ApiArticle[], { now = () => new Date() }: { now?: () => Date } = {}): Promise<SyncResult> {
   const result: SyncResult = { upserted: 0, changedHints: [], cellsCreated: 0, failed: [] };
 
+  // The stored articles in one query; a failed lookup falls back to one query per article (which then fails that article)
+  const stored = await Article.find({ id: { $in: apiArticles.map((article) => article.id) } }, STORED_FIELDS)
+    .lean()
+    .then((articles) => new Map(articles.map((article) => [article.id, article])))
+    .catch(() => null);
+  // Ids written by this run: an id the API lists twice is read again, so it sees the first write
+  const written = new Set<number>();
+  // Area names once per run (on the first hint article); a failed lookup is retried for the next one
+  let areaNames: string[] | undefined;
+
   for (const apiArticle of apiArticles) {
     try {
       const content = apiArticle.message.content;
@@ -85,7 +129,8 @@ export async function syncArticles(apiArticles: ApiArticle[], { now = () => new 
       if (isNaN(publishAt.getTime())) throw new Error(`Invalid publish_at: ${apiArticle.publish_at}`);
 
       const textHash = articleTextHash(content);
-      const previous = await Article.findOne({ id: apiArticle.id }, { _id: 0, contentHash: 1, content: 1, textHash: 1, summaryHash: 1, hintSplitHash: 1 }).lean();
+      const previous =
+        stored && !written.has(apiArticle.id) ? (stored.get(apiArticle.id) ?? null) : await Article.findOne({ id: apiArticle.id }, STORED_FIELDS).lean();
       const time = now();
       // The text hash of the stored article (computed for one stored before textHash existed)
       const previousTextHash = previous?.textHash ?? (typeof previous?.content === "string" ? articleTextHash(previous.content) : undefined);
@@ -101,25 +146,24 @@ export async function syncArticles(apiArticles: ApiArticle[], { now = () => new 
           ? {}
           : { textHash, textChangedAt: (rekey || rekeySplit) && !previous?.textHash ? new Date(time.getTime() - SUMMARY_DEBOUNCE_MS - 1) : time };
 
-      await Article.updateOne(
-        { id: apiArticle.id },
-        {
-          $set: {
-            title: apiArticle.title,
-            type: apiArticle.type,
-            publishAt,
-            content,
-            messageType: apiArticle.message.type,
-            maxPoints: apiArticle.message.max_points,
-            endTime: apiArticle.message.end_time,
-            contentHash,
-            ...textFields,
-            ...(rekey ? { summaryHash: summaryKey(textHash) } : {}),
-            ...(rekeySplit ? { hintSplitHash: hintSplitKey(textHash) } : {}),
-          },
-        },
-        { upsert: true },
-      );
+      const fields = {
+        title: apiArticle.title,
+        type: apiArticle.type,
+        publishAt,
+        content,
+        messageType: apiArticle.message.type,
+        maxPoints: apiArticle.message.max_points,
+        endTime: apiArticle.message.end_time,
+        contentHash,
+        ...textFields,
+        ...(rekey ? { summaryHash: summaryKey(textHash) } : {}),
+        ...(rekeySplit ? { hintSplitHash: hintSplitKey(textHash) } : {}),
+      };
+      // Most runs change nothing: skip the write when every field already has this value
+      if (!previous || !isStored(previous, fields)) {
+        await Article.updateOne({ id: apiArticle.id }, { $set: fields }, { upsert: true });
+        written.add(apiArticle.id);
+      }
       result.upserted++;
 
       // Only a changed text (or file) counts: a markup-only re-save in the organisation's editor flags nothing
@@ -132,7 +176,8 @@ export async function syncArticles(apiArticles: ApiArticle[], { now = () => new 
         result.changedHints.push(apiArticle.id);
       }
 
-      result.cellsCreated += await ensureHintCells({ id: apiArticle.id, publishAt, content });
+      areaNames ??= await getAreaNames();
+      result.cellsCreated += await ensureHintCells({ id: apiArticle.id, publishAt, content }, areaNames);
     } catch {
       // Services must not import the logger; the cron logs a warning with these ids.
       result.failed.push(apiArticle.id);
