@@ -23,7 +23,7 @@ detail page) shows that data, the scraper can import every hunt and nobody has t
   - one line: `jotihunt.nl · 12 s geleden · 9 hunts · 70 pnt` (ticks, cross-fades only on state change).
   - result bar: 150 px wide, 10 px high, centred, segments approved (green) / waiting (amber) / rejected (red),
     counts next to it.
-  - sync log, no icons: `21:43 ● Alpha binnengekomen · Silke`, `21:20 ● Delta goedgekeurd +10`,
+  - sync log, no icons: `21:43 ● Alpha binnengekomen`, `21:20 ● Delta goedgekeurd +10`,
     `19:55 ● Echo afgekeurd` (● = area colour dot). Newest first, scrolls for older entries. Clicking an entry
     flies the map to the hunt location.
   - every change animates (new log line slides in, bar segments grow, badge pops on state change).
@@ -38,7 +38,7 @@ detail page) shows that data, the scraper can import every hunt and nobody has t
 - Sync state (`lastSuccessAt`, `lastError`, `running`, `configured`) exposed via `GET /hunts/sync`.
 - Hunt markers on the map come from synced hunts (location + accuracy circle); cooldown and prediction use them.
 - Notifications: new hunt in ("Hunt Alpha binnengekomen"), approved / rejected (existing push channels).
-- Hunter name: the site's "apparaat" mapped to our user when possible, otherwise shown as the site shows it.
+- No hunter name: the site's "apparaat" is the fox's device, so the hunter is unknown.
 
 ## Android
 
