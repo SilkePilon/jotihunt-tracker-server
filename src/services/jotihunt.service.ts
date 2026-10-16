@@ -156,15 +156,6 @@ export async function getArticlesPage(page = 1): Promise<ArticlesPage> {
 }
 
 /**
- * Function to get all articles from Jotihunt.
- * Only returns the first 15 articles.
- * @returns {Promise<Array>} - A promise that resolves to an array of articles.
- */
-export async function getArticles(): Promise<ApiArticle[]> {
-  return (await getArticlesPage(1)).articles;
-}
-
-/**
  * Function to get all subscribed teams (groups) from Jotihunt.
  * @returns {Promise<Array>} - A promise that resolves to an array of teams.
  */

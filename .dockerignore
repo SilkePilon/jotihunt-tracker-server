@@ -14,3 +14,9 @@ helm-charts
 .idea
 coverage*
 uploads
+*.log
+docs
+.superpowers
+.github
+**/*.test.ts
+src/test
