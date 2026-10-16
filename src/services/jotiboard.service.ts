@@ -7,12 +7,7 @@ import { parseHintSolves, parsePins, type JotiboardConfig } from "./jotiboard.he
 import { jotiboardImporter, type JotiboardCounts, type JotiboardImporter } from "./jotiboard.import";
 import { decryptSession, encryptSession } from "./telegram.helpers";
 import { errorText } from "../utils/error-text";
-
-export interface JotiboardLogger {
-  info(message: string): void;
-  warn(message: string): void;
-  error(message: string, error?: unknown): void;
-}
+import type { ServiceLogger } from "../utils/service-logger";
 
 export interface JotiboardServiceOptions {
   /** null: feature off (no JOTIBOARD_SESSION_KEY), the routes still answer */
@@ -20,7 +15,7 @@ export interface JotiboardServiceOptions {
   /** Connection to the REAL database (the demo state store's), so the link survives demo mode */
   connection: Connection;
   client: JotiboardApi;
-  logger: JotiboardLogger;
+  logger: ServiceLogger;
   /** Default: the real importer (default connection) */
   importer?: JotiboardImporter;
   /** Default 20 s */

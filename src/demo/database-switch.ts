@@ -6,6 +6,7 @@ import { activeWorkCount, beginWork, isDemoMode, nextGeneration, setDemoModeFlag
 import { openDemoStateStore, type DemoStateStore } from "./demo-state";
 import { demoConnectOptions, demoDbName, mongoUriDbName } from "./mongo-uri";
 import { errorText } from "../utils/error-text";
+import type { ServiceLogger } from "../utils/service-logger";
 
 export { demoConnectOptions, demoDbName, mongoUriDbName } from "./mongo-uri";
 
@@ -19,12 +20,6 @@ export interface DemoState {
   enabledAt: Date | null;
   /** When the current demo world was generated (null when demo mode is off) */
   startedAt: Date | null;
-}
-
-export interface DemoLogger {
-  info(message: string): void;
-  warn(message: string): void;
-  error(message: string, error?: unknown): void;
 }
 
 /** A switch was refused because requests or background jobs kept running; nothing changed. */
@@ -45,11 +40,11 @@ let abandonedRequestMs = ABANDONED_REQUEST_MS;
 
 const DISABLED_STATE: DemoState = Object.freeze({ enabled: false, enabledAt: null, startedAt: null });
 
-const noopLogger: DemoLogger = { info() {}, warn() {}, error() {} };
+const noopLogger: ServiceLogger = { info() {}, warn() {}, error() {} };
 
 let realUri: string | null = null;
 let store: DemoStateStore | null = null;
-let log: DemoLogger = noopLogger;
+let log: ServiceLogger = noopLogger;
 let state: DemoState = DISABLED_STATE;
 let generator: DemoWorldGenerator = async () => {};
 const listeners = new Set<DemoSwitchListener>();
@@ -95,7 +90,7 @@ export function getDemoState(): DemoState {
  */
 export async function initDemoMode(
   uri: string,
-  options: { logger?: DemoLogger; /** tests only */ drainTimeoutMs?: number; /** tests only */ abandonedRequestMs?: number } = {},
+  options: { logger?: ServiceLogger; /** tests only */ drainTimeoutMs?: number; /** tests only */ abandonedRequestMs?: number } = {},
 ): Promise<DemoState> {
   if (store) throw new Error("Demo mode is already initialised");
   log = options.logger ?? noopLogger;

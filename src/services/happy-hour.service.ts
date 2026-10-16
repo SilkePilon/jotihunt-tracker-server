@@ -3,15 +3,10 @@ import { AppNotification } from "../models/notification.model";
 import { runTracked, runTrackedRetrying } from "../demo/demo-mode";
 import { sendToAll } from "./push.service";
 import { buildHappyHourNotification, happyHourView, isHappyHourEnd, parseHappyHourWindow, type HappyHourView, type HappyHourWindow } from "./happy-hour.helpers";
-
-export interface HappyHourLogger {
-  info(message: string): void;
-  warn(message: string): void;
-  error(message: string, error?: unknown): void;
-}
+import type { ServiceLogger } from "../utils/service-logger";
 
 export interface HappyHourServiceOptions {
-  logger: HappyHourLogger;
+  logger: ServiceLogger;
   /** Tests only */
   now?: () => Date;
   /** Wait between tries while a demo switch is running, and how often to try */

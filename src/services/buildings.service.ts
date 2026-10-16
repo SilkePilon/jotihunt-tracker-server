@@ -4,6 +4,7 @@ import { buildingTileModel, type BuildingTileDoc } from "../models/building-tile
 import type { BuildingsApi } from "./buildings.client";
 import { encodeTile, inNetherlands, MAX_RADIUS_KM, parseTileId, tileBounds, tileId, tilesAround, toBuildingFeatures, type TileXY } from "./buildings.helpers";
 import { errorText } from "../utils/error-text";
+import type { ServiceLogger } from "../utils/service-logger";
 
 export interface BuildingsJob {
   kind: "refresh" | "prefetch";
@@ -26,17 +27,11 @@ export interface BuildingsStatus {
   job: BuildingsJob | null;
 }
 
-export interface BuildingsLogger {
-  info(message: string): void;
-  warn(message: string): void;
-  error(message: string, error?: unknown): void;
-}
-
 export interface BuildingsServiceOptions {
   /** Connection to the REAL database (the demo state store's), so the cache survives demo mode */
   connection: Connection;
   client: BuildingsApi;
-  logger: BuildingsLogger;
+  logger: ServiceLogger;
   /** Parallel 3DBAG fetches, default 4 */
   maxParallel?: number;
   /** Tests only */

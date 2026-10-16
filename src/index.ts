@@ -26,6 +26,7 @@ import { BuildingsService, setBuildingsService } from "./services/buildings.serv
 import { migrateArticleTextHashes } from "./services/article-summary.service";
 import { migrateHintSplitKeys } from "./services/hint-split.service";
 import { errorText } from "./utils/error-text";
+import type { ServiceLogger } from "./utils/service-logger";
 
 // A forgotten promise rejection is logged and the server keeps running; after an uncaught exception the process state
 // is unknown, so log it and exit (docker restarts the server in a second or two)
@@ -68,7 +69,9 @@ if (!db) {
 logger.info("Trying to connect to MongoDB...");
 installDemoWorld((message) => logger.info(message));
 // Connects to the real database, or to a freshly generated demo database when demo mode was left on
-await initDemoMode(db, { logger: { info: (message) => logger.info(message), warn: (message) => logger.warn(message), error: (message, error) => logger.error(message, error) } }).then((state) => {
+// The services log through the app logger
+const serviceLogger: ServiceLogger = { info: (message) => logger.info(message), warn: (message) => logger.warn(message), error: (message, error) => logger.error(message, error) };
+await initDemoMode(db, { logger: serviceLogger }).then((state) => {
   logger.info(`Connected to MongoDB${state.enabled ? " (demo mode)" : ""}!`);
   if (debug) mongoose.set("debug", true);
 });
@@ -106,7 +109,6 @@ onDemoSwitch(async () => {
 // settings; connecting runs in the background (retried with backoff) so a Telegram outage never delays the start
 // Happy hours (from the bot's messages) are game data in the current database: their start/end timers are rebuilt
 // from it now and after every demo switch
-const serviceLogger = { info: (message: string) => logger.info(message), warn: (message: string) => logger.warn(message), error: (message: string, error?: unknown) => logger.error(message, error) };
 const happyHour = new HappyHourService({ logger: serviceLogger });
 await happyHour.rebuild().catch((error) => logger.error("Could not schedule the happy hour alerts", error));
 onDemoSwitch(() => happyHour.rebuild());

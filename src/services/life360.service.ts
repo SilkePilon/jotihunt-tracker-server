@@ -17,12 +17,7 @@ import {
 } from "./life360.helpers";
 import { decryptSession, encryptSession } from "./telegram.helpers";
 import { errorText } from "../utils/error-text";
-
-export interface Life360Logger {
-  info(message: string): void;
-  warn(message: string): void;
-  error(message: string, error?: unknown): void;
-}
+import type { ServiceLogger } from "../utils/service-logger";
 
 export interface Life360ServiceOptions {
   /** null: feature off (no LIFE360_SESSION_KEY), the routes still answer */
@@ -30,7 +25,7 @@ export interface Life360ServiceOptions {
   /** Connection to the REAL database (the demo state store's), so the link survives demo mode */
   connection: Connection;
   client: Life360Api;
-  logger: Life360Logger;
+  logger: ServiceLogger;
   /** Default 30 s */
   pollIntervalMs?: number;
   /** Default true. Tests set false and call pollOnce() themselves (the next poll time is still kept in nextPollAt). */

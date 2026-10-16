@@ -18,6 +18,7 @@ import {
   type BotMessageKind,
 } from "./telegram.helpers";
 import { errorText } from "../utils/error-text";
+import type { ServiceLogger } from "../utils/service-logger";
 
 // --- Gateway (the Telegram client, mtcute in telegram.gateway.ts; faked in tests) --------------------------------
 
@@ -141,12 +142,6 @@ export interface TelegramMessages {
   messages: { id: string; text: string; kind: BotMessageKind; receivedAt: string }[];
 }
 
-export interface TelegramLogger {
-  info(message: string): void;
-  warn(message: string): void;
-  error(message: string, error?: unknown): void;
-}
-
 // --- Service ------------------------------------------------------------------------------------------------------
 
 interface PendingLogin {
@@ -169,7 +164,7 @@ export interface TelegramServiceOptions {
   /** Connection to the REAL database (the demo state store's), so the link survives demo mode */
   connection: Connection;
   gateway: TelegramGatewayFactory;
-  logger: TelegramLogger;
+  logger: ServiceLogger;
   /** Reconnect backoff with a stored session */
   retryInitialMs?: number;
   retryMaxMs?: number;
