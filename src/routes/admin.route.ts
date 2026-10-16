@@ -37,119 +37,93 @@ const updateValidator = [
 
 // Routes
 const router = express.Router();
+// Every admin route: signed in (401) and admin (403). Mounted under /admin only
+router.use(verifyToken, isAdmin);
 
-router.get("/users", [verifyToken, isAdmin], adminController.getUsers);
-router.get("/invites", [verifyToken, isAdmin], adminAuthController.getInvites);
+router.get("/users", adminController.getUsers);
+router.get("/invites", adminAuthController.getInvites);
 router.post(
   "/invites",
-  [
-    verifyToken,
-    isAdmin,
-    validate([
-      body("expiry").isIn(INVITE_EXPIRY_KEYS).withMessage("Ongeldige verlooptijd."),
-      body("maxUses")
-        .custom((value) => value === null || (INVITE_MAX_USES as readonly number[]).includes(value))
-        .withMessage("Ongeldig aantal keer."),
-    ]),
-  ],
+  validate([
+    body("expiry").isIn(INVITE_EXPIRY_KEYS).withMessage("Ongeldige verlooptijd."),
+    body("maxUses")
+      .custom((value) => value === null || (INVITE_MAX_USES as readonly number[]).includes(value))
+      .withMessage("Ongeldig aantal keer."),
+  ]),
   adminAuthController.postInvite,
 );
-router.delete("/invites/:id", [verifyToken, isAdmin], adminAuthController.deleteInvite);
-router.post("/users/:id/recovery-link", [verifyToken, isAdmin], adminAuthController.postRecoveryLink);
-router.post(
-  "/broadcast",
-  [verifyToken, isAdmin, validate([body("message").isString().trim().isLength({ min: 1, max: 200 }).withMessage("Bericht moet 1 tot 200 tekens zijn.")])],
-  notificationsController.broadcast,
-);
-router.get("/broadcasts", [verifyToken, isAdmin], notificationsController.listBroadcasts);
+router.delete("/invites/:id", adminAuthController.deleteInvite);
+router.post("/users/:id/recovery-link", adminAuthController.postRecoveryLink);
+router.post("/broadcast", validate([body("message").isString().trim().isLength({ min: 1, max: 200 }).withMessage("Bericht moet 1 tot 200 tekens zijn.")]), notificationsController.broadcast);
+router.get("/broadcasts", notificationsController.listBroadcasts);
 // Linking the group's Telegram account (tegenhunts and other @Jotihunt_bot messages come in through it)
-router.get("/telegram", [verifyToken, isAdmin], telegramController.getStatus);
-router.post("/telegram/link", [verifyToken, isAdmin], telegramController.startLink);
-router.delete("/telegram/link", [verifyToken, isAdmin], telegramController.unlink);
+router.get("/telegram", telegramController.getStatus);
+router.post("/telegram/link", telegramController.startLink);
+router.delete("/telegram/link", telegramController.unlink);
 router.post(
   "/telegram/password",
-  [verifyToken, isAdmin, validate([body("password").isString().withMessage("Wachtwoord mag niet leeg zijn.").bail().notEmpty().withMessage("Wachtwoord mag niet leeg zijn.")])],
+  validate([body("password").isString().withMessage("Wachtwoord mag niet leeg zijn.").bail().notEmpty().withMessage("Wachtwoord mag niet leeg zijn.")]),
   telegramController.submitPassword,
 );
 // Linking the team's Life360 circle (members without our app share their location through it)
-router.get("/life360", [verifyToken, isAdmin], life360Controller.getStatus);
+router.get("/life360", life360Controller.getStatus);
 router.post(
   "/life360/code",
-  [verifyToken, isAdmin, validate([body("email").isString().withMessage("E-mailadres is ongeldig.").bail().trim().toLowerCase().isEmail().withMessage("E-mailadres is ongeldig.")])],
+  validate([body("email").isString().withMessage("E-mailadres is ongeldig.").bail().trim().toLowerCase().isEmail().withMessage("E-mailadres is ongeldig.")]),
   life360Controller.sendCode,
 );
 router.post(
   "/life360/verify",
-  [
-    verifyToken,
-    isAdmin,
-    validate([
-      body("code")
-        .isString()
-        .withMessage("De code is 6 cijfers.")
-        .bail()
-        .trim()
-        .matches(/^\d{6}$/)
-        .withMessage("De code is 6 cijfers."),
-    ]),
-  ],
+  validate([
+    body("code")
+      .isString()
+      .withMessage("De code is 6 cijfers.")
+      .bail()
+      .trim()
+      .matches(/^\d{6}$/)
+      .withMessage("De code is 6 cijfers."),
+  ]),
   life360Controller.verifyCode,
 );
-router.post(
-  "/life360/circle",
-  [verifyToken, isAdmin, validate([body("circleId").isString().withMessage("Kies een kring.").bail().trim().notEmpty().withMessage("Kies een kring.")])],
-  life360Controller.chooseCircle,
-);
+router.post("/life360/circle", validate([body("circleId").isString().withMessage("Kies een kring.").bail().trim().notEmpty().withMessage("Kies een kring.")]), life360Controller.chooseCircle);
 router.post(
   "/life360/token",
-  [verifyToken, isAdmin, validate([body("token").isString().withMessage("Token mag niet leeg zijn.").bail().trim().notEmpty().withMessage("Token mag niet leeg zijn.")])],
+  validate([body("token").isString().withMessage("Token mag niet leeg zijn.").bail().trim().notEmpty().withMessage("Token mag niet leeg zijn.")]),
   life360Controller.pasteToken,
 );
-router.post("/life360/refresh", [verifyToken, isAdmin], life360Controller.refresh);
-router.delete("/life360/link", [verifyToken, isAdmin], life360Controller.unlink);
+router.post("/life360/refresh", life360Controller.refresh);
+router.delete("/life360/link", life360Controller.unlink);
 // Jotiboard (jotiboard.nl): fox pins and hint solutions are imported every 20 s while sync is on
-router.get("/jotiboard", [verifyToken, isAdmin], jotiboardController.getStatus);
+router.get("/jotiboard", jotiboardController.getStatus);
 router.post(
   "/jotiboard/link",
-  [
-    verifyToken,
-    isAdmin,
-    validate([
-      body("username").isString().withMessage("Vul gebruikersnaam en wachtwoord in.").bail().trim().notEmpty().withMessage("Vul gebruikersnaam en wachtwoord in."),
-      body("password").isString().withMessage("Vul gebruikersnaam en wachtwoord in.").bail().notEmpty().withMessage("Vul gebruikersnaam en wachtwoord in."),
-    ]),
-  ],
+  validate([
+    body("username").isString().withMessage("Vul gebruikersnaam en wachtwoord in.").bail().trim().notEmpty().withMessage("Vul gebruikersnaam en wachtwoord in."),
+    body("password").isString().withMessage("Vul gebruikersnaam en wachtwoord in.").bail().notEmpty().withMessage("Vul gebruikersnaam en wachtwoord in."),
+  ]),
   jotiboardController.link,
 );
-router.delete("/jotiboard/link", [verifyToken, isAdmin], jotiboardController.unlink);
-router.patch("/jotiboard", [verifyToken, isAdmin, validate([body("syncEnabled").isBoolean({ strict: true }).withMessage("syncEnabled moet true of false zijn.")])], jotiboardController.setSync);
-router.delete("/jotiboard/imports", [verifyToken, isAdmin], jotiboardController.purge);
+router.delete("/jotiboard/link", jotiboardController.unlink);
+router.patch("/jotiboard", validate([body("syncEnabled").isBoolean({ strict: true }).withMessage("syncEnabled moet true of false zijn.")]), jotiboardController.setSync);
+router.delete("/jotiboard/imports", jotiboardController.purge);
 // 3D buildings: the tile cache (3DBAG) and the jobs that fill it
-router.get("/buildings", [verifyToken, isAdmin], buildingsController.getStatus);
-router.post("/buildings/refresh", [verifyToken, isAdmin], buildingsController.refresh);
+router.get("/buildings", buildingsController.getStatus);
+router.post("/buildings/refresh", buildingsController.refresh);
 router.post(
   "/buildings/prefetch",
-  [
-    verifyToken,
-    isAdmin,
-    validate([
-      body("lat").isFloat({ min: -90, max: 90 }).withMessage("Ongeldige locatie."),
-      body("lon").isFloat({ min: -180, max: 180 }).withMessage("Ongeldige locatie."),
-      body("radiusKm").isFloat({ min: 1, max: 25 }).withMessage("Straal moet tussen 1 en 25 km liggen."),
-    ]),
-  ],
+  validate([
+    body("lat").isFloat({ min: -90, max: 90 }).withMessage("Ongeldige locatie."),
+    body("lon").isFloat({ min: -180, max: 180 }).withMessage("Ongeldige locatie."),
+    body("radiusKm").isFloat({ min: 1, max: 25 }).withMessage("Straal moet tussen 1 en 25 km liggen."),
+  ]),
   buildingsController.prefetch,
 );
-router.delete("/buildings", [verifyToken, isAdmin], buildingsController.clear);
-router.delete("/users/:id", [verifyToken, isAdmin, validate(deleteValidator)], adminController.deleteUser);
-router.put("/users/:id", [verifyToken, isAdmin, validate(updateValidator)], adminController.updateUser);
+router.delete("/buildings", buildingsController.clear);
+router.delete("/users/:id", validate(deleteValidator), adminController.deleteUser);
+router.put("/users/:id", validate(updateValidator), adminController.updateUser);
 router.put(
   "/devices/:id/vehicle",
-  [
-    verifyToken,
-    isAdmin,
-    validate([param("id").isInt({ min: 1 }).withMessage("Ongeldig toestel-ID."), body("vehicle").isIn(VEHICLES).withMessage("Voertuig moet walking, bike, car of motorcycle zijn.")]),
-  ],
+  validate([param("id").isInt({ min: 1 }).withMessage("Ongeldig toestel-ID."), body("vehicle").isIn(VEHICLES).withMessage("Voertuig moet walking, bike, car of motorcycle zijn.")]),
   trackerController.putDeviceVehicle,
 );
 
