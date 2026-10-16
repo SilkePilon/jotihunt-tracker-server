@@ -29,5 +29,6 @@ router.post(
   ],
   hintsController.solve,
 );
+router.delete("/:articleId/:area/solve", [verifyToken, limitUserWrites(60), validate(cellParams)], hintsController.clear);
 
 export default router;

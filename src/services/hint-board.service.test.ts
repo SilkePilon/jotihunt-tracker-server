@@ -6,7 +6,7 @@ import { Marker, MarkerType } from "../models/marker.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { ServiceError } from "../http/service-error";
 import { nextGeneration } from "../demo/demo-mode";
-import { getBoard, getBoardJson, invalidateBoardCache, reopenImportedCell, solveCell } from "./hint-board.service";
+import { clearCell, getBoard, getBoardJson, invalidateBoardCache, reopenImportedCell, solveCell } from "./hint-board.service";
 
 const slotTime = new Date("2026-10-17T12:00:00.000Z");
 
@@ -285,5 +285,36 @@ describe("solvedAt", () => {
     await HintCell.create({ articleId: 1, area: "alpha", publishAt: slotTime, slotTime, status: HintCellStatus.Solved, answer: "kerk", answerKind: "text" });
     const board = await getBoard();
     expect(board.cells[0].solvedAt).toBeUndefined();
+  });
+});
+
+describe("clearCell", () => {
+  test("an RD answer: the cell is open again without answer or solvedAt, and its hint marker is gone", async () => {
+    await makeCell();
+    await solveCell(1, "alpha", "2126 4692");
+    const cleared = await clearCell(1, "alpha");
+    expect(cleared).toMatchObject({ status: HintCellStatus.Open });
+    for (const field of ["answer", "answerKind", "answerLocation", "markerId", "solvedAt"]) expect(cleared).not.toHaveProperty(field);
+    expect(await Marker.countDocuments({ type: MarkerType.Hint })).toBe(0);
+  });
+
+  test("a text answer is cleared too; an open cell stays as it is", async () => {
+    await makeCell();
+    await makeCell("bravo");
+    await solveCell(1, "alpha", "kerk");
+    expect(await clearCell(1, "alpha")).toMatchObject({ status: HintCellStatus.Open });
+    expect(await clearCell(1, "bravo")).toMatchObject({ status: HintCellStatus.Open });
+  });
+
+  test("the board is rebuilt after clearing", async () => {
+    await makeCell();
+    await solveCell(1, "alpha", "kerk");
+    await getBoardJson();
+    await clearCell(1, "alpha");
+    expect(JSON.parse(await getBoardJson()).cells[0].status).toBe(HintCellStatus.Open);
+  });
+
+  test("a missing cell throws 404", async () => {
+    await expectBoardError(clearCell(1, "alpha"), 404);
   });
 });

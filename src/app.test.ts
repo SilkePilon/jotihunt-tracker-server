@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
 import { Article } from "./models/article.model";
+import { HintCell, HintCellStatus } from "./models/hint-cell.model";
 import { User } from "./models/user.model";
 import { sessions } from "./auth/models";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "./test/db";
@@ -335,5 +336,18 @@ describe("http basics", () => {
     expect(isQuietRequest("GET", 401)).toBe(false);
     expect(isQuietRequest("GET", 500)).toBe(false);
     expect(isQuietRequest("POST", 201)).toBe(false);
+  });
+});
+
+describe("hints: clearing an answer", () => {
+  test("DELETE /hints/:articleId/:area/solve opens the cell again; 401 without token, 400 for an unknown area", async () => {
+    const slotTime = new Date("2026-10-17T12:00:00Z");
+    await HintCell.create({ articleId: 3, area: "alpha", publishAt: slotTime, slotTime, status: HintCellStatus.Solved, answer: "kerk", answerKind: "text" });
+    expect((await request("/hints/3/alpha/solve", { method: "DELETE" })).status).toBe(401);
+    const token = tokenFor(await createUser());
+    expect((await request("/hints/3/zulu/solve", { method: "DELETE", token })).status).toBe(400);
+    const res = await request("/hints/3/alpha/solve", { method: "DELETE", token });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ area: "alpha", status: "open" });
   });
 });

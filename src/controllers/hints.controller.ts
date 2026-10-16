@@ -22,3 +22,8 @@ export function solve(req: Request, res: Response) {
   const { answer, replaceMarker } = req.body;
   return respond(res, 200, () => board.solveCell(articleId, area, answer, replaceMarker === true));
 }
+
+export function clear(req: Request, res: Response) {
+  const { articleId, area } = cellKey(req);
+  return respond(res, 200, () => board.clearCell(articleId, area));
+}
