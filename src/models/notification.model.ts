@@ -12,6 +12,8 @@ const NotificationSchema = new mongoose.Schema({
 });
 
 NotificationSchema.index({ createdAt: 1 }, { expireAfterSeconds: 48 * 60 * 60 });
+// Latest of a type (broadcast history, current counter hunt)
+NotificationSchema.index({ type: 1, createdAt: -1 });
 
 // Named AppNotification: `Notification` is also the browser/Bun global
 export const AppNotification = mongoose.model("Notification", NotificationSchema);
