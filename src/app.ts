@@ -98,6 +98,10 @@ app.use("/markers", markersRoute);
 app.use("/teams", teamsRoute);
 app.use("/areas", areasRoute);
 app.use("/hunts", huntsRoute);
+// Manual hunt registration is gone (hunts come from the jotihunt.nl sync): old apps (Android 1.0.x) get a reason to update
+app.use("/hunt-reports", (_req, res) => {
+  res.status(410).json({ message: "Werk de app bij naar de nieuwste versie." });
+});
 app.use("/articles", articlesRoute);
 app.use("/admin", adminRoute);
 app.use("/hints", hintsRoute);

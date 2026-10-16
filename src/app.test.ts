@@ -282,10 +282,14 @@ describe("write rate limit", () => {
 });
 
 describe("manual hunt registration is gone", () => {
-  test("hunt reports and the photo setting answer 404; hunts come from the jotihunt.nl sync", async () => {
+  test("hunt reports answer 410, the photo setting 404; hunts come from the jotihunt.nl sync", async () => {
     const user = await createUser();
-    expect((await request("/hunt-reports", { token: tokenFor(user) })).status).toBe(404);
-    expect((await request("/hunt-reports", { method: "POST", token: tokenFor(user), json: {} })).status).toBe(404);
+    // Old apps (Android 1.0.x) get a reason they can show
+    for (const [path, method] of [["/hunt-reports", "GET"], ["/hunt-reports", "POST"], ["/hunt-reports/abc/photo", "GET"], ["/hunt-reports/abc", "PATCH"]]) {
+      const res = await request(path, { method, token: tokenFor(user), ...(method === "GET" ? {} : { json: {} }) });
+      expect(res.status).toBe(410);
+      expect(await res.json()).toEqual({ message: "Werk de app bij naar de nieuwste versie." });
+    }
     expect((await request("/settings/hunt-photo", { token: tokenFor(user) })).status).toBe(404);
     expect((await request("/hunts/sync", { token: tokenFor(user) })).status).toBe(200);
   });
