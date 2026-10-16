@@ -191,7 +191,7 @@ export function secret(name: SecretName): string | null {
 }
 
 function hintFor(name: SecretName, value: string): string {
-  if (MASK_ONLY.has(name) || value.length < 7) return "••••••••";
+  if (MASK_ONLY.has(name) || value.length < 8) return "••••••••";
   return `${value.slice(0, 4)}…${value.slice(-2)}`;
 }
 

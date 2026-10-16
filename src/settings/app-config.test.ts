@@ -89,7 +89,7 @@ describe("resolution DB → env → default", () => {
 
 describe("secrets", () => {
   test("stored encrypted; never in the admin view; env fallback after clearing", async () => {
-    await initAppConfig(connection, { SETTINGS_KEY: KEY, GEMINI_API_KEY: "env-key" });
+    await initAppConfig(connection, { SETTINGS_KEY: KEY, GEMINI_API_KEY: "env-key-12345" });
     expect(settingsKeyOk()).toBe(true);
     await setSecret("geminiApiKey", "AIzaSyD4k9Qe1v7Xw2LmT0pR8sN3bH6cY5uJfZ", "Sanne");
     expect(secret("geminiApiKey")).toBe("AIzaSyD4k9Qe1v7Xw2LmT0pR8sN3bH6cY5uJfZ");
@@ -99,8 +99,8 @@ describe("secrets", () => {
     expect(JSON.stringify(view)).not.toContain("AIzaSyD4k9Qe1v7Xw2LmT0pR8sN3bH6cY5uJfZ");
     expect(view.secrets.geminiApiKey).toEqual({ set: true, hint: "AIza…fZ", source: "db" });
     await setSecret("geminiApiKey", null, "Sanne");
-    expect(secret("geminiApiKey")).toBe("env-key");
-    expect(adminConfig().secrets.geminiApiKey).toEqual({ set: true, hint: "env-…ey", source: "env" });
+    expect(secret("geminiApiKey")).toBe("env-key-12345");
+    expect(adminConfig().secrets.geminiApiKey).toEqual({ set: true, hint: "env-…45", source: "env" });
   });
 
   test("passwords get a fixed hint", async () => {
