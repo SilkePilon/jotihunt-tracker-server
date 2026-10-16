@@ -8,7 +8,7 @@ import { currentGeneration } from "../demo/demo-mode";
  * Writes to a collection invalidate its entry (see the model middleware); entries are keyed by the database generation
  * and name, so a demo switch never serves the other database's data.
  */
-export type CachedList = "huntReports" | "markers" | "articles" | "hunts";
+export type CachedList = "markers" | "articles" | "hunts";
 
 export const RESPONSE_CACHE_TTL_MS = 1_000;
 

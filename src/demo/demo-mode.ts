@@ -1,6 +1,6 @@
 /**
  * The demo mode flag of this process and the work tracking a database switch waits for. Kept in its own module
- * (without database imports) so low-level modules such as the photo store, the OCR queue and the crons can use it
+ * (without database imports) so low-level modules such as the crons can use it
  * without import cycles. Only database-switch.ts changes the flag, the switch state and the generation.
  */
 let demoMode = false;

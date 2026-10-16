@@ -1,7 +1,6 @@
 import mongoose from "mongoose";
 import { Article } from "../models/article.model";
 import { HintCell, HintCellStatus } from "../models/hint-cell.model";
-import { HuntReport } from "../models/hunt-report.model";
 import { JotiboardImport } from "../models/jotiboard-import.model";
 import { Marker, MarkerType } from "../models/marker.model";
 import { parseRdAnswer } from "./rd-answer";
@@ -85,13 +84,10 @@ async function deleteMarkerIfUnlinked(markerId: mongoose.Types.ObjectId) {
   await Marker.deleteOne({ _id: markerId, type: MarkerType.Hint });
 }
 
-/** Drop the links hunt reports and hint cells keep to deleted markers (as deleteMarker does). */
+/** Drop the links hint cells keep to deleted markers (as deleteMarker does). */
 export async function unlinkMarkers(markerIds: mongoose.Types.ObjectId[]) {
   if (!markerIds.length) return;
-  const [, cells] = await Promise.all([
-    HuntReport.updateMany({ markerId: { $in: markerIds } }, { $unset: { markerId: 1 } }),
-    HintCell.updateMany({ markerId: { $in: markerIds } }, { $unset: { markerId: 1 } }),
-  ]);
+  const cells = await HintCell.updateMany({ markerId: { $in: markerIds } }, { $unset: { markerId: 1 } });
   if (cells.modifiedCount > 0) invalidateBoardCache();
 }
 

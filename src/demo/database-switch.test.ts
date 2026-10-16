@@ -4,7 +4,6 @@ import type { NextFunction, Request, Response } from "express";
 import mongoose from "mongoose";
 import { Area } from "../models/area.model";
 import { User } from "../models/user.model";
-import { photoFilePath } from "../services/photo-store";
 import {
   closeDemoMode,
   demoConnectOptions,
@@ -131,7 +130,6 @@ describe("switching between the real and the demo database", () => {
     const copied = await User.findById(user._id).lean();
     expect(copied?.name).toBe("HQ");
     expect((await Area.find().lean()).map((area) => area.name)).toEqual(["Demo"]);
-    expect(photoFilePath("x.jpg")).toContain(`${"/demo/"}x.jpg`);
 
     // Switching to the current state is a no-op
     expect((await switchDemoMode(true, user)).startedAt).toEqual(on.startedAt);
@@ -144,7 +142,6 @@ describe("switching between the real and the demo database", () => {
     expect(await User.countDocuments()).toBe(1);
     expect(await countIn(demoName, "areas")).toBe(0);
     expect(await countIn(demoName, "users")).toBe(0);
-    expect(photoFilePath("x.jpg")).not.toContain("/demo/");
     expect(await countIn(realName, "settings")).toBe(1);
   });
 

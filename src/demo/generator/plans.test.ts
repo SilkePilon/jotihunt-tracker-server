@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { HintCellStatus } from "../../models/hint-cell.model";
-import { huntReportStatus, needsReview } from "../../services/hunt-report.helpers";
 import { DEMO_AREAS, HOUR_MS, OSCAR } from "./constants";
 import { demoHuntStart } from "./articles";
-import { HUNT_COOLDOWN_MS, planAreas, planHintCells, planHuntReports, planSpots } from "./plans";
+import { HUNT_COOLDOWN_MS, planAreas, planHintCells, planSpots, planSyncedHunts } from "./plans";
 import { createRng } from "./prng";
 
 const now = new Date("2026-10-17T15:37:00Z");
@@ -54,35 +53,20 @@ describe("hint cell states", () => {
   });
 });
 
-describe("hunt reports", () => {
+describe("synced hunts", () => {
   const areas = DEMO_AREAS.filter((area) => area !== "Charlie" && area !== "Golf");
-  const plans = planHuntReports({ now, huntStart, areas: [...areas], userCount: 8, stickerCount: 10, rng: createRng(5) });
+  const plans = planSyncedHunts({ now, huntStart, areas: [...areas], rng: createRng(5) });
 
-  test("status mix: 3 judged, 3 submitted, 3 to submit (1 needing review), 1 overdue", () => {
-    const statuses = plans.map((plan) => huntReportStatus(plan, now));
-    const count = (status: string) => statuses.filter((value) => value === status).length;
-    expect([count("judged"), count("submitted"), count("to_submit"), count("overdue")]).toEqual([3, 3, 3, 1]);
-    const review = plans.filter((plan) =>
-      needsReview({
-        huntCode: "x",
-        huntTime: plan.huntTime,
-        huntCodeSource: "ocr",
-        huntTimeSource: "ocr",
-        ocr: { status: "done", codeConfidence: plan.codeConfidence, timeConfidence: plan.timeConfidence },
-      }),
-    );
-    expect(review.map((plan) => plan.kind)).toEqual(["review"]);
-    expect(
-      plans
-        .filter((plan) => plan.site)
-        .map((plan) => plan.site!.points)
-        .sort(),
-    ).toEqual([10, 10, 5].sort());
+  test("status mix: 5 approved (10/5/10/3/6), 1 rejected, 4 waiting", () => {
+    const count = (status: string) => plans.filter((plan) => plan.status === status).length;
+    expect([count("approved"), count("rejected"), count("pending")]).toEqual([5, 1, 4]);
+    expect(plans.filter((plan) => plan.status === "approved").map((plan) => plan.points)).toEqual([10, 5, 10, 3, 6]);
+    expect(plans.every((plan) => (plan.status === "pending") === (plan.judgedAt === undefined))).toBe(true);
   });
 
-  test("times between hunt start and now; different stickers; a fox is not hunted twice within the cooldown", () => {
+  test("times between hunt start and now; a fox is not hunted twice within the cooldown", () => {
     for (const plan of plans) {
-      for (const time of [plan.huntTime, plan.createdAt, plan.submittedAt, plan.site?.seenAt]) {
+      for (const time of [plan.huntTime, plan.firstSeenAt, plan.judgedAt]) {
         if (!time) continue;
         expect(time.getTime()).toBeLessThanOrEqual(now.getTime());
         expect(time.getTime()).toBeGreaterThanOrEqual(huntStart.getTime());
@@ -90,7 +74,6 @@ describe("hunt reports", () => {
       const sameArea = plans.filter((other) => other !== plan && other.area === plan.area);
       for (const other of sameArea) expect(Math.abs(other.huntTime.getTime() - plan.huntTime.getTime())).toBeGreaterThanOrEqual(HUNT_COOLDOWN_MS);
     }
-    expect(new Set(plans.map((plan) => plan.sticker)).size).toBe(10);
   });
 
   test("spots are in the last 4 hours", () => {

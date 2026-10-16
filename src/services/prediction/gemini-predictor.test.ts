@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { APICallError } from "ai";
 import { geminiReply, localGoogle, mockModel, TEST_API_KEY } from "../../test/ai";
-import { GeminiError } from "../gemini.client";
+import { GeminiError } from "../ai/gemini-error";
 import { createGeminiPredictor, PREDICTION_TIMEOUT_MS } from "./gemini-predictor";
 import { PREDICTION_SCHEMA } from "./prompt";
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { detectPhotoType } from "./photo-upload.middleware";
+import { detectPhotoType } from "./image-type";
 
 describe("detectPhotoType", () => {
   test("recognizes JPEG, PNG and WebP by their bytes", () => {

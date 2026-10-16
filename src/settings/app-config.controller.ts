@@ -4,7 +4,7 @@ import type { NextFunction, Request, Response } from "express";
 import multer from "multer";
 import { respond, ServiceError } from "../http/service-error";
 import { logger } from "../logger";
-import { detectPhotoType } from "../middleware/photo-upload.middleware";
+import { detectPhotoType } from "../utils/image-type";
 import { testJotihuntLogin } from "../services/jotihunt-scraper.service";
 import * as traccarService from "../services/traccar.service";
 import { adminConfig, general, publicConfig, setGeneral, setPlain, setSecret, type SecretName } from "./app-config";
@@ -13,7 +13,7 @@ const by = (req: Request) => req.user?.name ?? null;
 const MAX_LOGO_BYTES = 1024 * 1024;
 const LOGO_TYPES: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/svg+xml": "svg" };
 
-/** Uploaded branding lives next to the hunt photos (real uploads dir, never the demo one). */
+/** Uploaded branding lives in the uploads dir (the real one, never a demo one). */
 function brandingDir(): string {
   return path.join(path.resolve(process.env.UPLOADS_DIR || "uploads"), "branding");
 }

@@ -1,7 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import mongoose from "mongoose";
 import { redactPath } from "../sentry";
-import { clearDemoUploads } from "../services/photo-store";
 import { activeWorkCount, beginWork, isDemoMode, nextGeneration, setDemoModeFlag, setDemoSwitchInProgress, waitForIdleWork } from "./demo-mode";
 import { openDemoStateStore, type DemoStateStore } from "./demo-state";
 import { demoConnectOptions, demoDbName, mongoUriDbName } from "./mongo-uri";
@@ -224,13 +223,12 @@ function requireInit(): { uri: string; store: DemoStateStore } {
 }
 
 /** Models whose old unique hunt-code index must be dropped: syncIndexes instead of createIndexes. */
-const SYNCED_MODELS = ["HuntReport", "Hunt"];
+const SYNCED_MODELS = ["Hunt"];
 
 /**
  * Index maintenance of the real database (also after switching back from demo mode). model.init() only runs once
- * per process, so the indexes are built with createIndexes(). Hunt codes are no longer unique: on reports duplicates
- * are flagged, and scraped hunts may have no code at all (QR flow, keyed by siteKey). syncIndexes drops the old unique
- * index of both; HuntReport's automatic init() fails on exactly that conflict.
+ * per process, so the indexes are built with createIndexes(). Hunt codes are no longer unique: synced hunts may have no
+ * code at all (QR flow, keyed by siteKey). syncIndexes drops the old unique index.
  */
 async function maintainIndexes() {
   const models = Object.values(mongoose.models);
@@ -303,7 +301,6 @@ async function enterDemo(): Promise<Date> {
   // Push endpoints too, so notifications of the demo world reach the devices that were subscribed
   const pushSubscriptions = await stateStore.connection.collection("pushsubscriptions").find().toArray();
   if (pushSubscriptions.length > 0) await connection.collection("pushsubscriptions").insertMany(pushSubscriptions);
-  await clearDemoUploads();
   const now = new Date();
   await generator(now);
   log.info(`Demo database ${demoName} ready (${users.length} users copied)`);
@@ -324,7 +321,6 @@ async function fallbackToReal() {
     setDemoModeFlag(false);
   }
   await dropDemoDatabase().catch((error) => log.error("Could not drop the demo database", error));
-  await clearDemoUploads().catch((error) => log.error("Could not clear the demo uploads", error));
 }
 
 async function switchOn(stateStore: DemoStateStore, user?: { _id: unknown } | null) {
@@ -354,7 +350,6 @@ async function switchOff(stateStore: DemoStateStore) {
   }
   state = DISABLED_STATE;
   await dropDemoDatabase().catch((error) => log.error("Could not drop the demo database (dropped at the next start)", error));
-  await clearDemoUploads().catch((error) => log.error("Could not clear the demo uploads", error));
   await stateStore.write({ ...DISABLED_STATE, enabledBy: null });
 }
 
@@ -377,7 +372,7 @@ async function performSwitch(enabled: boolean, user?: { _id: unknown } | null): 
   if (!(await waitForIdleWork(drainTimeoutMs))) {
     log.warn(`Demo switch refused: ${activeWorkCount()} request(s)/job(s) still running after ${drainTimeoutMs / 1000} s`);
     setDemoSwitchInProgress(false);
-    // Nothing changed, but jobs were skipped while waiting (e.g. the OCR queue): let the listeners pick them up
+    // Nothing changed, but jobs were skipped while waiting (e.g. the AI jobs): let the listeners pick them up
     await notifyListeners(isDemoMode());
     throw new DemoSwitchBusyError();
   }
@@ -392,7 +387,7 @@ async function performSwitch(enabled: boolean, user?: { _id: unknown } | null): 
   } finally {
     setDemoSwitchInProgress(false);
   }
-  // Listeners may start tracked work (e.g. the OCR queue), so they run after the switch is marked done
+  // Listeners may start tracked work (e.g. the AI jobs), so they run after the switch is marked done
   await notifyListeners(isDemoMode());
   if (failure) throw failure;
   log.info(`Demo mode ${enabled ? "on" : "off"}`);

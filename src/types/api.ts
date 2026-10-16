@@ -18,7 +18,6 @@ export interface ApiArea {
   updated_at: string;
 }
 
-
 export interface ApiArticle {
   id: number;
   title: string;

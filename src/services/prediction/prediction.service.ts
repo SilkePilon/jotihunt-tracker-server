@@ -1,7 +1,7 @@
 import { AREAS } from "../../constants/areas";
 import { Prediction } from "../../models/prediction.model";
 import { assertGeneration, currentGeneration, DemoSwitchedError, isDemoSwitchInProgress } from "../../demo/demo-mode";
-import { GeminiError } from "../gemini.client";
+import { GeminiError } from "../ai/gemini-error";
 import { FAILURE_BACKOFF_MS, GEMINI_PAUSE_MAX_MS, GEMINI_PAUSE_MS, RECOMPUTE_INTERVAL_MS, RETRY_DELAY_MS } from "./constants";
 import { gatherFacts, listAreaNames, loadAreaInputs, signatureOf, type AreaInputs } from "./facts";
 import type { FoxPredictor } from "./gemini-predictor";

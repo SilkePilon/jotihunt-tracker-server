@@ -2,7 +2,6 @@ import { Request, Response } from "express";
 import { matchedData } from "express-validator";
 import { logger } from "../logger";
 import { Marker, MarkerType } from "../models/marker.model";
-import { HuntReport } from "../models/hunt-report.model";
 import { HintCell } from "../models/hint-cell.model";
 import { isDuplicateKeyError } from "../utils/mongo";
 import { sendCachedJson } from "../services/response-cache";
@@ -50,10 +49,7 @@ export async function deleteMarker(req: Request, res: Response) {
   const marker = await Marker.findByIdAndDelete(req.params.id);
   if (!marker) return res.status(404).json({ message: "Marker not found" });
 
-  // Hunt reports and solved hint cells link to their marker; drop the dangling links
-  await Promise.all([
-    HuntReport.updateMany({ markerId: marker._id }, { $unset: { markerId: 1 } }),
-    HintCell.updateMany({ markerId: marker._id }, { $unset: { markerId: 1 } }),
-  ]);
+  // Solved hint cells link to their marker; drop the dangling links
+  await HintCell.updateMany({ markerId: marker._id }, { $unset: { markerId: 1 } });
   return res.status(200).json(marker);
 }

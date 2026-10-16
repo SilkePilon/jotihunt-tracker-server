@@ -8,12 +8,10 @@ import { setAuthConnection } from "./auth/auth-db";
 import { ensurePasswordless } from "./auth/migrate";
 import { initPredictionSetting } from "./settings/prediction-setting";
 import { initHuntableAreas } from "./settings/huntable-areas-setting";
-import { initHuntPhotoSetting } from "./settings/hunt-photo-setting";
 import { initAppConfig, onAppConfigChange, settingsKeyOk } from "./settings/app-config";
 import { aiAvailable } from "./services/ai/model";
 import { getDemoStateStore, initDemoMode, onDemoSwitch } from "./demo/database-switch";
 import { installDemoWorld } from "./demo/demo-world";
-import { huntOcr } from "./services/hunt-ocr.instance";
 import { syncVehicleGroups } from "./services/tracker-onboarding.helpers";
 import { vehicleGroups } from "./services/tracker-onboarding.instance";
 import { isTraccarConfigured, usesLegacyTraccarEnv } from "./services/traccar-http";
@@ -85,7 +83,6 @@ await initDemoMode(db, { logger: serviceLogger }).then((state) => {
 // Global settings live in the real database (also in demo mode); cached in memory from here on
 await initPredictionSetting(getDemoStateStore());
 await initHuntableAreas(getDemoStateStore());
-await initHuntPhotoSetting(getDemoStateStore());
 // Settings moved from env to Beheer (env stays the fallback); secrets need SETTINGS_KEY
 const { undecryptable } = await initAppConfig(getDemoStateStore().connection);
 // Names only, never values: these fall back to env until saved again with the current SETTINGS_KEY
@@ -169,13 +166,8 @@ setBuildingsService(buildings);
 
 // Index maintenance of the real database runs in initDemoMode (and again whenever demo mode is switched off)
 
-// Read hunt codes and times left unread by a restart
-await huntOcr
-  .resumePending()
-  .then((count) => count > 0 && logger.info(`Resumed reading ${count} hunt report photo(s)`))
-  .catch((error) => logger.error("Could not resume hunt report reading", error));
 if (!aiAvailable()) {
-  logger.warn("No Gemini key (Beheer → AI or GEMINI_API_KEY): hunt photos are not read, fox predictions are off, articles get no summary and hints are split by rule only");
+  logger.warn("No Gemini key (Beheer → AI or GEMINI_API_KEY): fox predictions are off, articles get no summary and hints are split by rule only");
 }
 if (!isTraccarConfigured) {
   logger.warn("TRACCAR_API_URL/TRACCAR_API_TOKEN not set, tracker endpoints will return 503");

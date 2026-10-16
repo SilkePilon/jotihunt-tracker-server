@@ -6,13 +6,10 @@ import path from "node:path";
 import { Article, publicArticlesFilter } from "../models/article.model";
 import { Hunt } from "../models/hunt.model";
 import { Marker, MarkerType } from "../models/marker.model";
-import { User } from "../models/user.model";
-import { createHuntReport, listHuntReports } from "../services/hunt-report.service";
 import { invalidateResponseCache } from "../services/response-cache";
 import { listSyncedHunts } from "../services/hunt-sync.view";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { getArticles } from "./articles.controller";
-import { getHuntReports, getPhoto } from "./hunt-reports.controller";
 import { getHunts } from "./hunts.controller";
 import { getMarkers } from "./markers.controller";
 
@@ -63,14 +60,12 @@ const asJson = (value: unknown) => JSON.parse(JSON.stringify(value));
 beforeAll(connectTestDb);
 beforeEach(async () => {
   await clearTestDb();
-  for (const list of ["huntReports", "markers", "articles", "hunts"] as const) invalidateResponseCache(list);
+  for (const list of ["markers", "articles", "hunts"] as const) invalidateResponseCache(list);
 });
 afterAll(disconnectTestDb);
 
 describe("polled list endpoints", () => {
   test("send exactly the JSON the uncached endpoints sent", async () => {
-    const user = await User.create({ name: "merida" });
-    await createHuntReport({ area: "alpha", huntCode: "ABC", huntTime: new Date("2026-10-17T12:00:00Z"), photo: { buffer: Buffer.from([1]), mimetype: "image/jpeg" }, location: [5.9, 52.2] }, user);
     await Marker.create({ area: "bravo", time: new Date("2026-10-17T13:00:00Z"), type: MarkerType.Hint, location: { type: "Point", coordinates: [5.8, 52.1] } });
     await Article.create([
       { id: 1, title: "Oud", type: "hint", publishAt: new Date("2026-10-17T12:00:00Z"), content: "<p>a</p>", messageType: "html", maxPoints: 5, endTime: new Date("2026-10-17T14:00:00Z") },
@@ -84,26 +79,11 @@ describe("polled list endpoints", () => {
     expect(JSON.parse(markers.body as string)).toEqual(asJson(await Marker.find().lean()));
     expect(JSON.parse((await call(getArticles)).body as string)).toEqual(asJson(await Article.find(publicArticlesFilter()).sort({ publishAt: -1 })));
     expect(JSON.parse((await call(getHunts)).body as string)).toEqual(asJson(await listSyncedHunts()));
-    const reports = JSON.parse((await call(getHuntReports)).body as string);
-    // Status depends on the time of the call: compare everything else
-    expect(reports.map((report: { status: string }) => ({ ...report, status: "" }))).toEqual(asJson((await listHuntReports()).map((report) => ({ ...report, status: "" }))));
   });
 
   test("a new marker shows up at once", async () => {
     expect(JSON.parse((await call(getMarkers)).body as string)).toHaveLength(0);
     await Marker.create({ area: "bravo", time: new Date(), type: MarkerType.Spot, location: { type: "Point", coordinates: [5.8, 52.1] } });
     expect(JSON.parse((await call(getMarkers)).body as string)).toHaveLength(1);
-  });
-});
-
-describe("getPhoto", () => {
-  test("sends the file with nosniff and the cache header; 404 for an unknown report", async () => {
-    const user = await User.create({ name: "merida" });
-    const report = await createHuntReport({ area: "alpha", photo: { buffer: Buffer.from([1]), mimetype: "image/jpeg" } }, user);
-    const res = await call(getPhoto, { params: { id: report._id } });
-    expect(res.sentFile).toBeString();
-    expect(res.headers["x-content-type-options"]).toBe("nosniff");
-    expect(res.headers["cache-control"]).toBe("private, max-age=86400");
-    expect((await call(getPhoto, { params: { id: "0123456789abcdef01234567" } })).statusCode).toBe(404);
   });
 });

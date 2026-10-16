@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import mongoose from "mongoose";
@@ -7,12 +7,10 @@ import { Area } from "../../models/area.model";
 import { Article } from "../../models/article.model";
 import { HintCell, HintCellStatus } from "../../models/hint-cell.model";
 import { Hunt } from "../../models/hunt.model";
-import { HuntReport } from "../../models/hunt-report.model";
+import { HuntSyncEvent } from "../../models/hunt-sync-event.model";
 import { Marker, MarkerType } from "../../models/marker.model";
 import { Team } from "../../models/team.model";
 import { User } from "../../models/user.model";
-import { listHuntReports } from "../../services/hunt-report.service";
-import { demoUploadsDir } from "../../services/photo-store";
 import { parseRdAnswer } from "../../services/rd-answer";
 import { closeDemoMode, initDemoMode, mongoUriDbName, switchDemoMode } from "../database-switch";
 import { installDemoWorld } from "../demo-world";
@@ -144,17 +142,15 @@ describe("demo world generator (full run)", () => {
     expect(hunters.map((user) => user.name).sort()).toEqual(DEMO_HUNTERS.map((hunter) => hunter.name).sort());
     expect(hunters.every((user) => !user.admin)).toBe(true);
 
-    // Hunt reports with photos
-    const reports = await listHuntReports(now);
-    expect(reports).toHaveLength(10);
-    const count = (status: string) => reports.filter((report) => report.status === status).length;
-    expect([count("judged"), count("submitted"), count("to_submit"), count("overdue")]).toEqual([3, 3, 3, 1]);
-    expect(reports.filter((report) => report.needsReview)).toHaveLength(1);
-    expect(reports.every((report) => report.ocrStatus === "done" && report.huntCode && report.duplicateOf === null)).toBe(true);
-    const photos = await readdir(demoUploadsDir());
-    const stored = (await HuntReport.find().lean()).map((report) => report.photo);
-    expect(stored.every((photo) => photos.includes(photo ?? ""))).toBe(true);
-    expect(await Hunt.countDocuments({ status: "Goedgekeurd" })).toBe(3);
+    // Synced hunts with their sync log; their markers are the hunt markers
+    expect(await Hunt.countDocuments()).toBe(10);
+    expect(await Hunt.countDocuments({ statusClass: "approved" })).toBe(5);
+    expect(await Hunt.countDocuments({ statusClass: "rejected" })).toBe(1);
+    expect(await Hunt.countDocuments({ location: null })).toBe(0);
+    expect(await HuntSyncEvent.countDocuments({ type: "new" })).toBe(10);
+    expect(await HuntSyncEvent.countDocuments({ type: { $in: ["approved", "rejected"] } })).toBe(6);
+    expect(await HuntSyncEvent.countDocuments({ at: { $gt: now } })).toBe(0);
+    expect(await Marker.countDocuments({ type: MarkerType.Hunt, source: "jotihunt" })).toBe(10);
 
     // Simulated trackers
     expect(getSimulation()!.hunters).toHaveLength(8);

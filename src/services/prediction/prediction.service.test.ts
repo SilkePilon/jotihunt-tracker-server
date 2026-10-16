@@ -4,7 +4,7 @@ import { MarkerType } from "../../models/marker.model";
 import { Prediction } from "../../models/prediction.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../../test/db";
 import { addObservation, makeTeam, setAreaStatus } from "../../test/prediction-fixtures";
-import { GeminiError } from "../gemini.client";
+import { GeminiError } from "../ai/gemini-error";
 import { RETRY_DELAY_MS } from "./constants";
 import type { FoxPredictor } from "./gemini-predictor";
 import { moveM } from "./geo";

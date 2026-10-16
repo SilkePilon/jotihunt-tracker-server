@@ -1,4 +1,4 @@
-/** The nine fox teams (deelgebieden), lowercase like Marker.area, HintCell.area and HuntReport.area. */
+/** The nine fox teams (deelgebieden), lowercase like Marker.area, HintCell.area and HuntSyncEvent.area. */
 export const AREAS = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "oscar"] as const;
 
 export type AreaName = (typeof AREAS)[number];

@@ -4,14 +4,14 @@ import mongoose from "mongoose";
 import { Area } from "../../models/area.model";
 import { HintCell, HintCellStatus } from "../../models/hint-cell.model";
 import { Hunt } from "../../models/hunt.model";
-import { HuntReport } from "../../models/hunt-report.model";
+import { HuntSyncEvent } from "../../models/hunt-sync-event.model";
 import { Marker, MarkerType } from "../../models/marker.model";
 import { Team } from "../../models/team.model";
 import { User } from "../../models/user.model";
 import { floorToHour, syncArticles } from "../../services/article-sync.service";
 import { moveM } from "../../services/prediction/geo";
 import type { LngLat } from "../../services/prediction/types";
-import { savePhoto } from "../../services/photo-store";
+import { syncHuntMarkers } from "../../services/hunt-sync.service";
 import { formatRdAnswer, parseRdAnswer } from "../../services/rd-answer";
 import type { ApiArticle } from "../../types/api";
 import { setSimulation, LOOP_RADIUS_M, type SimulatedHunter } from "../simulated-trackers";
@@ -19,9 +19,8 @@ import { retimeArticles, demoHuntStart } from "./articles";
 import { assignAreas, type GroupPoint } from "./assign-areas";
 import { DEMO_AREAS, DEMO_DEVICE_ID_BASE, DEMO_HUNTERS, HOUR_MS, OSCAR, type DemoArea } from "./constants";
 import { buildFoxRoute, OSCAR_FOX, positionAt, ringWaypoints, WALKING_FOX, type FoxRoute } from "./fox-routes";
-import { planAreas, planHintCells, planHuntReports, planSpots, type CellPlan } from "./plans";
+import { planAreas, planHintCells, planSpots, planSyncedHunts, type CellPlan } from "./plans";
 import { createRng, DEMO_SEED } from "./prng";
-import { loadStickers, localClock, readStickerPhoto, renderStickerPhotos } from "./sticker-photos";
 
 /** A team document as stored in the real database (read-only copy). */
 export interface RealTeam {
@@ -38,8 +37,6 @@ export interface WorldSources {
 
 export interface WorldOptions {
   sources: WorldSources;
-  /** Re-render the sticker photos with the demo hunt times; null → the committed photos are used */
-  renderStickers?: typeof renderStickerPhotos;
   log?: (message: string) => void;
 }
 
@@ -65,6 +62,11 @@ function buildRoutes(groupsByArea: Map<DemoArea, LngLat[]>, allCentre: LngLat, h
     routes.set(area, buildFoxRoute(points, huntStart.getTime(), now.getTime() + 12 * HOUR_MS, rng, area === OSCAR ? OSCAR_FOX : WALKING_FOX));
   });
   return routes;
+}
+
+/** "21:43" in Dutch time, as the site shows a hunt time */
+function localClock(date: Date): string {
+  return date.toLocaleTimeString("nl-NL", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Amsterdam" });
 }
 
 /** Position within `radiusM` of `position` (a spot or hunt is never exactly on the fox). */
@@ -132,8 +134,8 @@ async function applyCellPlans(plans: CellPlan[], routes: Map<DemoArea, FoxRoute>
 
 /**
  * Fill the (fresh) demo database: teams copied from the real database, areas, fox routes, the
- * real 2025 articles re-timed with their hint cells, markers, 8 demo hunters, hunt reports with sticker photos and
- * the simulated trackers. Deterministic for the same teams and `now` (apart from photo file names).
+ * real 2025 articles re-timed with their hint cells, markers, 8 demo hunters, hunts as synced from jotihunt.nl (with
+ * their sync log and markers) and the simulated trackers. Deterministic for the same teams and `now`.
  */
 export async function generateDemoWorld(now: Date, options: WorldOptions): Promise<void> {
   const log = options.log ?? (() => undefined);
@@ -151,7 +153,7 @@ export async function generateDemoWorld(now: Date, options: WorldOptions): Promi
   const redAreas = areaPlans.filter((area) => area.status === "red").map((area) => area.name);
   const huntableAreas = areaPlans.filter((area) => area.status !== "red").map((area) => area.name);
 
-  const users = await createDemoUsers();
+  await createDemoUsers();
 
   // Fox routes
   const groupsByArea = new Map<DemoArea, LngLat[]>();
@@ -179,50 +181,34 @@ export async function generateDemoWorld(now: Date, options: WorldOptions): Promi
     await Marker.create({ area: spot.area.toLowerCase(), time: spot.time, type: MarkerType.Spot, location: { type: "Point", coordinates: position } });
   }
 
-  // Hunt reports with sticker photos (re-rendered with the hunt time when Chromium is available)
-  const stickers = await loadStickers();
+  // Hunts as the jotihunt.nl sync stores them, with their sync log; markers come from the hunts
   const huntRng = createRng(DEMO_SEED + 5);
-  const huntPlans = planHuntReports({ now, huntStart, areas: huntableAreas, userCount: users.length, stickerCount: stickers.length, rng: huntRng });
-  const render = options.renderStickers ?? renderStickerPhotos;
-  const rendered = await render(huntPlans.map((plan) => ({ sticker: plan.sticker, time: localClock(plan.huntTime) }))).catch(() => null);
-  if (!rendered) log("Demo sticker photos: Chromium not available, using the committed photos (their written times differ)");
+  const huntPlans = planSyncedHunts({ now, huntStart, areas: huntableAreas, rng: huntRng });
   for (const [index, plan] of huntPlans.entries()) {
-    const sticker = stickers[plan.sticker];
-    const photo = await savePhoto(rendered?.[index] ?? (await readStickerPhoto(sticker.file)), ".jpg");
-    const position = jitter(positionAt(routes.get(plan.area)!, plan.huntTime.getTime()), 50, huntRng);
+    const [lng, lat] = jitter(positionAt(routes.get(plan.area)!, plan.huntTime.getTime()), 50, huntRng);
     const area = plan.area.toLowerCase();
-    const location = { type: "Point" as const, coordinates: position };
-    const marker = await Marker.create({ area, time: plan.huntTime, type: MarkerType.Hunt, location });
-    const reporter = users[plan.reporter];
-    const submitter = plan.submittedBy !== undefined ? users[plan.submittedBy] : undefined;
-    const report = new HuntReport({
+    const qrCode = `DEMO-${String(index + 1).padStart(3, "0")}`;
+    const location = { lat, lng, accuracy: plan.accuracy };
+    const hunt = await Hunt.create({
+      siteKey: `qr:${qrCode}`,
       area,
-      huntCode: sticker.code,
+      status: plan.statusText,
+      statusText: plan.statusText,
+      statusClass: plan.status,
+      points: plan.points,
+      qrCode,
       huntTime: plan.huntTime,
-      huntCodeSource: "ocr",
-      huntTimeSource: "ocr",
-      photo,
-      reportedBy: reporter._id,
-      reportedByName: reporter.name,
+      huntTimeText: localClock(plan.huntTime),
       location,
-      markerId: marker._id,
-      submittedAt: plan.submittedAt,
-      submittedBy: submitter?._id,
-      submittedByName: submitter?.name,
-      site: plan.site,
-      ocr: {
-        status: "done",
-        attempts: 1,
-        codeConfidence: plan.codeConfidence,
-        timeConfidence: plan.timeConfidence,
-        rawTime: rendered ? localClock(plan.huntTime) : sticker.time,
-        readAt: new Date(plan.createdAt.getTime() + 20_000 > now.getTime() ? now.getTime() : plan.createdAt.getTime() + 20_000),
-      },
-      createdAt: plan.createdAt,
+      firstSeenAt: plan.firstSeenAt,
+      statusChangedAt: plan.judgedAt ?? null,
+      updatedAt: now,
     });
-    await report.save({ timestamps: false });
-    if (plan.site) await Hunt.create({ siteKey: `code:${sticker.code}`, area: plan.area, huntCode: sticker.code, status: plan.site.status, points: plan.site.points, huntTime: plan.huntTime, updatedAt: plan.site.seenAt });
+    const event = { huntId: hunt._id, siteKey: `qr:${qrCode}`, area, huntTime: plan.huntTime, location };
+    await HuntSyncEvent.create({ ...event, type: "new", points: null, at: plan.firstSeenAt });
+    if (plan.judgedAt && plan.status !== "pending") await HuntSyncEvent.create({ ...event, type: plan.status, points: plan.status === "approved" ? plan.points : null, at: plan.judgedAt });
   }
+  await syncHuntMarkers();
 
   // Simulated trackers: a loop around the centre of a huntable area per hunter; two stopped sending
   const trackerRng = createRng(DEMO_SEED + 6);

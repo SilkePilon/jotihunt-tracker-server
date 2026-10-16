@@ -281,25 +281,13 @@ describe("write rate limit", () => {
   });
 });
 
-describe("photo upload", () => {
-  async function upload(bytes: Uint8Array<ArrayBuffer>, type: string) {
+describe("manual hunt registration is gone", () => {
+  test("hunt reports and the photo setting answer 404; hunts come from the jotihunt.nl sync", async () => {
     const user = await createUser();
-    const form = new FormData();
-    form.append("photo", new Blob([bytes], { type }), "hunt.jpg");
-    form.append("area", "invalid-area");
-    return request("/hunt-reports", { method: "POST", token: tokenFor(user), body: form });
-  }
-
-  test("a file that is not really an image is rejected", async () => {
-    const res = await upload(new TextEncoder().encode("<html><script>alert(1)</script></html>"), "image/jpeg");
-    expect(res.status).toBe(400);
-    expect(((await res.json()) as { message: string }).message).toBe("Foto is geen geldige JPEG-, PNG- of WebP-afbeelding.");
-  });
-
-  test("a real JPEG passes the upload check (and reaches validation)", async () => {
-    const res = await upload(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]), "image/jpeg");
-    expect(res.status).toBe(400);
-    expect(await res.json()).toHaveProperty("errors");
+    expect((await request("/hunt-reports", { token: tokenFor(user) })).status).toBe(404);
+    expect((await request("/hunt-reports", { method: "POST", token: tokenFor(user), json: {} })).status).toBe(404);
+    expect((await request("/settings/hunt-photo", { token: tokenFor(user) })).status).toBe(404);
+    expect((await request("/hunts/sync", { token: tokenFor(user) })).status).toBe(200);
   });
 });
 

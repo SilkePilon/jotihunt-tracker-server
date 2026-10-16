@@ -84,41 +84,41 @@ export function planHintCells(input: { hints: HintInput[]; cells: CellInput[]; r
   return plans;
 }
 
-// --- Hunt reports -----------------------------------------------------------------------------------------------
-
-export type HuntKind = "judged" | "submitted" | "to_submit" | "overdue" | "review";
+// --- Synced hunts -----------------------------------------------------------------------------------------------
 
 export interface HuntPlan {
-  kind: HuntKind;
   /** Area name as in DEMO_AREAS */
   area: DemoArea;
   huntTime: Date;
-  createdAt: Date;
-  reporter: number;
-  sticker: number;
-  codeConfidence: number;
-  timeConfidence: number;
-  submittedAt?: Date;
-  submittedBy?: number;
-  site?: { status: string; points: number; seenAt: Date };
+  /** When the sync first saw it (a minute or so after the hunt) */
+  firstSeenAt: Date;
+  status: "pending" | "approved" | "rejected";
+  statusText: string;
+  points: number;
+  /** When it was approved or rejected */
+  judgedAt?: Date;
+  /** Metres */
+  accuracy: number;
 }
 
 /** Minimum time between two hunts on the same fox (they can't be hunted again right away). */
 export const HUNT_COOLDOWN_MS = HOUR_MS;
 
-/** Target age in minutes per report, oldest first. */
-const HUNT_SLOTS: { kind: HuntKind; ageMin: number; points?: number }[] = [
-  { kind: "judged", ageMin: 310, points: 10 },
-  { kind: "judged", ageMin: 265, points: 5 },
-  { kind: "judged", ageMin: 225, points: 10 },
-  { kind: "submitted", ageMin: 180 },
-  { kind: "submitted", ageMin: 140 },
-  { kind: "submitted", ageMin: 100 },
-  { kind: "overdue", ageMin: 55 },
-  { kind: "review", ageMin: 11 },
-  { kind: "to_submit", ageMin: 8 },
-  { kind: "to_submit", ageMin: 3 },
+/** Target age in minutes per hunt, oldest first. */
+const HUNT_SLOTS: { status: HuntPlan["status"]; ageMin: number; points?: number }[] = [
+  { status: "approved", ageMin: 310, points: 10 },
+  { status: "approved", ageMin: 265, points: 5 },
+  { status: "approved", ageMin: 225, points: 10 },
+  { status: "rejected", ageMin: 180 },
+  { status: "approved", ageMin: 140, points: 3 },
+  { status: "approved", ageMin: 100, points: 6 },
+  { status: "pending", ageMin: 55 },
+  { status: "pending", ageMin: 25 },
+  { status: "pending", ageMin: 8 },
+  { status: "pending", ageMin: 3 },
 ];
+
+const STATUS_TEXT: Record<HuntPlan["status"], string> = { pending: "Wacht op bevestiging", approved: "Goedgekeurd", rejected: "Afgekeurd" };
 
 function toMinute(time: number): Date {
   const date = new Date(time);
@@ -127,36 +127,22 @@ function toMinute(time: number): Date {
 }
 
 /**
- * 10 hunt reports: 3 judged ("Goedgekeurd", 10/5 points), 3 submitted, 1 overdue, 1 needing review (low
- * confidence, recent) and 2 still to submit. Hunts on the same fox are at least an hour apart; all times ≤ now.
+ * 10 hunts as the jotihunt.nl sync would have stored them: 5 approved (10/5/10/3/6 points), 1 rejected and 4 still
+ * waiting. Hunts on the same fox are at least an hour apart; all times ≤ now.
  */
-export function planHuntReports(input: { now: Date; huntStart: Date; areas: DemoArea[]; userCount: number; stickerCount: number; rng: Rng }): HuntPlan[] {
+export function planSyncedHunts(input: { now: Date; huntStart: Date; areas: DemoArea[]; rng: Rng }): HuntPlan[] {
   const { now, rng } = input;
   if (input.areas.length === 0) return [];
   const lastHunt = new Map<DemoArea, number>();
-  const stickers = rng.shuffle(Array.from({ length: input.stickerCount }, (_, index) => index));
-  return HUNT_SLOTS.map((slot, index) => {
-    const jitter = slot.kind === "to_submit" || slot.kind === "review" ? rng.int(-2, 2) : rng.int(-6, 6);
+  return HUNT_SLOTS.map((slot) => {
+    const jitter = slot.ageMin < 30 ? rng.int(-2, 2) : rng.int(-6, 6);
     const huntTime = toMinute(Math.max(input.huntStart.getTime() + 5 * MINUTE_MS, now.getTime() - (slot.ageMin + jitter) * MINUTE_MS));
     const free = input.areas.filter((area) => huntTime.getTime() - (lastHunt.get(area) ?? -Infinity) >= HUNT_COOLDOWN_MS);
     const area = rng.pick(free.length ? free : input.areas);
     lastHunt.set(area, huntTime.getTime());
-    const createdAt = new Date(Math.min(huntTime.getTime() + rng.int(40, 150) * 1000, now.getTime()));
-    const plan: HuntPlan = {
-      kind: slot.kind,
-      area,
-      huntTime,
-      createdAt,
-      reporter: rng.int(0, input.userCount - 1),
-      sticker: stickers[index % stickers.length],
-      codeConfidence: slot.kind === "review" ? 0.55 : Math.round(rng.range(0.9, 0.99) * 100) / 100,
-      timeConfidence: Math.round(rng.range(0.9, 0.99) * 100) / 100,
-    };
-    if (slot.kind === "judged" || slot.kind === "submitted") {
-      plan.submittedAt = new Date(Math.min(huntTime.getTime() + rng.int(4, 18) * MINUTE_MS, now.getTime()));
-      plan.submittedBy = rng.int(0, input.userCount - 1);
-    }
-    if (slot.kind === "judged") plan.site = { status: "Goedgekeurd", points: slot.points!, seenAt: new Date(Math.min(plan.submittedAt!.getTime() + 20 * MINUTE_MS, now.getTime())) };
+    const firstSeenAt = new Date(Math.min(huntTime.getTime() + rng.int(20, 80) * 1000, now.getTime()));
+    const plan: HuntPlan = { area, huntTime, firstSeenAt, status: slot.status, statusText: STATUS_TEXT[slot.status], points: slot.points ?? 0, accuracy: rng.int(4, 35) };
+    if (slot.status !== "pending") plan.judgedAt = new Date(Math.min(huntTime.getTime() + rng.int(10, 40) * MINUTE_MS, now.getTime()));
     return plan;
   });
 }

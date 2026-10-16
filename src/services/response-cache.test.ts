@@ -1,16 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { nextGeneration } from "../demo/demo-mode";
-import { HuntReport } from "../models/hunt-report.model";
+import { Hunt } from "../models/hunt.model";
 import { Marker, MarkerType } from "../models/marker.model";
-import { User } from "../models/user.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
-import { createHuntReport, setHuntReportSubmitted } from "./hunt-report.service";
 import { cachedJson, invalidateResponseCache, type CachedList } from "./response-cache";
-
-process.env.UPLOADS_DIR = mkdtempSync(path.join(tmpdir(), "response-cache-"));
 
 let builds = 0;
 /** Read the list through the cache with a long TTL; `builds` counts the real builds */
@@ -19,7 +12,7 @@ function read(list: CachedList = "markers") {
     list,
     async () => {
       builds++;
-      return list === "markers" ? Marker.find().lean() : HuntReport.find().lean();
+      return list === "markers" ? Marker.find().lean() : Hunt.find().lean();
     },
     60_000,
   );
@@ -42,7 +35,7 @@ beforeAll(connectTestDb);
 beforeEach(async () => {
   await clearTestDb();
   invalidateResponseCache("markers");
-  invalidateResponseCache("huntReports");
+  invalidateResponseCache("hunts");
 });
 afterAll(disconnectTestDb);
 
@@ -111,17 +104,10 @@ describe("every marker write clears the cached markers", () => {
   });
 });
 
-describe("hunt report writes clear the cached hunt reports", () => {
-  test("upload and status change", async () => {
-    const user = await User.create({ name: "hq", admin: true });
-    const photo = { buffer: Buffer.from([0xff, 0xd8, 0xff]), mimetype: "image/jpeg" };
-    let id = "";
-    expect(
-      await invalidates(async () => {
-        id = (await createHuntReport({ area: "alpha", huntCode: "ABC", huntTime: new Date(), photo }, user))._id;
-      }, "huntReports"),
-    ).toBe(true);
-    expect(await invalidates(() => setHuntReportSubmitted(id, true, user), "huntReports")).toBe(true);
-    expect(await invalidates(() => HuntReport.updateOne({ _id: id }, { $set: { deadlineWarnedAt: new Date() } }), "huntReports")).toBe(true);
+describe("hunt writes clear the cached hunts", () => {
+  test("the scraper's bulk upsert and a delete", async () => {
+    const hunt = { siteKey: "qr:A", area: "alpha", status: "Wacht", points: 0, updatedAt: new Date() };
+    expect(await invalidates(() => Hunt.bulkWrite([{ updateOne: { filter: { siteKey: "qr:A" }, update: { $set: hunt }, upsert: true } }]), "hunts")).toBe(true);
+    expect(await invalidates(() => Hunt.deleteMany({}), "hunts")).toBe(true);
   });
 });
