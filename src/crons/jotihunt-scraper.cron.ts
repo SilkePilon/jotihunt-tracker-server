@@ -4,22 +4,59 @@ import { Hunt } from "../models/hunt.model";
 import { closeScraper, scrapeHunts } from "../services/jotihunt-scraper.service";
 import { linkScrapedHunts } from "../services/hunt-report-sync.service";
 import { deadline } from "../services/http-limits";
+import { siteKeyOf } from "../services/jotihunt-hunts.parse";
 import { WebHunt } from "../types/api";
 
 /** A whole scrape (browser start, login, page load) may take this long; then the browser is closed and the run ends */
 export const SCRAPE_DEADLINE_MS = 120_000;
 
+/** A scraped hunt as stored (see Hunt) */
+export interface StoredHunt {
+  siteKey: string;
+  area: string;
+  huntCode: string | null;
+  status: string;
+  points: number;
+  huntTime: Date | null;
+  updatedAt: Date;
+}
+
+/** Hunts stored before siteKey existed get the key of their code (once; afterwards nothing matches). */
+async function backfillSiteKeys() {
+  await Hunt.updateMany({ siteKey: { $exists: false }, huntCode: { $type: "string" } }, [{ $set: { siteKey: { $concat: ["code:", { $trim: { input: "$huntCode" } }] } } }], { updatePipeline: true });
+}
+
+/** The scraped hunts with their store key; a key seen twice in one scrape (same fox, same minute, no code) gets a suffix. */
+export function toStoredHunts(webHunts: WebHunt[], now = new Date()): StoredHunt[] {
+  const seen = new Map<string, number>();
+  return webHunts.map((webHunt) => {
+    const key = siteKeyOf(webHunt);
+    const count = (seen.get(key) ?? 0) + 1;
+    seen.set(key, count);
+    return {
+      siteKey: count === 1 ? key : `${key}#${count}`,
+      area: webHunt.area,
+      huntCode: webHunt.huntCode,
+      status: webHunt.status,
+      points: webHunt.points,
+      huntTime: webHunt.time,
+      updatedAt: now,
+    };
+  });
+}
+
 /**
- * Store the scraped hunts: upsert by hunt code, and drop hunts the website no longer lists only when the answer looks
- * complete. An empty list, or one less than half as long as what is stored (a broken or half-loaded page), keeps
- * every stored hunt.
+ * Store the scraped hunts: upsert by siteKey (the code, else area + time), and drop hunts the website no longer lists
+ * only when the answer looks complete. An empty list, or one less than half as long as what is stored (a broken or
+ * half-loaded page), keeps every stored hunt.
  */
-export async function storeHunts(hunts: ({ huntCode: string } & Record<string, unknown>)[]): Promise<{ deleted: boolean }> {
+export async function storeHunts(hunts: StoredHunt[]): Promise<{ deleted: boolean }> {
   if (hunts.length === 0) return { deleted: false };
-  await Hunt.bulkWrite(hunts.map((hunt) => ({ updateOne: { filter: { huntCode: hunt.huntCode }, update: { $set: hunt as Record<string, unknown> }, upsert: true } })));
+  await backfillSiteKeys();
+  await Hunt.bulkWrite(hunts.map((hunt) => ({ updateOne: { filter: { siteKey: hunt.siteKey }, update: { $set: hunt }, upsert: true } })));
   const stored = await Hunt.countDocuments();
   if (hunts.length * 2 < stored) return { deleted: false };
-  await Hunt.deleteMany({ huntCode: { $nin: hunts.map((hunt) => hunt.huntCode) } });
+  await Hunt.deleteMany({ siteKey: { $nin: hunts.map((hunt) => hunt.siteKey) } });
   return { deleted: true };
 }
 
@@ -47,21 +84,12 @@ export default async function scrapeJotihuntWebsite() {
     return;
   }
 
-  const hunts = webHunts.map((webHunt) => {
-    return {
-      area: webHunt.area,
-      status: webHunt.status,
-      huntCode: webHunt.huntCode,
-      points: webHunt.points,
-      huntTime: webHunt.huntTime,
-      updatedAt: new Date(),
-    };
-  });
+  const hunts = toStoredHunts(webHunts);
 
   // Scraping is slow and not tracked; storing is, and only into the database the run started on
   await runTracked(
     async () => {
-      // Upsert by hunt code and drop hunts the website no longer lists: /hunts is never briefly empty
+      // Upsert by code (else area + time) and drop hunts the website no longer lists: /hunts is never briefly empty
       await storeHunts(hunts)
         .then(({ deleted }) => {
           if (!deleted) logger.warn(`(CRON) Scraped only ${hunts.length} hunts, far fewer than stored; kept the stored hunts`);

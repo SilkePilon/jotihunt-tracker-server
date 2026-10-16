@@ -221,7 +221,7 @@ export async function generateDemoWorld(now: Date, options: WorldOptions): Promi
       createdAt: plan.createdAt,
     });
     await report.save({ timestamps: false });
-    if (plan.site) await Hunt.create({ area: plan.area, huntCode: sticker.code, status: plan.site.status, points: plan.site.points, huntTime: plan.huntTime, updatedAt: plan.site.seenAt });
+    if (plan.site) await Hunt.create({ siteKey: `code:${sticker.code}`, area: plan.area, huntCode: sticker.code, status: plan.site.status, points: plan.site.points, huntTime: plan.huntTime, updatedAt: plan.site.seenAt });
   }
 
   // Simulated trackers: a loop around the centre of a huntable area per hunter; two stopped sending

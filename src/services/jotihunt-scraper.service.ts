@@ -2,6 +2,7 @@ import puppeteer, { Page } from "puppeteer";
 import { logger } from "../logger";
 import { onAppConfigChange, plain, secret } from "../settings/app-config";
 import { WebHunt } from "../types/api";
+import { parseHuntsTable } from "./jotihunt-hunts.parse";
 
 const websiteUrl = process.env.JOTIHUNT_WEB_URL as string;
 const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
@@ -120,27 +121,20 @@ export async function scrapeHunts(): Promise<WebHunt[]> {
     await page.goto(websiteUrl + "/hunts", { waitUntil: "networkidle2" });
   }
 
-  const scraped = await page.evaluate(() => {
+  const table = await page.evaluate(() => {
     // No table at all: not the hunts page (e.g. a Cloudflare challenge or an error page)
-    if (!document.querySelector("table")) return null;
-    const rows = Array.from(document.querySelectorAll("table tbody tr"));
-    return rows.flatMap((row) => {
-      const columns = Array.from(row.querySelectorAll("td"));
-      // Skip placeholder rows such as a single colspan "no hunts yet" cell
-      if (columns.length < 5) return [];
-      return [
-        {
-          area: columns[0].textContent,
-          huntCode: columns[1].textContent,
-          status: columns[2].textContent,
-          points: parseInt(columns[3].textContent || "0"),
-          huntTime: columns[4].textContent,
-        } as WebHunt,
-      ];
-    });
+    const element = document.querySelector("table");
+    if (!element) return null;
+    // No helper functions in here: the callback is serialised into the page as is
+    const headerRow = element.querySelector("thead tr") ?? element.querySelector("tr");
+    const headers = headerRow ? Array.from(headerRow.querySelectorAll("th"), (cell) => (cell.textContent ?? "").replace(/\s+/g, " ").trim()) : [];
+    const rows = Array.from(element.querySelectorAll("tbody tr"), (row) => Array.from(row.querySelectorAll("td"), (cell) => (cell.textContent ?? "").replace(/\s+/g, " ").trim()));
+    return { headers, rows };
   });
-  if (scraped === null) throw new Error(`No hunts table on ${page.url()}`);
-  const hunts = scraped.filter((hunt) => hunt.huntCode?.trim());
+  if (table === null) throw new Error(`No hunts table on ${page.url()}`);
+  // Rows without a hunt code are kept: since 16 Oct 2026 hunts are confirmed with the fox's QR code
+  const { hunts, warning } = parseHuntsTable(table);
+  if (warning) logger.warn(`(SCRAPER) ${warning}`);
 
   logger.debug(`(SCRAPER) Found ${hunts.length} hunts from website.`);
   return hunts;

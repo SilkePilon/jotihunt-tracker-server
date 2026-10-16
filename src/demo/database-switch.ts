@@ -222,20 +222,25 @@ function requireInit(): { uri: string; store: DemoStateStore } {
   return { uri: realUri, store };
 }
 
+/** Models whose old unique hunt-code index must be dropped: syncIndexes instead of createIndexes. */
+const SYNCED_MODELS = ["HuntReport", "Hunt"];
+
 /**
  * Index maintenance of the real database (also after switching back from demo mode). model.init() only runs once
- * per process, so the indexes are built with createIndexes(). Hunt codes are no longer unique (duplicates are
- * flagged): syncIndexes drops the old unique index; HuntReport's automatic init() fails on exactly that conflict.
+ * per process, so the indexes are built with createIndexes(). Hunt codes are no longer unique: on reports duplicates
+ * are flagged, and scraped hunts may have no code at all (QR flow, keyed by siteKey). syncIndexes drops the old unique
+ * index of both; HuntReport's automatic init() fails on exactly that conflict.
  */
 async function maintainIndexes() {
   const models = Object.values(mongoose.models);
   await Promise.all(
     models
-      .filter((model) => model.modelName !== "HuntReport")
+      .filter((model) => !SYNCED_MODELS.includes(model.modelName))
       .map((model) => model.createIndexes().catch((error) => log.error(`Could not build indexes for ${model.modelName}`, error))),
   );
-  const huntReport = models.find((model) => model.modelName === "HuntReport");
-  await huntReport?.syncIndexes().catch((error) => log.error("Could not sync indexes for HuntReport", error));
+  for (const model of models.filter((model) => SYNCED_MODELS.includes(model.modelName))) {
+    await model.syncIndexes().catch((error) => log.error(`Could not sync indexes for ${model.modelName}`, error));
+  }
 }
 
 /** Only the default connection is closed: mongoose.disconnect() would also close the DemoState connection. */

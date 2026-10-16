@@ -545,6 +545,73 @@ describe("linkScrapedHunts", () => {
   });
 });
 
+describe("linkScrapedHunts by fox and time (hunts without a code)", () => {
+  const at = (iso: string) => new Date(iso);
+  /** A photo-less report; the hunt time is given (otherwise it is the tap time, i.e. now) */
+  async function report(area: string, time: string) {
+    return createHuntReport({ area, huntTime: at(time) }, await makeUser(`m-${area}-${time}`));
+  }
+
+  test("links to the scraped hunt of the same fox within 15 minutes, the closest one; one-to-one", async () => {
+    const near = await report("alpha", "2026-10-17T12:00:00Z");
+    const other = await report("alpha", "2026-10-17T12:20:00Z");
+    const bravo = await report("bravo", "2026-10-17T12:00:00Z");
+    const now = at("2026-10-17T13:00:00Z");
+    const updated = await linkScrapedHunts(
+      [
+        { huntCode: null, area: "Alpha", time: at("2026-10-17T12:04:00Z"), status: "Goedgekeurd", points: 6 },
+        { huntCode: null, area: "Alpha", time: at("2026-10-17T12:30:00Z"), status: "In behandeling", points: 0 },
+        { huntCode: null, area: "Charlie", time: at("2026-10-17T12:00:00Z"), status: "Goedgekeurd", points: 3 },
+      ],
+      now,
+    );
+    expect(updated).toBe(2);
+    const views = await listHuntReports(now);
+    const site = (id: string) => views.find((view) => view._id === id)!.site;
+    expect(site(near._id)).toEqual({ status: "Goedgekeurd", points: 6, seenAt: now.toISOString() });
+    expect(site(other._id)).toEqual({ status: "In behandeling", points: 0, seenAt: now.toISOString() });
+    expect(site(bravo._id)).toBeNull();
+  });
+
+  test("more than 15 minutes apart: no link; two reports near one hunt: only the closest", async () => {
+    const far = await report("delta", "2026-10-17T12:00:00Z");
+    const a = await report("echo", "2026-10-17T12:00:00Z");
+    const b = await report("echo", "2026-10-17T12:06:00Z");
+    const now = at("2026-10-17T13:00:00Z");
+    expect(
+      await linkScrapedHunts(
+        [
+          { huntCode: null, area: "Delta", time: at("2026-10-17T12:15:01Z"), status: "Goedgekeurd", points: 6 },
+          { huntCode: null, area: "Echo", time: at("2026-10-17T12:05:00Z"), status: "Goedgekeurd", points: 6 },
+        ],
+        now,
+      ),
+    ).toBe(1);
+    const views = await listHuntReports(now);
+    const site = (id: string) => views.find((view) => view._id === id)!.site;
+    expect(site(far._id)).toBeNull();
+    expect(site(a._id)).toBeNull();
+    expect(site(b._id)).not.toBeNull();
+  });
+
+  test("a scraped hunt with a code nobody reported links by time; a report with a code never links by time", async () => {
+    const merida = await makeUser("merida");
+    const coded = await createHuntReport(input({ area: "foxtrot", huntCode: "MINE", huntTime: at("2026-10-17T12:00:00Z") }), merida);
+    const open = await report("golf", "2026-10-17T12:00:00Z");
+    const now = at("2026-10-17T13:00:00Z");
+    await linkScrapedHunts(
+      [
+        { huntCode: "QR1", area: "Foxtrot", time: at("2026-10-17T12:01:00Z"), status: "Goedgekeurd", points: 6 },
+        { huntCode: "QR2", area: "Golf", time: at("2026-10-17T12:01:00Z"), status: "Goedgekeurd", points: 3 },
+      ],
+      now,
+    );
+    const views = await listHuntReports(now);
+    expect(views.find((view) => view._id === coded._id)!.site).toBeNull();
+    expect(views.find((view) => view._id === open._id)!.site).toMatchObject({ points: 3 });
+  });
+});
+
 describe("listHuntReports", () => {
   test("newest hunt time first with derived status and deadline", async () => {
     const merida = await makeUser("merida");

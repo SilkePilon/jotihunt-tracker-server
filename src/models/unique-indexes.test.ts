@@ -16,7 +16,7 @@ describe("unique indexes on a database that already holds duplicates", () => {
   const cases = [
     { model: Area, key: "name", doc: { name: "Alpha", status: "red", updatedAt: new Date() } },
     { model: Team, key: "apiId", doc: { apiId: 1, name: "G", accomodation: "x", street: "s", houseNumber: 1, postCode: "1", city: "c", location: { type: "Point", coordinates: [5, 52] } } },
-    { model: Hunt, key: "huntCode", doc: { area: "Alpha", huntCode: "ABC", status: "x", points: 1, updatedAt: new Date() } },
+    { model: Hunt, key: "siteKey", doc: { area: "Alpha", siteKey: "code:ABC", huntCode: "ABC", status: "x", points: 1, updatedAt: new Date() } },
   ] as const;
 
   for (const { model: typed, key, doc } of cases) {
