@@ -1812,3 +1812,156 @@ git commit -m "docs(env): moved settings live in Beheer; add SETTINGS_KEY
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
+
+---
+
+### Task 9: Copy env values into the database (one-off migration)
+
+The cluster still has the moved values in its env Secret. This task adds a script that copies every value that currently comes from env into the app-config document, so the Secret entries can be removed afterwards.
+
+**Files:**
+- Create: `src/settings/migrate-env.ts`, `src/settings/migrate-env.test.ts`, `src/scripts/migrate-env-settings.ts`
+- Modify: `package.json` (script `"migrate-env-settings": "bun run src/scripts/migrate-env-settings.ts"`)
+
+**Interfaces:**
+- Consumes: `adminConfig`, `general`, `aiModelId`, `secret`, `plain`, `setGeneral`, `setAiModels`, `setSecret`, `setPlain`, `GENERAL`/`AI_SLOTS`/`SECRET_NAMES`/`PLAIN_NAMES`, `settingsKeyOk` (Task 1).
+- Produces: `migrateEnvSettings(by: string): Promise<{ copied: string[]; skippedSecrets: string[] }>` — copies every value whose `source === "env"`; never overwrites a `db` value; secrets are skipped (listed in `skippedSecrets`) when `SETTINGS_KEY` is missing. Idempotent: a second run copies nothing.
+
+- [ ] **Step 1: Failing test** — `src/settings/migrate-env.test.ts`
+
+```ts
+import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
+import mongoose, { type Connection } from "mongoose";
+import { adminConfig, initAppConfig, resetAppConfig, setGeneral } from "./app-config";
+import { migrateEnvSettings } from "./migrate-env";
+
+const uri = process.env.MONGO_URI_TEST ?? "mongodb://localhost:27017/jotihunt-test";
+const KEY = Buffer.alloc(32, 7).toString("base64");
+let connection: Connection;
+beforeAll(async () => {
+  connection = await mongoose.createConnection(uri).asPromise();
+});
+beforeEach(async () => {
+  await connection.collection("settings").deleteMany({});
+  resetAppConfig();
+});
+afterAll(async () => {
+  await connection.collection("settings").deleteMany({});
+  await connection.close();
+});
+
+const ENV = { SETTINGS_KEY: KEY, GROUP_NAME: "Env", HOME_TEAM_API_ID: "12", GROUP_CAR_ID: "3", HUNT_START_TIME: "2026-10-17T10:00:00+02:00", GEMINI_API_KEY: "AIza-env-key-123", GEMINI_MODEL: "flash-x", JOTIHUNT_WEB_USERNAME: "u", JOTIHUNT_WEB_PASSWORD: "p", TELEGRAM_API_ID: "1", TELEGRAM_API_HASH: "h" };
+
+test("copies env values into the DB without overwriting DB values; second run is a no-op", async () => {
+  await initAppConfig(connection, ENV);
+  await setGeneral({ groupName: "Db" }, null);
+  const first = await migrateEnvSettings("migration");
+  expect(first.copied).toContain("homeTeamApiId");
+  expect(first.copied).toContain("geminiApiKey");
+  expect(first.copied).not.toContain("groupName");
+  const view = adminConfig();
+  expect(view.general.groupName).toEqual({ value: "Db", source: "db" });
+  expect(view.general.homeTeamApiId).toEqual({ value: 12, source: "db" });
+  expect(view.general.vehicleGroups.source).toBe("db");
+  expect(view.ai.ocr).toEqual({ value: "flash-x", source: "db" });
+  expect(view.secrets.geminiApiKey.source).toBe("db");
+  expect(view.plain.telegramApiId).toEqual({ value: "1", source: "db" });
+  // After the env vars are gone the values stay
+  resetAppConfig();
+  await initAppConfig(connection, { SETTINGS_KEY: KEY });
+  expect(adminConfig().general.homeTeamApiId.value).toBe(12);
+  expect((await migrateEnvSettings("migration")).copied).toEqual([]);
+});
+
+test("without SETTINGS_KEY secrets are skipped, the rest is copied", async () => {
+  await initAppConfig(connection, { ...ENV, SETTINGS_KEY: "" });
+  const result = await migrateEnvSettings("migration");
+  expect(result.skippedSecrets).toEqual(["geminiApiKey", "jotihuntWebPassword", "telegramApiHash"]);
+  expect(result.copied).toContain("groupName");
+});
+```
+
+- [ ] **Step 2:** `npx --yes bun test src/settings/migrate-env.test.ts` → FAIL (module missing).
+
+- [ ] **Step 3: Implement** `src/settings/migrate-env.ts`
+
+```ts
+import { adminConfig, AI_SLOTS, PLAIN_NAMES, SECRET_NAMES, secret, setAiModels, setGeneral, setPlain, setSecret, settingsKeyOk, VEHICLE_KEYS, type GeneralSettings } from "./app-config";
+
+/**
+ * One-off: copy every setting that still comes from env into the database (Beheer), so the env vars can be removed.
+ * DB values are never overwritten; secrets need SETTINGS_KEY. Running it again copies nothing.
+ */
+export async function migrateEnvSettings(by: string): Promise<{ copied: string[]; skippedSecrets: string[] }> {
+  const view = adminConfig();
+  const copied: string[] = [];
+  const skippedSecrets: string[] = [];
+
+  const generalPatch: GeneralSettings = {};
+  for (const [key, sourced] of Object.entries(view.general) as [keyof typeof view.general, { value: unknown; source: string }][]) {
+    if (sourced.source !== "env") continue;
+    if (key === "vehicleGroups") {
+      const ids = sourced.value as Record<(typeof VEHICLE_KEYS)[number], number | null>;
+      generalPatch.vehicleGroups = Object.fromEntries(VEHICLE_KEYS.filter((v) => ids[v] !== null).map((v) => [v, ids[v]]));
+    } else {
+      (generalPatch as Record<string, unknown>)[key] = sourced.value;
+    }
+    copied.push(key);
+  }
+  if (Object.keys(generalPatch).length) await setGeneral(generalPatch, by);
+
+  const models = Object.fromEntries(AI_SLOTS.filter((slot) => view.ai[slot].source === "env").map((slot) => [slot, view.ai[slot].value]));
+  if (Object.keys(models).length) {
+    await setAiModels(models, by);
+    copied.push(...Object.keys(models).map((slot) => `ai.${slot}`));
+  }
+
+  const plainPatch = Object.fromEntries(PLAIN_NAMES.filter((name) => view.plain[name].source === "env").map((name) => [name, view.plain[name].value]));
+  if (Object.keys(plainPatch).length) {
+    await setPlain(plainPatch, by);
+    copied.push(...Object.keys(plainPatch));
+  }
+
+  for (const name of SECRET_NAMES) {
+    if (view.secrets[name].source !== "env") continue;
+    if (!settingsKeyOk()) {
+      skippedSecrets.push(name);
+      continue;
+    }
+    await setSecret(name, secret(name), by);
+    copied.push(name);
+  }
+  return { copied, skippedSecrets };
+}
+```
+
+(`secret(name)` returns the env value here because the DB has none.)
+
+`src/scripts/migrate-env-settings.ts` (follow the style of the other scripts in `src/scripts/`, e.g. `load-teams.ts`, for connecting and logging):
+
+```ts
+import mongoose from "mongoose";
+import { initAppConfig } from "../settings/app-config";
+import { migrateEnvSettings } from "../settings/migrate-env";
+
+const uri = process.env.MONGO_URI;
+if (!uri) throw new Error("MONGO_URI is not set");
+// The settings live in the real database (the demo database never holds them)
+const connection = await mongoose.createConnection(uri).asPromise();
+await initAppConfig(connection);
+const { copied, skippedSecrets } = await migrateEnvSettings("env-migration");
+console.log(copied.length ? `Copied from env into Beheer: ${copied.join(", ")}` : "Nothing to copy: no setting comes from env");
+if (skippedSecrets.length) console.log(`Skipped (SETTINGS_KEY missing): ${skippedSecrets.join(", ")}`);
+await connection.close();
+```
+
+- [ ] **Step 4:** `npx --yes bun test src/settings && npx --yes bun x tsc --noEmit` → PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/settings/migrate-env.ts src/settings/migrate-env.test.ts src/scripts/migrate-env-settings.ts package.json
+git commit -m "feat(settings): script to copy env settings into Beheer
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
