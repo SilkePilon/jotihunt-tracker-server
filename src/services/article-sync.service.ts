@@ -129,8 +129,10 @@ export async function syncArticles(apiArticles: ApiArticle[], { now = () => new 
       if (isNaN(publishAt.getTime())) throw new Error(`Invalid publish_at: ${apiArticle.publish_at}`);
 
       const textHash = articleTextHash(content);
-      const previous =
-        stored && !written.has(apiArticle.id) ? (stored.get(apiArticle.id) ?? null) : await Article.findOne({ id: apiArticle.id }, STORED_FIELDS).lean();
+      // A miss (a new article, or an id whose type differs from the stored one) is looked up on its own, so Mongoose's id
+      // casting still applies; only articles that are already stored are served from the batch
+      const batched = stored && !written.has(apiArticle.id) ? stored.get(apiArticle.id) : undefined;
+      const previous = batched ?? (await Article.findOne({ id: apiArticle.id }, STORED_FIELDS).lean());
       const time = now();
       // The text hash of the stored article (computed for one stored before textHash existed)
       const previousTextHash = previous?.textHash ?? (typeof previous?.content === "string" ? articleTextHash(previous.content) : undefined);
