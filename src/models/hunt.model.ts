@@ -31,6 +31,11 @@ const HuntSchema = new mongoose.Schema({
     type: Date,
     required: false,
   },
+  /** The time as the site shows it; a clock-only time keeps the date it was first stored with */
+  huntTimeText: {
+    type: String,
+    required: false,
+  },
   updatedAt: {
     type: Date,
     required: true,
@@ -42,3 +47,18 @@ const HuntSchema = new mongoose.Schema({
 HuntSchema.index({ siteKey: 1 }, { unique: true, partialFilterExpression: { siteKey: { $type: "string" } } });
 
 export const Hunt = mongoose.model("Hunt", HuntSchema);
+
+/**
+ * Drop the unique `huntCode_1` index of databases from before siteKey (hunts without a code would collide on null).
+ * Runs on its own before syncIndexes, so a failing sync can never leave it. Returns whether it was dropped.
+ */
+export async function dropLegacyHuntCodeIndex(): Promise<boolean> {
+  const indexes = await Hunt.collection.indexes().catch((error: { codeName?: string }) => {
+    // No collection yet: nothing to drop
+    if (error.codeName === "NamespaceNotFound") return [];
+    throw error;
+  });
+  if (!indexes.some((index) => index.name === "huntCode_1")) return false;
+  await Hunt.collection.dropIndex("huntCode_1");
+  return true;
+}

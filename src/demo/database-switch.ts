@@ -6,6 +6,7 @@ import { activeWorkCount, beginWork, isDemoMode, nextGeneration, setDemoModeFlag
 import { openDemoStateStore, type DemoStateStore } from "./demo-state";
 import { demoConnectOptions, demoDbName, mongoUriDbName } from "./mongo-uri";
 import { errorText } from "../utils/error-text";
+import { dropLegacyHuntCodeIndex } from "../models/hunt.model";
 import type { ServiceLogger } from "../utils/service-logger";
 
 export { demoConnectOptions, demoDbName, mongoUriDbName } from "./mongo-uri";
@@ -238,6 +239,7 @@ async function maintainIndexes() {
       .filter((model) => !SYNCED_MODELS.includes(model.modelName))
       .map((model) => model.createIndexes().catch((error) => log.error(`Could not build indexes for ${model.modelName}`, error))),
   );
+  await dropLegacyHuntCodeIndex().catch((error) => log.error("Could not drop the old unique hunt code index", error));
   for (const model of models.filter((model) => SYNCED_MODELS.includes(model.modelName))) {
     await model.syncIndexes().catch((error) => log.error(`Could not sync indexes for ${model.modelName}`, error));
   }

@@ -18,12 +18,33 @@ export interface StoredHunt {
   status: string;
   points: number;
   huntTime: Date | null;
+  /** The time as the site shows it */
+  huntTimeText: string;
   updatedAt: Date;
 }
 
 /** Hunts stored before siteKey existed get the key of their code (once; afterwards nothing matches). */
 async function backfillSiteKeys() {
   await Hunt.updateMany({ siteKey: { $exists: false }, huntCode: { $type: "string" } }, [{ $set: { siteKey: { $concat: ["code:", { $trim: { input: "$huntCode" } }] } } }], { updatePipeline: true });
+}
+
+const CLOCK_ONLY = /^\d{1,2}[:.]\d{2}(?::\d{2})?$/;
+
+/**
+ * A time the site shows as a clock only ("09:15") is dated to its most recent occurrence, so on Sunday a Saturday
+ * 09:15 would become Sunday 09:15. Rows already stored (same area, same text) keep their stored date. Mutates `time`.
+ */
+export async function keepStoredDates(webHunts: WebHunt[]): Promise<void> {
+  const clockOnly = webHunts.filter((hunt) => CLOCK_ONLY.test(hunt.huntTime.trim()));
+  if (clockOnly.length === 0) return;
+  const stored = await Hunt.find({ huntTimeText: { $in: [...new Set(clockOnly.map((hunt) => hunt.huntTime.trim()))] }, huntTime: { $type: "date" } })
+    .select("area huntTimeText huntTime")
+    .sort({ huntTime: -1 })
+    .lean();
+  for (const hunt of clockOnly) {
+    const match = stored.find((entry) => entry.area.toLowerCase() === hunt.area.toLowerCase() && entry.huntTimeText === hunt.huntTime.trim());
+    if (match?.huntTime) hunt.time = match.huntTime;
+  }
 }
 
 /** The scraped hunts with their store key; a key seen twice in one scrape (same fox, same minute, no code) gets a suffix. */
@@ -40,6 +61,7 @@ export function toStoredHunts(webHunts: WebHunt[], now = new Date()): StoredHunt
       status: webHunt.status,
       points: webHunt.points,
       huntTime: webHunt.time,
+      huntTimeText: webHunt.huntTime.trim(),
       updatedAt: now,
     };
   });
@@ -84,11 +106,11 @@ export default async function scrapeJotihuntWebsite() {
     return;
   }
 
-  const hunts = toStoredHunts(webHunts);
-
   // Scraping is slow and not tracked; storing is, and only into the database the run started on
   await runTracked(
     async () => {
+      await keepStoredDates(webHunts).catch((error) => logger.warn("(CRON) Could not look up stored hunt dates:", error));
+      const hunts = toStoredHunts(webHunts);
       // Upsert by code (else area + time) and drop hunts the website no longer lists: /hunts is never briefly empty
       await storeHunts(hunts)
         .then(({ deleted }) => {

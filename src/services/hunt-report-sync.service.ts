@@ -22,9 +22,9 @@ const siteOf = (hunt: ScrapedHunt, now: Date) => ({ status: (hunt.status ?? "").
  *
  * 1. By code: the report with the same normalised code (the oldest one when a code was reported twice). One query for
  *    all codes and one ordered bulk write, so a code scraped twice ends with the last hunt's values.
- * 2. By fox and time: a report without a code (QR flow, or an unread photo) links to a scraped hunt that no report
- *    claimed by code, of the same area with a hunt time within ±15 minutes. Closest pairs first; every scraped hunt
- *    links to at most one report and every report to at most one hunt.
+ * 2. By fox and time: a report without a code (QR flow, or an unread photo), or with a code the site does not list,
+ *    links to the closest scraped hunt that no report claimed by code, of the same area with a hunt time within
+ *    ±15 minutes. Several reports may link to the same hunt (two hunters reporting the same contact).
  */
 export async function linkScrapedHunts(hunts: ScrapedHunt[], now = new Date()): Promise<number> {
   const linked = hunts.flatMap((hunt) => {
@@ -51,47 +51,44 @@ export async function linkScrapedHunts(hunts: ScrapedHunt[], now = new Date()): 
     }
   }
 
-  operations.push(...(await timeMatches(hunts.filter((hunt) => !claimedByCode.has(hunt)), now)));
+  const scrapedCodes = [...new Set(linked.map(({ huntCode }) => huntCode))];
+  operations.push(...(await timeMatches(hunts.filter((hunt) => !claimedByCode.has(hunt)), scrapedCodes, now)));
   if (operations.length === 0) return 0;
   const result = await HuntReport.bulkWrite(operations, { ordered: true });
   return result.modifiedCount;
 }
 
-/** Updates linking reports without a code to scraped hunts by fox and time (see linkScrapedHunts). */
-async function timeMatches(hunts: ScrapedHunt[], now: Date) {
+/**
+ * Updates linking reports to scraped hunts by fox and time (see linkScrapedHunts). Candidates: reports without a code,
+ * and reports whose code the site does not list (misread, or the site shows no codes).
+ */
+async function timeMatches(hunts: ScrapedHunt[], scrapedCodes: string[], now: Date) {
   const timed = hunts.flatMap((hunt) => (hunt.area && hunt.time && !Number.isNaN(hunt.time.getTime()) ? [{ hunt, area: hunt.area.trim().toLowerCase(), time: hunt.time.getTime() }] : []));
   if (timed.length === 0) return [];
   const earliest = Math.min(...timed.map(({ time }) => time)) - TIME_MATCH_WINDOW_MS;
   const latest = Math.max(...timed.map(({ time }) => time)) + TIME_MATCH_WINDOW_MS;
   const range = { $gte: new Date(earliest), $lte: new Date(latest) };
   const reports = await HuntReport.find({
-    huntCode: null,
+    huntCode: { $nin: scrapedCodes },
     area: { $in: [...new Set(timed.map(({ area }) => area))] as (typeof HUNT_AREAS)[number][] },
     // The effective hunt time (see effectiveHuntTime) within reach of a scraped hunt
     $or: [{ huntTime: range }, { huntTime: null, takenAt: range }, { huntTime: null, takenAt: null, createdAt: range }],
   })
-    .select("_id area huntTime takenAt createdAt")
+    .select("_id area huntCode huntTime takenAt createdAt")
     .lean();
 
-  const pairs = timed.flatMap((scraped, huntIndex) =>
-    reports.flatMap((report) => {
-      if (report.area !== scraped.area) return [];
-      const distance = Math.abs(effectiveHuntTime(report).getTime() - scraped.time);
-      return distance <= TIME_MATCH_WINDOW_MS ? [{ huntIndex, report, distance }] : [];
-    }),
-  );
-  // Closest first; ties go to the oldest report, then the first scraped row
-  pairs.sort((a, b) => a.distance - b.distance || compareAge(a.report, b.report) || a.huntIndex - b.huntIndex);
-  const usedHunts = new Set<number>();
-  const usedReports = new Set<string>();
-  const operations = [];
-  for (const { huntIndex, report } of pairs) {
-    const id = report._id.toString();
-    if (usedHunts.has(huntIndex) || usedReports.has(id)) continue;
-    usedHunts.add(huntIndex);
-    usedReports.add(id);
-    // Still without a code: a code entered by HQ meanwhile links by code instead
-    operations.push({ updateOne: { filter: { _id: report._id, huntCode: null }, update: { $set: { site: siteOf(timed[huntIndex].hunt, now) } } } });
-  }
-  return operations;
+  // Every report takes its closest scraped hunt (ties: the first row); a hunt may link several reports (two hunters
+  // reporting the same fox contact)
+  return reports.flatMap((report) => {
+    const time = effectiveHuntTime(report).getTime();
+    let best: { hunt: ScrapedHunt; distance: number } | null = null;
+    for (const scraped of timed) {
+      if (scraped.area !== report.area) continue;
+      const distance = Math.abs(time - scraped.time);
+      if (distance <= TIME_MATCH_WINDOW_MS && (!best || distance < best.distance)) best = { hunt: scraped.hunt, distance };
+    }
+    if (!best) return [];
+    // The code in the filter too: a code entered or changed by HQ meanwhile must not get this result
+    return [{ updateOne: { filter: { _id: report._id, huntCode: report.huntCode ?? null }, update: { $set: { site: siteOf(best.hunt, now) } } } }];
+  });
 }
