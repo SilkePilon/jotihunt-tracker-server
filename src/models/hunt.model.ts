@@ -1,9 +1,24 @@
-import mongoose from "mongoose";
+import mongoose, { InferSchemaType } from "mongoose";
+import { invalidateOnWrite } from "../services/response-cache";
 
-/** A hunt as listed on the logged-in /hunts page of jotihunt.nl (copied by the scraper cron). */
+/** Where jotihunt.nl registered the hunt (the hunter's phone when scanning the fox's QR code) */
+const HuntLocationSchema = new mongoose.Schema(
+  {
+    lat: { type: Number, required: true },
+    lng: { type: Number, required: true },
+    /** Metres; null when the site shows none */
+    accuracy: { type: Number, required: false, default: null },
+  },
+  { _id: false },
+);
+
+/**
+ * A hunt as listed on the logged-in /hunts page of jotihunt.nl (copied by the scraper cron). Since 17 Oct 2026 this is
+ * the only source of hunts: nobody registers them in the app.
+ */
 const HuntSchema = new mongoose.Schema({
-  /** Upsert key: `code:<code>` when the hunt has a code, else `time:<area>:<iso time>` (see siteKeyOf). Missing on
-   * hunts stored before 17 Oct 2026; the scraper backfills it from their code. */
+  /** Upsert key (see siteKeyOf): `qr:<qr code>`, `code:<old hunt code>`, `id:<detail page id>` or
+   * `time:<area>:<iso time>`. Missing on hunts stored before 17 Oct 2026; the scraper backfills it from their code. */
   siteKey: {
     type: String,
     required: false,
@@ -19,9 +34,43 @@ const HuntSchema = new mongoose.Schema({
     required: false,
     default: null,
   },
+  /** The site's status text (kept under its old name for old clients); see statusText */
   status: {
     type: String,
     required: true,
+  },
+  /** pending / approved / rejected / unknown (classifyStatus); missing on hunts stored before 17 Oct 2026 */
+  statusClass: {
+    type: String,
+    enum: ["pending", "approved", "rejected", "unknown"],
+    required: false,
+  },
+  /** The site's status text ("Wacht op bevestiging") */
+  statusText: {
+    type: String,
+    required: false,
+  },
+  qrCode: {
+    type: String,
+    required: false,
+    default: null,
+  },
+  /** Never cleared by a scrape that found none (a detail page may not have been opened that run) */
+  location: {
+    type: HuntLocationSchema,
+    required: false,
+    default: null,
+  },
+  /** When our sync first saw it */
+  firstSeenAt: {
+    type: Date,
+    required: false,
+  },
+  /** When its status class last changed (or it was first seen already judged) */
+  statusChangedAt: {
+    type: Date,
+    required: false,
+    default: null,
   },
   points: {
     type: Number,
@@ -46,7 +95,11 @@ const HuntSchema = new mongoose.Schema({
 // don't collide until they are backfilled
 HuntSchema.index({ siteKey: 1 }, { unique: true, partialFilterExpression: { siteKey: { $type: "string" } } });
 
+// GET /hunts is cached for a moment; every write clears it
+invalidateOnWrite(HuntSchema, "hunts");
+
 export const Hunt = mongoose.model("Hunt", HuntSchema);
+export type HuntDoc = InferSchemaType<typeof HuntSchema> & { _id: mongoose.Types.ObjectId };
 
 /**
  * Drop the unique `huntCode_1` index of databases from before siteKey (hunts without a code would collide on null).

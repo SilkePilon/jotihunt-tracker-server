@@ -34,6 +34,11 @@ export function markSyncFailure(error: unknown, _at = new Date()): void {
   lastError = syncErrorText(error);
 }
 
+/** The run ended without success or failure (e.g. skipped by a demo switch) */
+export function markSyncSettled(): void {
+  running = false;
+}
+
 /** A short Dutch text for the sync card: the site is down or slow, the login is wrong, or something else */
 export function syncErrorText(error: unknown): string {
   const name = error instanceof Error ? error.name : "";
