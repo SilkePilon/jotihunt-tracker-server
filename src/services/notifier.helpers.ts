@@ -1,13 +1,7 @@
-import { effectiveHuntTime, SUBMIT_WINDOW_MS } from "./hunt-report.helpers";
-
-export const NOTIFICATION_TYPES = ["fox-status", "hint", "article", "hunt-deadline", "broadcast", "counter-hunt", "happy-hour"] as const;
+export const NOTIFICATION_TYPES = ["fox-status", "hint", "article", "hunt-new", "hunt-approved", "hunt-rejected", "broadcast", "counter-hunt", "happy-hour"] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 /** Types a user can switch off; broadcasts from HQ always come through. */
 export const OPTIONAL_NOTIFICATION_TYPES = NOTIFICATION_TYPES.filter((type) => type !== "broadcast");
-
-/** A registered hunt must be confirmed within 15 minutes; warn 10 minutes after the hunt (5 minutes left). */
-export const HUNT_SUBMIT_WINDOW_MS = SUBMIT_WINDOW_MS;
-export const DEADLINE_WARNING_AFTER_MS = 10 * 60 * 1000;
 
 export interface NotificationInput {
   type: NotificationType;
@@ -47,25 +41,6 @@ export function newArticles<T extends { id: number }>(articles: T[], lastArticle
   return articles.filter((article) => article.id > lastArticleId).sort((a, b) => a.id - b.id);
 }
 
-interface DeadlineReport {
-  huntTime?: Date | null;
-  takenAt?: Date | null;
-  createdAt: Date;
-  submittedAt?: Date | null;
-  deadlineWarnedAt?: Date | null;
-  /** Set once jotihunt.nl lists the hunt (confirmed): no warning needed */
-  site?: unknown;
-}
-
-/** Reports that reached 5 minutes before their deadline and were neither submitted, confirmed nor warned about. */
-export function dueDeadlineWarnings<T extends DeadlineReport>(reports: T[], now: Date): T[] {
-  return reports.filter((report) => {
-    if (report.submittedAt || report.deadlineWarnedAt || report.site) return false;
-    const age = now.getTime() - effectiveHuntTime(report).getTime();
-    return age >= DEADLINE_WARNING_AFTER_MS && age < HUNT_SUBMIT_WINDOW_MS;
-  });
-}
-
 export function buildFoxStatusNotification(change: AreaStatusChange): NotificationInput {
   const area = capitalize(change.area);
   const data = { area: change.area, status: change.to, previousStatus: change.from };
@@ -85,21 +60,33 @@ export function buildArticleNotification(article: { id: number; title: string; t
   return { type: "article", title: "Nieuw bericht", body: article.title, urgent: false, data };
 }
 
-/** Photo reports are sent in by HQ; hunts without a photo are confirmed by the hunter with the fox's QR code. */
-export function buildDeadlineNotification(
-  report: { _id: unknown; area: string; huntTime?: Date | null; takenAt?: Date | null; createdAt: Date; reportedByName: string; photo?: string | null },
-  now: Date,
-): NotificationInput {
-  const deadline = effectiveHuntTime(report).getTime() + HUNT_SUBMIT_WINDOW_MS;
-  const minutes = Math.max(1, Math.ceil((deadline - now.getTime()) / 60000));
-  const area = capitalize(report.area);
-  return {
-    type: "hunt-deadline",
-    title: report.photo ? `Hunt ${area} moet over ${minutes} min ingestuurd zijn` : `Bevestig hunt ${area} op jotihunt.nl, nog ${minutes} min`,
-    body: report.photo ? `Geregistreerd door ${report.reportedByName}, nog niet ingestuurd.` : `Gemeld door ${report.reportedByName}.`,
-    urgent: false,
-    data: { area: report.area, huntReportId: String(report._id) },
-  };
+/** A hunt sync log entry, as far as its notification needs it */
+export interface HuntSyncNotificationEvent {
+  _id: unknown;
+  huntId: unknown;
+  area: string;
+  type: "new" | "approved" | "rejected" | "points";
+  points?: number | null;
+  huntTime?: Date | null;
+  initial?: boolean;
+}
+
+/**
+ * "Hunt Alpha binnengekomen" / "Hunt Alpha goedgekeurd · +10" / "Hunt Alpha afgekeurd"; null for points changes.
+ * The hunter is unknown (jotihunt.nl only shows the fox's device).
+ */
+export function buildHuntSyncNotification(event: HuntSyncNotificationEvent): NotificationInput | null {
+  const area = capitalize(event.area);
+  const data = { area: event.area, huntId: String(event.huntId), eventId: String(event._id) };
+  if (event.type === "new") {
+    return { type: "hunt-new", title: `Hunt ${area} binnengekomen`, body: event.huntTime ? `Geregistreerd om ${clock(event.huntTime)}, wacht op beoordeling.` : "Wacht op beoordeling.", urgent: false, data };
+  }
+  if (event.type === "approved") {
+    const points = event.points ? ` · +${event.points}` : "";
+    return { type: "hunt-approved", title: `Hunt ${area} goedgekeurd${points}`, body: "", urgent: false, data: { ...data, points: event.points ?? 0 } };
+  }
+  if (event.type === "rejected") return { type: "hunt-rejected", title: `Hunt ${area} afgekeurd`, body: "", urgent: false, data };
+  return null;
 }
 
 export function buildBroadcastNotification(message: string, from: string): NotificationInput {

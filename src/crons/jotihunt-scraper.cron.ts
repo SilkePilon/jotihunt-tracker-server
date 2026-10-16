@@ -5,6 +5,7 @@ import { HuntSyncEvent, type HuntSyncEventDoc } from "../models/hunt-sync-event.
 import { closeScraper, jotihuntLogin, scrapeHunts } from "../services/jotihunt-scraper.service";
 import { markSyncFailure, markSyncSettled, markSyncStart, markSyncSuccess } from "../services/hunt-sync-state";
 import { diffHunts, isInitialImport } from "../services/hunt-sync-diff";
+import { notifyHuntEvents, syncHuntMarkers } from "../services/hunt-sync.service";
 import { deadline } from "../services/http-limits";
 import { assignSiteKeys, classifyStatus, type ScrapedHunt } from "../services/jotihunt-hunts.parse";
 
@@ -166,6 +167,9 @@ export default async function scrapeJotihuntWebsite() {
         const result = await storeHunts(scraped);
         if (!result.deleted) logger.warn(`(CRON) Scraped only ${scraped.length} hunts, far fewer than stored; kept the stored hunts`);
         markSyncSuccess(new Date());
+        // Hunt markers feed the map, cooldown and prediction; then tell everyone what changed
+        await syncHuntMarkers().catch((error) => logger.error("(CRON) Error syncing hunt markers:", error));
+        await notifyHuntEvents(result).catch((error) => logger.error("(CRON) Error sending hunt notifications:", error));
       },
       { generation },
     );

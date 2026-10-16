@@ -4,7 +4,6 @@ import { groupConfig } from "../../../auth/config";
 import { Area } from "../../../models/area.model";
 import { Assignment, AssignmentStatus } from "../../../models/assignment.model";
 import { Hunt } from "../../../models/hunt.model";
-import { HuntReport } from "../../../models/hunt-report.model";
 import { Prediction } from "../../../models/prediction.model";
 import { Article, publicArticlesFilter } from "../../../models/article.model";
 import { HintCell, HintCellStatus } from "../../../models/hint-cell.model";
@@ -235,7 +234,7 @@ const KIND_VALUES: ItemKind[] = ["hint", "opdracht", "nieuws"];
 
 export interface FoxEvent {
   time: string;
-  kind: "hunt" | "hunt-report" | "hint";
+  kind: "hunt" | "hint";
   detail: string;
   latLng: { lat: number; lng: number } | null;
   rdText: string | null;
@@ -244,26 +243,22 @@ export interface FoxEvent {
 const MAX_FOX_EVENTS = 30;
 const at = (lng: number, lat: number) => ({ latLng: { lat, lng }, rdText: formatCoordinate(coordinateAt({ lat, lng })).rd8 });
 
-/** What we know of one fox team, oldest first (the newest 30): site hunts, our hunt reports, solved hint points, and the latest prediction */
+/** What we know of one fox team, oldest first (the newest 30): hunts synced from jotihunt.nl, solved hint points, and the latest prediction */
 export async function foxHistory(area: string) {
   const key = knownAreaName(area);
   if (!key) throw new ToolInputError(`Onbekend deelgebied: ${area}`);
-  const [hunts, reports, cells, prediction] = await Promise.all([
+  const [hunts, cells, prediction] = await Promise.all([
     Hunt.find({ area: new RegExp(`^${key}$`, "i") }).sort({ huntTime: -1 }).limit(MAX_FOX_EVENTS).lean(),
-    HuntReport.find({ area: key }).sort({ createdAt: -1 }).limit(MAX_FOX_EVENTS).lean(),
     HintCell.find({ area: key, status: HintCellStatus.Solved, articleId: publicArticlesFilter().id }).sort({ slotTime: -1 }).limit(MAX_FOX_EVENTS).lean(),
     Prediction.findOne({ area: key }).lean(),
   ]);
   const titles = new Map((await Article.find({ id: { $in: cells.map((cell) => cell.articleId) } }, { _id: 0, id: 1, title: 1 }).lean()).map((article) => [article.id, article.title]));
   const events: (FoxEvent & { sort: number })[] = [
     ...hunts.map((hunt) => {
-      const time = hunt.huntTime ?? hunt.updatedAt;
-      return { sort: time.getTime(), time: time.toISOString(), kind: "hunt" as const, detail: `hunt op jotihunt.nl: ${hunt.status}, ${hunt.points} punten`, latLng: null, rdText: null };
-    }),
-    ...reports.map((report) => {
-      const time = report.huntTime ?? report.takenAt ?? report.createdAt;
-      const position = report.location?.coordinates;
-      return { sort: time.getTime(), time: time.toISOString(), kind: "hunt-report" as const, detail: `hunt gemeld door ${report.reportedByName}`, ...(position?.length === 2 ? at(position[0], position[1]) : { latLng: null, rdText: null }) };
+      const time = hunt.huntTime ?? hunt.firstSeenAt ?? hunt.updatedAt;
+      const accuracy = hunt.location?.accuracy != null ? ` (±${Math.round(hunt.location.accuracy)} m)` : "";
+      const detail = `hunt via jotihunt.nl: ${hunt.statusText ?? hunt.status}, ${hunt.points} punten${accuracy}`;
+      return { sort: time.getTime(), time: time.toISOString(), kind: "hunt" as const, detail, ...(hunt.location ? at(hunt.location.lng, hunt.location.lat) : { latLng: null, rdText: null }) };
     }),
     ...cells.map((cell) => ({
       sort: cell.slotTime.getTime(),
@@ -327,7 +322,7 @@ export function appDataTools(ctx: IntelToolContext) {
       execute: () => safely("getAreas", () => areasOverview()),
     }),
     getFoxHistory: tool({
-      description: "Geschiedenis van één vossenteam, oud naar nieuw: hunts (jotihunt.nl), onze huntmeldingen met locatie, opgeloste hintpunten, en de laatste AI-voorspelling.",
+      description: "Geschiedenis van één vossenteam, oud naar nieuw: hunts (overgenomen van jotihunt.nl, met locatie en status), opgeloste hintpunten, en de laatste AI-voorspelling.",
       inputSchema: jsonSchema<{ area: string }>({ type: "object", properties: { area: { type: "string", enum: [...AREAS] } }, required: ["area"] }),
       execute: ({ area }) => safely("getFoxHistory", () => foxHistory(area)),
     }),

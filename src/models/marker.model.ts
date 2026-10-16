@@ -27,12 +27,12 @@ const MarkerSchema = new mongoose.Schema({
     default: MarkerType.Hint,
     required: true,
   },
-  /** Set on markers imported by the Jotiboard sync (absent: ours) */
+  /** Set on markers imported by the Jotiboard sync or made from a hunt synced from jotihunt.nl (absent: ours) */
   source: {
     type: String,
-    enum: ["jotiboard"],
+    enum: ["jotiboard", "jotihunt"],
   },
-  /** Jotiboard pin id (manualLocations key) of an imported marker */
+  /** Jotiboard pin id (manualLocations key) of an imported marker; the hunt's siteKey for a jotihunt marker */
   externalId: {
     type: String,
   },

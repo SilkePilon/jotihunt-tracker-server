@@ -1,17 +1,8 @@
 import { Area } from "../models/area.model";
 import { Article, publicArticlesFilter } from "../models/article.model";
-import { HuntReport } from "../models/hunt-report.model";
 import { AppNotification, type AppNotificationDocument } from "../models/notification.model";
 import { NotifierState } from "../models/notifier-state.model";
-import {
-  buildArticleNotification,
-  buildDeadlineNotification,
-  buildFoxStatusNotification,
-  diffAreaStatus,
-  dueDeadlineWarnings,
-  HUNT_SUBMIT_WINDOW_MS,
-  type NotificationInput,
-} from "./notifier.helpers";
+import { buildArticleNotification, buildFoxStatusNotification, diffAreaStatus, type NotificationInput } from "./notifier.helpers";
 import { currentGeneration, runTracked } from "../demo/demo-mode";
 import { deadline } from "./http-limits";
 import { sendToAll } from "./push.service";
@@ -21,6 +12,7 @@ const STATE_KEY = "notifier";
 const MAX_ARTICLES_PER_RUN = 3;
 
 interface NotifierOptions {
+  /** Unused since hunt deadlines are gone; kept for callers */
   now?: Date;
   send?: (notification: AppNotificationDocument) => Promise<unknown>;
   log?: { error(message: string, error?: unknown): void };
@@ -32,15 +24,14 @@ interface NotifierOptions {
 const PUSH_TRACK_LIMIT_MS = 8_000;
 
 /**
- * Compare the database with what was seen last and store a notification per change (fox status, new article,
- * hunt 10 minutes before its submit deadline), then push them. The first run per database only records the
+ * Compare the database with what was seen last and store a notification per change (fox status, new article), then
+ * push them. Hunt notifications come from the scraper cron (hunt-sync.service). The first run per database only records the
  * current state, so a restart or demo switch doesn't flood everyone. The new state is claimed with a
  * compare-and-set before anything is announced, so overlapping runs (cron overlap, a second process) never announce
  * the same change twice; when storing the notifications fails the state is rolled back so the next run re-detects.
  * @returns The created notifications
  */
 export async function runNotifier(options: NotifierOptions = {}): Promise<AppNotificationDocument[]> {
-  const now = options.now ?? new Date();
   const send = options.send ?? ((notification) => sendToAll(notification));
   const log = options.log ?? console;
 
@@ -94,29 +85,11 @@ export async function runNotifier(options: NotifierOptions = {}): Promise<AppNot
     inputs.push(...articles.slice(-MAX_ARTICLES_PER_RUN).map(buildArticleNotification));
   }
 
-  // Hunt time can lie before the upload, so look back a bit further than the submit window
-  const open = await HuntReport.find(
-    { submittedAt: null, deadlineWarnedAt: null, site: null, createdAt: { $gte: new Date(now.getTime() - 3 * HUNT_SUBMIT_WINDOW_MS) } },
-    { area: 1, huntTime: 1, takenAt: 1, createdAt: 1, reportedByName: 1, submittedAt: 1, deadlineWarnedAt: 1, site: 1, photo: 1 },
-  ).lean();
-  const claimedIds: unknown[] = [];
-  for (const report of dueDeadlineWarnings(open, now)) {
-    // Conditional claim: two overlapping runs never both warn
-    const claim = await HuntReport.updateOne({ _id: report._id, deadlineWarnedAt: null }, { $set: { deadlineWarnedAt: now } });
-    if (claim.modifiedCount === 1) {
-      claimedIds.push(report._id);
-      inputs.push(buildDeadlineNotification(report, now));
-    }
-  }
-
   let created: AppNotificationDocument[] = [];
   try {
     if (inputs.length > 0) created = await AppNotification.insertMany(inputs.map((input) => ({ ...input, createdAt: new Date() })));
   } catch (error) {
-    // Release the claims so the next run re-detects the warnings and changes instead of losing them
-    if (claimedIds.length > 0) {
-      await HuntReport.updateMany({ _id: { $in: claimedIds }, deadlineWarnedAt: now }, { $set: { deadlineWarnedAt: null } });
-    }
+    // Release the claim so the next run re-detects the changes instead of losing them
     if (ownsTransition) {
       await NotifierState.updateOne(
         { key: STATE_KEY, version: claimedVersion },

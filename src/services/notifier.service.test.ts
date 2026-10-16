@@ -1,14 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Area } from "../models/area.model";
 import { Article } from "../models/article.model";
-import { HuntReport } from "../models/hunt-report.model";
 import { AppNotification } from "../models/notification.model";
 import { NotifierState } from "../models/notifier-state.model";
-import { User } from "../models/user.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { runNotifier } from "./notifier.service";
 
-const MIN = 60 * 1000;
 const now = new Date("2026-10-17T20:00:00Z");
 const sent: string[] = [];
 const run = (at = now) => runNotifier({ now: at, send: async (notification) => void sent.push(notification.title) });
@@ -74,41 +71,6 @@ describe("runNotifier", () => {
     await run();
     await setAreas({ Alpha: "red", Bravo: "green" });
     expect((await run()).map((notification) => notification.data.area)).toEqual(["Bravo"]);
-  });
-
-  test("deadline warning once", async () => {
-    await run();
-    const user = await User.create({ name: "Sam" });
-    await HuntReport.create({ area: "bravo", photo: "p.jpg", reportedBy: user._id, reportedByName: "Sam", huntTime: new Date(now.getTime() - 11 * MIN), createdAt: new Date(now.getTime() - 11 * MIN) });
-    await HuntReport.create({ area: "alpha", photo: "q.jpg", reportedBy: user._id, reportedByName: "Sam", huntTime: new Date(now.getTime() - 11 * MIN), createdAt: new Date(now.getTime() - 11 * MIN), submittedAt: now });
-    const created = await run();
-    expect(created.map((notification) => notification.type)).toEqual(["hunt-deadline"]);
-    expect(await run()).toHaveLength(0);
-  });
-
-  test("a hunt without a photo is warned to confirm, unless jotihunt.nl already lists it", async () => {
-    await run();
-    const user = await User.create({ name: "Sam" });
-    const at = new Date(now.getTime() - 11 * MIN);
-    await HuntReport.create({ area: "bravo", reportedBy: user._id, reportedByName: "Sam", huntTime: at, createdAt: at });
-    await HuntReport.create({ area: "alpha", reportedBy: user._id, reportedByName: "Sam", huntTime: at, createdAt: at, site: { status: "Goedgekeurd", points: 6, seenAt: now } });
-    const created = await run();
-    expect(created.map((notification) => notification.title)).toEqual(["Bevestig hunt Bravo op jotihunt.nl, nog 4 min"]);
-  });
-
-  test("a failed insert releases the deadline claim so the next run warns", async () => {
-    await run();
-    const user = await User.create({ name: "Sam" });
-    const report = await HuntReport.create({ area: "bravo", photo: "p.jpg", reportedBy: user._id, reportedByName: "Sam", huntTime: new Date(now.getTime() - 11 * MIN), createdAt: new Date(now.getTime() - 11 * MIN) });
-    const spy = spyOn(AppNotification, "insertMany").mockRejectedValueOnce(new Error("boom"));
-    try {
-      await expect(run()).rejects.toThrow("boom");
-    } finally {
-      spy.mockRestore();
-    }
-    expect((await HuntReport.findById(report._id))?.deadlineWarnedAt ?? null).toBeNull();
-    const created = await run();
-    expect(created.map((notification) => notification.type)).toEqual(["hunt-deadline"]);
   });
 
   test("a failing push does not fail the run", async () => {
