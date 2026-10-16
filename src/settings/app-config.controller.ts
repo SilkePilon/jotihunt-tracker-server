@@ -5,6 +5,7 @@ import multer from "multer";
 import { respond, ServiceError } from "../http/service-error";
 import { logger } from "../logger";
 import { detectPhotoType } from "../middleware/photo-upload.middleware";
+import { testJotihuntLogin } from "../services/jotihunt-scraper.service";
 import * as traccarService from "../services/traccar.service";
 import { adminConfig, publicConfig, setGeneral, setPlain, setSecret, type SecretName } from "./app-config";
 
@@ -104,4 +105,11 @@ export async function getTraccarGroups(_req: Request, res: Response) {
     const groups = await traccarService.getGroups();
     return groups.map((group) => ({ id: group.id, name: group.name })).sort((a, b) => a.id - b.id);
   });
+}
+
+/** Test the posted login (form not yet saved) or, without a body, the saved one */
+export async function postJotihuntTestLogin(req: Request, res: Response) {
+  const { username, password } = req.body ?? {};
+  const login = typeof username === "string" && typeof password === "string" && username && password ? { username, password } : undefined;
+  return res.status(200).json(await testJotihuntLogin(login));
 }

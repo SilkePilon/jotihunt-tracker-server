@@ -1,6 +1,7 @@
 import cron from "node-cron";
 import { logger } from "../logger";
 import { reportCronErrors } from "../sentry";
+import { jotihuntLogin } from "../services/jotihunt-scraper.service";
 import { isPushConfigured } from "../services/push.service";
 import summarizeArticles from "./article-summaries.cron";
 import splitHints from "./hint-split.cron";
@@ -22,10 +23,12 @@ export function scheduleCrons() {
     logger.warn("JOTIHUNT_API_URL is not set, skipping areas and articles cron jobs");
   }
 
-  if (process.env.JOTIHUNT_WEB_URL && process.env.JOTIHUNT_WEB_USERNAME && process.env.JOTIHUNT_WEB_PASSWORD) {
-    cron.schedule("0 * * * * *", reportCronErrors("jotihunt-scraper", scrapeJotihuntWebsite), { name: "jotihunt-scraper", noOverlap: true });
+  if (process.env.JOTIHUNT_WEB_URL) {
+    // The login can be set later in Beheer: the job skips runs until it is
+    cron.schedule("0 * * * * *", reportCronErrors("jotihunt-scraper", async () => (jotihuntLogin() ? scrapeJotihuntWebsite() : undefined)), { name: "jotihunt-scraper", noOverlap: true });
+    if (!jotihuntLogin()) logger.warn("No Jotihunt website login (Beheer → Algemeen or JOTIHUNT_WEB_USERNAME/PASSWORD): the website scraper waits");
   } else {
-    logger.warn("JOTIHUNT_WEB_URL/JOTIHUNT_WEB_USERNAME/JOTIHUNT_WEB_PASSWORD not set, skipping website scraper cron job");
+    logger.warn("JOTIHUNT_WEB_URL is not set, skipping website scraper cron job");
   }
 
   // Group logos from the public jotihunt.nl/subscriptions page: at startup and every 6 hours

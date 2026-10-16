@@ -138,6 +138,8 @@ router.put("/config/secrets/:name", validate(secretValidation), configController
 router.delete("/config/secrets/:name", validate(secretNameValidation), configController.deleteSecret);
 router.post("/config/logo", configController.parseLogo, configController.postLogo);
 router.get("/traccar/groups", configController.getTraccarGroups);
+// Beheer → Algemeen: try the Jotihunt website login (posted or saved) in a fresh browser
+router.post("/jotihunt/test-login", configController.postJotihuntTestLogin);
 // Beheer → AI: Google's model list, the model per AI function, and a test call per function
 router.get("/ai/models", aiAdminController.getModels);
 router.put(
