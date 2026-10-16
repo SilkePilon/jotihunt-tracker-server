@@ -37,8 +37,8 @@ export function vapidPublicKey(): string | null {
   return process.env.VAPID_PUBLIC_KEY?.trim() || null;
 }
 
-/** True when the VAPID keys are set (checked once, then cached). */
-export function isPushConfigured(): boolean {
+/** True when the VAPID keys are set (checked once, then cached; the scheduler checks first, with the app logger). */
+export function isPushConfigured(log: Pick<PushLogger, "error"> = console): boolean {
   if (configured !== null) return configured;
   const publicKey = vapidPublicKey();
   const privateKey = process.env.VAPID_PRIVATE_KEY?.trim();
@@ -46,7 +46,7 @@ export function isPushConfigured(): boolean {
   try {
     webpush.setVapidDetails(process.env.VAPID_SUBJECT?.trim() || "mailto:jotihunt@example.com", publicKey, privateKey);
   } catch (error) {
-    console.error("Invalid VAPID configuration, push notifications are off", (error as Error)?.message);
+    log.error("Invalid VAPID configuration, push notifications are off", { message: (error as Error)?.message });
     return (configured = false);
   }
   return (configured = true);
@@ -78,7 +78,7 @@ export function resetPushConfig() {
 /** Push a notification to every subscribed device whose user has its type switched on. Never throws. */
 export async function sendToAll(notification: PushNotificationInput, log: PushLogger = console): Promise<{ sent: number; removed: number }> {
   const result = { sent: 0, removed: 0 };
-  if (!isPushConfigured()) return result;
+  if (!isPushConfigured(log)) return result;
 
   try {
     const subscriptions = await PushSubscription.find().lean();

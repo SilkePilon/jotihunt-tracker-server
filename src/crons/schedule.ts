@@ -46,7 +46,7 @@ export function scheduleCrons() {
 
   // Notifications: fox status changes, new articles and hunt deadlines (push + in-app feed)
   cron.schedule("*/10 * * * * *", reportCronErrors("notifier", notify), { name: "notifier", noOverlap: true });
-  if (!isPushConfigured()) {
+  if (!isPushConfigured(logger)) {
     logger.warn("VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY not set, push notifications are off (in-app alerts still work)");
   }
 }

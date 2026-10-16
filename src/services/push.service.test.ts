@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import webpush from "web-push";
 import { PushSubscription } from "../models/push-subscription.model";
 import { User } from "../models/user.model";
@@ -110,15 +110,14 @@ describe("sendToAll", () => {
   test("resolves without sending when the VAPID keys are invalid", async () => {
     await subscribe("a", "https://push/a");
     const saved = process.env.VAPID_PUBLIC_KEY;
-    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    const logged: unknown[][] = [];
     try {
       process.env.VAPID_PUBLIC_KEY = "not-a-key";
       resetPushConfig();
-      expect(await sendToAll(notification("hint"), silent)).toEqual({ sent: 0, removed: 0 });
+      expect(await sendToAll(notification("hint"), { error: (...args) => void logged.push(args), warn() {} })).toEqual({ sent: 0, removed: 0 });
       expect(calls).toEqual([]);
-      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(logged).toHaveLength(1);
     } finally {
-      errorSpy.mockRestore();
       process.env.VAPID_PUBLIC_KEY = saved;
       resetPushConfig();
     }
