@@ -15,6 +15,7 @@ import {
   type BotMessageKind,
 } from "./telegram.helpers";
 import { decryptSession, encryptSession, isValidSessionKey } from "./session-crypto";
+import { plain, secret } from "../settings/app-config";
 import { errorText } from "../utils/error-text";
 import type { ServiceLogger } from "../utils/service-logger";
 import { serviceSlot } from "../utils/service-slot";
@@ -95,15 +96,16 @@ export interface TelegramConfig {
 export const DEFAULT_BOT_USERNAME = "Jotihunt_bot";
 
 /**
- * Config from the environment, or null (feature off) without TELEGRAM_API_ID/TELEGRAM_API_HASH. A missing or invalid
- * TELEGRAM_SESSION_KEY also turns the feature off, with a warning.
+ * Config from Beheer (else TELEGRAM_API_ID / TELEGRAM_API_HASH / TELEGRAM_BOT_USERNAME), or null (feature off) without
+ * an API ID and hash. A missing or invalid TELEGRAM_SESSION_KEY also turns the feature off, with a warning.
  */
-export function telegramConfigFromEnv(env: Record<string, string | undefined>, warn: (message: string) => void): TelegramConfig | null {
-  const apiId = Number(env.TELEGRAM_API_ID?.trim());
-  const apiHash = env.TELEGRAM_API_HASH?.trim();
-  if (!env.TELEGRAM_API_ID?.trim() || !apiHash) return null;
+export function telegramConfigFromSettings(env: Record<string, string | undefined>, warn: (message: string) => void): TelegramConfig | null {
+  const rawId = plain("telegramApiId");
+  const apiHash = secret("telegramApiHash");
+  if (!rawId || !apiHash) return null;
+  const apiId = Number(rawId);
   if (!Number.isInteger(apiId) || apiId <= 0) {
-    warn("TELEGRAM_API_ID is not a number, Telegram is off");
+    warn("Telegram API ID is not a number, Telegram is off");
     return null;
   }
   const sessionKey = env.TELEGRAM_SESSION_KEY?.trim() ?? "";
@@ -111,7 +113,7 @@ export function telegramConfigFromEnv(env: Record<string, string | undefined>, w
     warn("TELEGRAM_SESSION_KEY is missing or not 32 bytes (base64), Telegram is off. Generate one with: openssl rand -base64 32");
     return null;
   }
-  return { apiId, apiHash, sessionKey, botUsername: env.TELEGRAM_BOT_USERNAME?.trim().replace(/^@/, "") || DEFAULT_BOT_USERNAME };
+  return { apiId, apiHash, sessionKey, botUsername: plain("telegramBotUsername") || DEFAULT_BOT_USERNAME };
 }
 
 // --- API shapes ---------------------------------------------------------------------------------------------------
@@ -130,6 +132,8 @@ export interface TelegramAdminStatus {
   connected: boolean;
   /** Short Dutch description of the last problem (no secrets) */
   lastError?: string;
+  /** Unavailable only because the API ID/hash are missing (set them in Beheer) */
+  needsAppCredentials?: boolean;
 }
 
 export interface TelegramMessages {
@@ -156,8 +160,10 @@ interface PendingLogin {
 }
 
 export interface TelegramServiceOptions {
-  /** null: feature off (no API id/hash), the routes still answer */
+  /** null: feature off (no API id/hash), the routes still answer. Replaced by `reconfigure()` */
   config: TelegramConfig | null;
+  /** TELEGRAM_SESSION_KEY is valid: without app credentials the status asks for them */
+  sessionKeyOk?: boolean;
   /** Connection to the REAL database (the demo state store's), so the link survives demo mode */
   connection: Connection;
   gateway: TelegramGatewayFactory;
@@ -240,8 +246,19 @@ export class TelegramService {
     await active?.cancel().catch(() => undefined);
   }
 
+  /** New app credentials from Beheer: drop the current connection and connect again with the stored link (if any). */
+  async reconfigure(config: TelegramConfig | null): Promise<void> {
+    await this.stop();
+    this.stopped = false;
+    this.linkGeneration++;
+    this.lastError = null;
+    this.retryDelay = this.options.retryInitialMs ?? 5_000;
+    this.options.config = config;
+    if (config) await this.connectStored();
+  }
+
   async status(): Promise<TelegramAdminStatus> {
-    if (!this.options.config) return { state: "unavailable", connected: false };
+    if (!this.options.config) return { state: "unavailable", connected: false, ...(this.options.sessionKeyOk && { needsAppCredentials: true }) };
     const pending = this.pending;
     if (pending) {
       const status: TelegramAdminStatus = { state: pending.state, connected: false };

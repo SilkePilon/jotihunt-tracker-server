@@ -8,7 +8,8 @@ import { telegramMessageModel } from "../models/telegram-message.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { FakeGateway, SESSION } from "../test/telegram-gateway";
 import { decryptSession, encryptSession } from "./session-crypto";
-import { SessionRevokedError, telegramConfigFromEnv, TelegramService, type TelegramConfig, type TelegramIncomingMessage } from "./telegram.service";
+import { initAppConfig, resetAppConfig, setPlain, setSecret } from "../settings/app-config";
+import { SessionRevokedError, telegramConfigFromSettings, TelegramService, type TelegramConfig, type TelegramIncomingMessage } from "./telegram.service";
 
 const KEY = randomBytes(32).toString("base64");
 const CONFIG: TelegramConfig = { apiId: 1, apiHash: "hash", sessionKey: KEY, botUsername: "Jotihunt_bot" };
@@ -72,16 +73,82 @@ afterAll(async () => {
   await disconnectTestDb();
 });
 
-describe("telegramConfigFromEnv", () => {
-  test("off without id/hash, off with a bad session key (warning), default bot username", () => {
+describe("telegramConfigFromSettings", () => {
+  const SETTINGS_KEY = randomBytes(32).toString("base64");
+  afterAll(() => resetAppConfig());
+
+  test("off without id/hash, off with a bad session key (warning), default bot username, env fallback", async () => {
     const warnings: string[] = [];
     const warn = (message: string) => warnings.push(message);
-    expect(telegramConfigFromEnv({}, warn)).toBeNull();
+    resetAppConfig();
+    await initAppConfig(realDb, {});
+    expect(telegramConfigFromSettings({}, warn)).toBeNull();
     expect(warnings).toEqual([]);
-    expect(telegramConfigFromEnv({ TELEGRAM_API_ID: "1", TELEGRAM_API_HASH: "h", TELEGRAM_SESSION_KEY: "kort" }, warn)).toBeNull();
+    await initAppConfig(realDb, { TELEGRAM_API_ID: "1", TELEGRAM_API_HASH: "h" });
+    expect(telegramConfigFromSettings({ TELEGRAM_SESSION_KEY: "kort" }, warn)).toBeNull();
     expect(warnings).toHaveLength(1);
-    expect(telegramConfigFromEnv({ TELEGRAM_API_ID: "1", TELEGRAM_API_HASH: "h", TELEGRAM_SESSION_KEY: KEY }, warn)).toEqual({ ...CONFIG, apiHash: "h" });
-    expect(telegramConfigFromEnv({ TELEGRAM_API_ID: "1", TELEGRAM_API_HASH: "h", TELEGRAM_SESSION_KEY: KEY, TELEGRAM_BOT_USERNAME: "@TestBot" }, warn)?.botUsername).toBe("TestBot");
+    expect(telegramConfigFromSettings({ TELEGRAM_SESSION_KEY: KEY }, warn)).toEqual({ ...CONFIG, apiHash: "h" });
+    await initAppConfig(realDb, { TELEGRAM_API_ID: "1", TELEGRAM_API_HASH: "h", TELEGRAM_BOT_USERNAME: "@TestBot" });
+    expect(telegramConfigFromSettings({ TELEGRAM_SESSION_KEY: KEY }, warn)?.botUsername).toBe("TestBot");
+    await initAppConfig(realDb, { TELEGRAM_API_ID: "nope", TELEGRAM_API_HASH: "h" });
+    expect(telegramConfigFromSettings({ TELEGRAM_SESSION_KEY: KEY }, warn)).toBeNull();
+    expect(warnings).toHaveLength(2);
+  });
+
+  test("null without API ID/hash; built from Beheer values when set", async () => {
+    resetAppConfig();
+    await initAppConfig(realDb, { TELEGRAM_SESSION_KEY: KEY, SETTINGS_KEY });
+    expect(telegramConfigFromSettings({ TELEGRAM_SESSION_KEY: KEY }, () => {})).toBeNull();
+    await setPlain({ telegramApiId: "2451873", telegramBotUsername: "@Other_bot" }, null);
+    await setSecret("telegramApiHash", "abc123", null);
+    expect(telegramConfigFromSettings({ TELEGRAM_SESSION_KEY: KEY }, () => {})).toEqual({ apiId: 2451873, apiHash: "abc123", sessionKey: KEY, botUsername: "Other_bot" });
+  });
+
+  test("status says app credentials are needed when only they are missing", async () => {
+    const off = new TelegramService({ config: null, connection: realDb, gateway: () => { throw new Error("unused"); }, logger, sessionKeyOk: true });
+    expect(await off.status()).toEqual({ state: "unavailable", connected: false, needsAppCredentials: true });
+  });
+});
+
+describe("reconfigure", () => {
+  test("new credentials drop the connection and connect again with the stored link", async () => {
+    await storeLink();
+    const configs: TelegramConfig[] = [];
+    const restarted = new TelegramService({
+      config: CONFIG,
+      connection: realDb,
+      gateway: (config) => {
+        configs.push(config);
+        const gateway = new FakeGateway();
+        gateways.push(gateway);
+        return gateway;
+      },
+      logger,
+      retryInitialMs: 5,
+    });
+    await restarted.start();
+    const first = gateways.at(-1)!;
+    expect(first.connectedWith).toBe(SESSION);
+
+    await restarted.reconfigure({ ...CONFIG, apiId: 2, apiHash: "new" });
+    expect(first.cancelled).toBe(true);
+    expect(configs.at(-1)).toMatchObject({ apiId: 2, apiHash: "new" });
+    expect(gateways.at(-1)!.connectedWith).toBe(SESSION);
+    expect(await restarted.status()).toMatchObject({ state: "linked", connected: true });
+
+    await restarted.reconfigure(null);
+    expect(gateways.at(-1)!.cancelled).toBe(true);
+    expect(restarted.available).toBe(false);
+    expect((await restarted.status()).state).toBe("unavailable");
+    await restarted.stop();
+  });
+
+  test("a pending QR login is cancelled", async () => {
+    await service.startLink("Admin");
+    const login = gateways.at(-1)!;
+    await service.reconfigure({ ...CONFIG, apiId: 3 });
+    expect(login.cancelled).toBe(true);
+    expect((await service.status()).state).toBe("unlinked");
   });
 });
 

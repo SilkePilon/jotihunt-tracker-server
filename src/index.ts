@@ -8,7 +8,7 @@ import { setAuthConnection } from "./auth/auth-db";
 import { ensurePasswordless } from "./auth/migrate";
 import { initPredictionSetting } from "./settings/prediction-setting";
 import { initHuntableAreas } from "./settings/huntable-areas-setting";
-import { initAppConfig, settingsKeyOk } from "./settings/app-config";
+import { initAppConfig, onAppConfigChange, settingsKeyOk } from "./settings/app-config";
 import { aiAvailable } from "./services/ai/model";
 import { getDemoStateStore, initDemoMode, onDemoSwitch } from "./demo/database-switch";
 import { installDemoWorld } from "./demo/demo-world";
@@ -16,7 +16,8 @@ import { huntOcr } from "./services/hunt-ocr.instance";
 import { syncVehicleGroups } from "./services/tracker-onboarding.helpers";
 import { vehicleGroups } from "./services/tracker-onboarding.instance";
 import { isTraccarConfigured, usesLegacyTraccarEnv } from "./services/traccar-http";
-import { setTelegramService, telegramConfigFromEnv, TelegramService } from "./services/telegram.service";
+import { isValidSessionKey } from "./services/session-crypto";
+import { setTelegramService, telegramConfigFromSettings, TelegramService } from "./services/telegram.service";
 import { createMtcuteGateway } from "./services/telegram.gateway";
 import { HappyHourService } from "./services/happy-hour.service";
 import { JotiboardClient } from "./services/jotiboard.client";
@@ -120,12 +121,12 @@ onDemoSwitch(async () => {
 const happyHour = new HappyHourService({ logger: serviceLogger });
 await happyHour.rebuild().catch((error) => logger.error("Could not schedule the happy hour alerts", error));
 onDemoSwitch(() => happyHour.rebuild());
-const telegramConfig = telegramConfigFromEnv(process.env, (message) => logger.warn(message));
-if (!process.env.TELEGRAM_API_ID?.trim() || !process.env.TELEGRAM_API_HASH?.trim()) {
-  logger.warn("TELEGRAM_API_ID/TELEGRAM_API_HASH not set, tegenhunts are not read from Telegram");
-}
+const telegramWarn = (message: string) => logger.warn(message);
+const telegramConfig = telegramConfigFromSettings(process.env, telegramWarn);
+if (!telegramConfig) logger.warn("No Telegram app credentials (Beheer → Koppelingen or TELEGRAM_API_ID/TELEGRAM_API_HASH): tegenhunts are not read from Telegram");
 const telegram = new TelegramService({
   config: telegramConfig,
+  sessionKeyOk: isValidSessionKey(process.env.TELEGRAM_SESSION_KEY?.trim() ?? ""),
   connection: getDemoStateStore().connection,
   gateway: createMtcuteGateway,
   logger: serviceLogger,
@@ -133,6 +134,15 @@ const telegram = new TelegramService({
 });
 setTelegramService(telegram);
 telegram.start().catch((error) => logger.error("Could not start the Telegram listener", error));
+// New app credentials in Beheer: reconnect with them
+let telegramKey = JSON.stringify(telegramConfig);
+onAppConfigChange((part) => {
+  if (part !== "secrets") return;
+  const next = telegramConfigFromSettings(process.env, telegramWarn);
+  if (JSON.stringify(next) === telegramKey) return;
+  telegramKey = JSON.stringify(next);
+  telegram.reconfigure(next).catch((error) => logger.error("Could not restart Telegram with the new app credentials", error));
+});
 
 // Life360: team members without our app share their location through a Life360 circle. The link lives in the real
 // database like the Telegram link; polling runs in the background so Life360 never delays the start
