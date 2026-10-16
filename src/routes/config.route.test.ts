@@ -5,7 +5,9 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import mongoose, { type Connection } from "mongoose";
+import { modelListOptions } from "../controllers/ai-admin.controller";
 import { User } from "../models/user.model";
+import { resetModelListCache } from "../services/ai/model-list";
 import { initAppConfig, resetAppConfig } from "../settings/app-config";
 import { tokenFor, withSession } from "../test/auth";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
@@ -105,5 +107,43 @@ describe("admin config", () => {
     const res = await fetch(`${base}/admin/config/logo`, as(admin, { method: "POST", body: form }));
     expect(res.status).toBe(400);
     expect((await res.json()).message).toBe("Kies een PNG-, JPG-, WebP- of SVG-afbeelding.");
+  });
+});
+
+describe("admin AI", () => {
+  test("model list comes from Google (key in a header) and is filtered", async () => {
+    resetModelListCache();
+    await fetch(`${base}/admin/config/secrets/geminiApiKey`, json(admin, "PUT", { value: "AIza-test-key" }));
+    let seenKey = null as string | null;
+    modelListOptions.fetchImpl = (async (_url: string, init?: RequestInit) => {
+      seenKey = new Headers(init?.headers).get("x-goog-api-key");
+      return Response.json({ models: [{ name: "models/gemini-3.8-flash", displayName: "Gemini 3.8 Flash", supportedGenerationMethods: ["generateContent"] }, { name: "models/text-embedding-004", supportedGenerationMethods: ["embedContent"] }] });
+    }) as typeof fetch;
+    const res = await fetch(`${base}/admin/ai/models`, as(admin));
+    expect(res.status).toBe(200);
+    expect((await res.json()).models).toEqual([{ id: "gemini-3.8-flash", displayName: "Gemini 3.8 Flash", group: "latest" }]);
+    expect(seenKey).toBe("AIza-test-key");
+    modelListOptions.fetchImpl = undefined;
+  });
+
+  test("a rejected key is a 400 with code key_rejected", async () => {
+    resetModelListCache();
+    await fetch(`${base}/admin/config/secrets/geminiApiKey`, json(admin, "PUT", { value: "AIza-bad-key" }));
+    modelListOptions.fetchImpl = (async () => new Response("{}", { status: 403 })) as unknown as typeof fetch;
+    const res = await fetch(`${base}/admin/ai/models`, as(admin));
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe("key_rejected");
+    modelListOptions.fetchImpl = undefined;
+  });
+
+  test("PUT models saves per slot; unknown slots are 400", async () => {
+    const ok = await fetch(`${base}/admin/ai/models`, json(admin, "PUT", { models: { split: "gemini-3.8-flash-lite", ocr: null } }));
+    expect((await ok.json()).ai.split).toEqual({ value: "gemini-3.8-flash-lite", source: "db" });
+    expect((await fetch(`${base}/admin/ai/models`, json(admin, "PUT", { models: { nope: "x" } }))).status).toBe(400);
+  });
+
+  test("test call without a key answers ok:false with the Dutch message", async () => {
+    const res = await fetch(`${base}/admin/ai/test/ocr`, as(admin, { method: "POST" }));
+    expect(await res.json()).toEqual({ ok: false, error: "Geen Gemini-sleutel ingesteld" });
   });
 });
