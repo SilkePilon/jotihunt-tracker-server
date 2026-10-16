@@ -8,6 +8,7 @@ import { jotiboardImporter, type JotiboardCounts, type JotiboardImporter } from 
 import { decryptSession, encryptSession } from "./telegram.helpers";
 import { errorText } from "../utils/error-text";
 import type { ServiceLogger } from "../utils/service-logger";
+import { serviceSlot } from "../utils/service-slot";
 
 export interface JotiboardServiceOptions {
   /** null: feature off (no JOTIBOARD_SESSION_KEY), the routes still answer */
@@ -365,12 +366,10 @@ export class JotiboardService {
 
 // --- Process instance -----------------------------------------------------------------------------------------------
 
-let instance: JotiboardService | null = null;
+const slot = serviceSlot<JotiboardService>("Jotiboard is niet ingesteld op de server.");
 
-export function getJotiboardService(): JotiboardService | null {
-  return instance;
-}
-
-export function setJotiboardService(service: JotiboardService | null) {
-  instance = service;
-}
+/** The service of this process; null before startup wiring (index.ts) and in tests that don't set one. */
+export const getJotiboardService = slot.get;
+export const setJotiboardService = slot.set;
+/** The service, or a 503 when none is wired up */
+export const requireJotiboardService = slot.require;

@@ -1,40 +1,33 @@
 import { Request, Response } from "express";
 import { respond, ServiceError } from "../http/service-error";
-import { getLife360Service, type Life360Service } from "../services/life360.service";
-
-/** Without a service (not wired up yet) the routes answer as if Life360 is off. */
-function requireService(): Life360Service {
-  const service = getLife360Service();
-  if (!service) throw new ServiceError(503, "Life360 is niet ingesteld op de server.");
-  return service;
-}
+import { getLife360Service, requireLife360Service } from "../services/life360.service";
 
 export async function getStatus(_req: Request, res: Response) {
   return respond(res, 200, async () => getLife360Service()?.status() ?? { state: "unavailable" });
 }
 
 export async function sendCode(req: Request, res: Response) {
-  return respond(res, 200, () => requireService().sendCode(String(req.body.email)));
+  return respond(res, 200, () => requireLife360Service().sendCode(String(req.body.email)));
 }
 
 export async function verifyCode(req: Request, res: Response) {
-  return respond(res, 200, () => requireService().verifyCode(String(req.body.code), req.user!.name ?? null));
+  return respond(res, 200, () => requireLife360Service().verifyCode(String(req.body.code), req.user!.name ?? null));
 }
 
 export async function chooseCircle(req: Request, res: Response) {
-  return respond(res, 200, () => requireService().chooseCircle(String(req.body.circleId), req.user!.name ?? null));
+  return respond(res, 200, () => requireLife360Service().chooseCircle(String(req.body.circleId), req.user!.name ?? null));
 }
 
 export async function pasteToken(req: Request, res: Response) {
-  return respond(res, 200, () => requireService().pasteToken(String(req.body.token), req.user!.name ?? null));
+  return respond(res, 200, () => requireLife360Service().pasteToken(String(req.body.token), req.user!.name ?? null));
 }
 
 export async function refresh(_req: Request, res: Response) {
-  return respond(res, 202, () => requireService().refresh());
+  return respond(res, 202, () => requireLife360Service().refresh());
 }
 
 export async function unlink(_req: Request, res: Response) {
-  return respond(res, 200, () => requireService().unlink());
+  return respond(res, 200, () => requireLife360Service().unlink());
 }
 
 export async function getMembers(_req: Request, res: Response) {

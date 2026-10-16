@@ -18,6 +18,7 @@ import {
 import { decryptSession, encryptSession } from "./telegram.helpers";
 import { errorText } from "../utils/error-text";
 import type { ServiceLogger } from "../utils/service-logger";
+import { serviceSlot } from "../utils/service-slot";
 
 export interface Life360ServiceOptions {
   /** null: feature off (no LIFE360_SESSION_KEY), the routes still answer */
@@ -646,13 +647,10 @@ export class Life360Service {
 
 // --- Process instance -----------------------------------------------------------------------------------------------
 
-let instance: Life360Service | null = null;
+const slot = serviceSlot<Life360Service>("Life360 is niet ingesteld op de server.");
 
 /** The service of this process; null before startup wiring (index.ts) and in tests that don't set one. */
-export function getLife360Service(): Life360Service | null {
-  return instance;
-}
-
-export function setLife360Service(service: Life360Service | null) {
-  instance = service;
-}
+export const getLife360Service = slot.get;
+export const setLife360Service = slot.set;
+/** The service, or a 503 when none is wired up */
+export const requireLife360Service = slot.require;

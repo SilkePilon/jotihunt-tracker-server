@@ -5,6 +5,7 @@ import type { BuildingsApi } from "./buildings.client";
 import { encodeTile, inNetherlands, MAX_RADIUS_KM, parseTileId, tileBounds, tileId, tilesAround, toBuildingFeatures, type TileXY } from "./buildings.helpers";
 import { errorText } from "../utils/error-text";
 import type { ServiceLogger } from "../utils/service-logger";
+import { serviceSlot } from "../utils/service-slot";
 
 export interface BuildingsJob {
   kind: "refresh" | "prefetch";
@@ -246,12 +247,10 @@ export class BuildingsService {
   }
 }
 
-let instance: BuildingsService | null = null;
+const slot = serviceSlot<BuildingsService>("3D-gebouwen zijn niet beschikbaar op de server.");
 
-export function getBuildingsService(): BuildingsService | null {
-  return instance;
-}
-
-export function setBuildingsService(service: BuildingsService | null) {
-  instance = service;
-}
+/** The service of this process; null before startup wiring (index.ts) and in tests that don't set one. */
+export const getBuildingsService = slot.get;
+export const setBuildingsService = slot.set;
+/** The service, or a 503 when none is wired up */
+export const requireBuildingsService = slot.require;

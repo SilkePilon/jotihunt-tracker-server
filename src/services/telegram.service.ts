@@ -19,6 +19,7 @@ import {
 } from "./telegram.helpers";
 import { errorText } from "../utils/error-text";
 import type { ServiceLogger } from "../utils/service-logger";
+import { serviceSlot } from "../utils/service-slot";
 
 // --- Gateway (the Telegram client, mtcute in telegram.gateway.ts; faked in tests) --------------------------------
 
@@ -661,13 +662,10 @@ export class TelegramService {
 
 // --- Process instance ---------------------------------------------------------------------------------------------
 
-let instance: TelegramService | null = null;
+const slot = serviceSlot<TelegramService>("Telegram is niet ingesteld op de server.");
 
 /** The service of this process; null before startup wiring (index.ts) and in tests that don't set one. */
-export function getTelegramService(): TelegramService | null {
-  return instance;
-}
-
-export function setTelegramService(service: TelegramService | null) {
-  instance = service;
-}
+export const getTelegramService = slot.get;
+export const setTelegramService = slot.set;
+/** The service, or a 503 when none is wired up */
+export const requireTelegramService = slot.require;
