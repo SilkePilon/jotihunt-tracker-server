@@ -4,8 +4,6 @@ import { respond } from "../http/service-error";
 import { getReadState, markArticleRead } from "../services/article-read.service";
 import { sendCachedJson } from "../services/response-cache";
 
-export { publicArticlesFilter };
-
 export async function getArticles(_req: Request, res: Response) {
   // Articles are upserted in place (never wiped/reinserted), so natural insertion order
   // no longer reflects publish order. Sort explicitly so clients that assume the newest

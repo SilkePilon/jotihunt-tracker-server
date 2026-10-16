@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import type { Request, Response } from "express";
 import { logger } from "../logger";
-import { errorHandler, isDatabaseUnavailable } from "./error.middleware";
+import { isDatabaseUnavailable } from "../utils/database-errors";
+import { errorHandler } from "./error.middleware";
 
 const named = (name: string, message = "x") => Object.assign(new Error(message), { name });
 

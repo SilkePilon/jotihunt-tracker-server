@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { Article } from "../models/article.model";
+import { Article, publicArticlesFilter } from "../models/article.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
-import { publicArticlesFilter } from "./articles.controller";
 
 beforeAll(connectTestDb);
 beforeEach(clearTestDb);

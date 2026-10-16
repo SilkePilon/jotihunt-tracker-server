@@ -3,8 +3,6 @@ import { logger } from "../logger";
 import { redactPath, reportRequestError, shouldReportRequestError } from "../sentry";
 import { isDatabaseUnavailable } from "../utils/database-errors";
 
-export { isDatabaseUnavailable };
-
 /** Fallback error handler (Express 5 forwards rejected promises from async handlers here). */
 export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
   const { status = 500, message } = (err ?? {}) as { status?: number; message?: string };
