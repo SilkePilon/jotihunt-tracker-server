@@ -5,6 +5,12 @@ import { logger } from "../logger";
 import { useSession } from "../auth/sessions";
 import { isObjectIdString } from "../utils/mongo";
 
+/**
+ * The per-request user without its read articles (grows with every opened article; only GET /articles/read reads
+ * them, from its own query). Saves write only modified paths, so a save of req.user never touches readArticles.
+ */
+const WITHOUT_READ_STATE = { readArticles: 0 } as const;
+
 function denied(res: Response) {
   return res.status(401).json({ message: "Access denied" });
 }
@@ -38,7 +44,7 @@ export default async function verifyToken(req: Request, res: Response, next: Nex
     if (!session) return denied(res);
     let user;
     try {
-      user = await User.findById(session.user);
+      user = await User.findById(session.user, WITHOUT_READ_STATE);
     } catch (error) {
       return next(error);
     }
@@ -52,7 +58,7 @@ export default async function verifyToken(req: Request, res: Response, next: Nex
   if (!isObjectIdString(decoded._id) || typeof decoded.did !== "string") return denied(res);
   let user;
   try {
-    user = await User.findById(decoded._id);
+    user = await User.findById(decoded._id, WITHOUT_READ_STATE);
   } catch (error) {
     return next(error);
   }
