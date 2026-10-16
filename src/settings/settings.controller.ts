@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { logger } from "../logger";
 import { getHuntableAreas, setHuntableAreas } from "./huntable-areas-setting";
+import { isHuntPhotoEnabled, setHuntPhotoEnabled } from "./hunt-photo-setting";
 import { isPredictionEnabled, setPredictionEnabled } from "./prediction-setting";
 
 export function getPredictionSetting(_req: Request, res: Response) {
@@ -21,4 +22,14 @@ export async function putHuntableAreasSetting(req: Request, res: Response) {
   const areas = await setHuntableAreas(req.body.areas, req.user?.name ?? null);
   logger.info(`Huntable areas set to ${areas.length ? areas.join(", ") : "(none)"} by ${req.user?.name ?? req.user?._id}`);
   return res.status(200).json({ areas });
+}
+
+export function getHuntPhotoSetting(_req: Request, res: Response) {
+  return res.status(200).json({ enabled: isHuntPhotoEnabled() });
+}
+
+export async function putHuntPhotoSetting(req: Request, res: Response) {
+  const enabled = await setHuntPhotoEnabled(req.body.enabled === true, req.user?.name ?? null);
+  logger.info(`Hunt photo ${enabled ? "enabled" : "disabled"} by ${req.user?.name ?? req.user?._id}`);
+  return res.status(200).json({ enabled });
 }

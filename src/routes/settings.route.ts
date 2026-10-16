@@ -10,6 +10,9 @@ const router = express.Router();
 
 router.get("/prediction", verifyToken, settingsController.getPredictionSetting);
 router.put("/prediction", [verifyToken, isAdmin, validate([body("enabled").isBoolean({ strict: true }).withMessage("Enabled moet true of false zijn.")])], settingsController.putPredictionSetting);
+// Read by the web app and by the Android app (device token): verifyToken accepts both
+router.get("/hunt-photo", verifyToken, settingsController.getHuntPhotoSetting);
+router.put("/hunt-photo", [verifyToken, isAdmin, validate([body("enabled").isBoolean({ strict: true }).withMessage("Enabled moet true of false zijn.")])], settingsController.putHuntPhotoSetting);
 router.get("/huntable-areas", verifyToken, settingsController.getHuntableAreasSetting);
 router.put("/huntable-areas", [verifyToken, isAdmin, validate(huntableAreasValidation)], settingsController.putHuntableAreasSetting);
 router.get("/invites-paused", verifyToken, adminAuthController.getInvitesPaused);

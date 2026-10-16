@@ -64,6 +64,26 @@ const HuntableAreasSettingSchema = new mongoose.Schema<HuntableAreasSettingDoc>(
 
 const HUNTABLE_AREAS_KEY = "huntable-areas";
 
+/** "Foto bij hunt": hunters take a sticker photo (on) or confirm with the fox's QR code (off); key "hunt-photo". */
+export interface HuntPhotoSettingDoc {
+  key: string;
+  enabled: boolean;
+  updatedAt?: Date | null;
+  updatedBy?: string | null;
+}
+
+const HuntPhotoSettingSchema = new mongoose.Schema<HuntPhotoSettingDoc>(
+  {
+    key: { type: String, required: true, unique: true },
+    enabled: { type: Boolean, required: true, default: false },
+    updatedAt: { type: Date, default: null },
+    updatedBy: { type: String, default: null },
+  },
+  { collection: "settings", versionKey: false },
+);
+
+const HUNT_PHOTO_KEY = "hunt-photo";
+
 /**
  * Store for the DemoState document on a dedicated connection to the real database, so it stays reachable whichever
  * database the default Mongoose connection currently points to. Not registered in `mongoose.models`.
@@ -76,6 +96,8 @@ export interface DemoStateStore {
   writePrediction(setting: Omit<PredictionSettingDoc, "key">): Promise<void>;
   readHuntableAreas(): Promise<HuntableAreasSettingDoc | null>;
   writeHuntableAreas(setting: Omit<HuntableAreasSettingDoc, "key">): Promise<void>;
+  readHuntPhoto(): Promise<HuntPhotoSettingDoc | null>;
+  writeHuntPhoto(setting: Omit<HuntPhotoSettingDoc, "key">): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -84,6 +106,7 @@ export async function openDemoStateStore(realUri: string, options: mongoose.Conn
   const DemoState: Model<DemoStateDoc> = connection.model<DemoStateDoc>("DemoState", DemoStateSchema);
   const PredictionSetting: Model<PredictionSettingDoc> = connection.model<PredictionSettingDoc>("PredictionSetting", PredictionSettingSchema);
   const HuntableAreasSetting: Model<HuntableAreasSettingDoc> = connection.model<HuntableAreasSettingDoc>("HuntableAreasSetting", HuntableAreasSettingSchema);
+  const HuntPhotoSetting: Model<HuntPhotoSettingDoc> = connection.model<HuntPhotoSettingDoc>("HuntPhotoSetting", HuntPhotoSettingSchema);
   return {
     connection,
     async read() {
@@ -103,6 +126,12 @@ export async function openDemoStateStore(realUri: string, options: mongoose.Conn
     },
     async writeHuntableAreas(setting) {
       await HuntableAreasSetting.updateOne({ key: HUNTABLE_AREAS_KEY }, { $set: { ...setting, key: HUNTABLE_AREAS_KEY } }, { upsert: true });
+    },
+    async readHuntPhoto() {
+      return HuntPhotoSetting.findOne({ key: HUNT_PHOTO_KEY }).lean<HuntPhotoSettingDoc>();
+    },
+    async writeHuntPhoto(setting) {
+      await HuntPhotoSetting.updateOne({ key: HUNT_PHOTO_KEY }, { $set: { ...setting, key: HUNT_PHOTO_KEY } }, { upsert: true });
     },
     async close() {
       await connection.close();

@@ -8,6 +8,7 @@ import { setAuthConnection } from "./auth/auth-db";
 import { ensurePasswordless } from "./auth/migrate";
 import { initPredictionSetting } from "./settings/prediction-setting";
 import { initHuntableAreas } from "./settings/huntable-areas-setting";
+import { initHuntPhotoSetting } from "./settings/hunt-photo-setting";
 import { initAppConfig, onAppConfigChange, settingsKeyOk } from "./settings/app-config";
 import { aiAvailable } from "./services/ai/model";
 import { getDemoStateStore, initDemoMode, onDemoSwitch } from "./demo/database-switch";
@@ -84,6 +85,7 @@ await initDemoMode(db, { logger: serviceLogger }).then((state) => {
 // Global settings live in the real database (also in demo mode); cached in memory from here on
 await initPredictionSetting(getDemoStateStore());
 await initHuntableAreas(getDemoStateStore());
+await initHuntPhotoSetting(getDemoStateStore());
 // Settings moved from env to Beheer (env stays the fallback); secrets need SETTINGS_KEY
 const { undecryptable } = await initAppConfig(getDemoStateStore().connection);
 // Names only, never values: these fall back to env until saved again with the current SETTINGS_KEY
