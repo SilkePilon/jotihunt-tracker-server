@@ -1,4 +1,5 @@
 import axios, { type AxiosInstance } from "axios";
+import { errorText } from "../utils/error-text";
 
 export const MB = 1024 * 1024;
 
@@ -49,5 +50,5 @@ export function describeHttpError(error: unknown): string {
     const outcome = error.response?.status ?? (isDeadlineError(error) ? "timeout" : error.code) ?? "unknown error";
     return `${method} ${url} → ${outcome}`;
   }
-  return error instanceof Error ? error.message : String(error);
+  return errorText(error);
 }

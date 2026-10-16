@@ -4,6 +4,7 @@ import Transport from "winston-transport";
 import { captureThrottled, isAccessLog, isSentryEnabled, wasHandled, type Capture } from "./sentry";
 import { isDatabaseUnavailable } from "./utils/database-errors";
 import { isExpectedOutage } from "./utils/expected-outages";
+import { errorText } from "./utils/error-text";
 
 export const debug = process.env.DEBUG === "true";
 
@@ -56,7 +57,7 @@ export const errorDetails = winston.format((info) => {
     info.stack = error.stack;
     const code = (error as { code?: unknown }).code;
     if (typeof code === "string" || typeof code === "number") info.code = code;
-    if (error.cause !== undefined) info.cause = error.cause instanceof Error ? error.cause.message : String(error.cause);
+    if (error.cause !== undefined) info.cause = errorText(error.cause);
   }
   return info;
 });

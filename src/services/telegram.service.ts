@@ -17,6 +17,7 @@ import {
   parseCounterHuntDirection,
   type BotMessageKind,
 } from "./telegram.helpers";
+import { errorText } from "../utils/error-text";
 
 // --- Gateway (the Telegram client, mtcute in telegram.gateway.ts; faked in tests) --------------------------------
 
@@ -193,7 +194,6 @@ const LINK_FAILED = "Koppelen met Telegram is mislukt.";
 const NOT_CONNECTED = "Geen verbinding met Telegram, wordt opnieuw geprobeerd.";
 const CANNOT_DECRYPT = "Sessie kan niet worden ontsleuteld (TELEGRAM_SESSION_KEY gewijzigd?)";
 const REVOKED = "De sessie is ingetrokken in Telegram; koppel opnieuw.";
-const describe = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms).unref?.());
 const isDuplicateKey = (error: unknown) => (error as { code?: number })?.code === 11000;
 
@@ -355,7 +355,7 @@ export class TelegramService {
     this.active = null;
     this.activeCiphertext = null;
     if (active) {
-      await active.logout().catch((error) => this.options.logger.warn(`Could not log the Telegram session out: ${describe(error)}`));
+      await active.logout().catch((error) => this.options.logger.warn(`Could not log the Telegram session out: ${errorText(error)}`));
       await active.cancel().catch(() => undefined);
     } else if (await this.readLink()) {
       this.options.logger.warn("Telegram unlinked while not connected; the session may still be listed in Telegram (Settings > Devices)");
@@ -455,7 +455,7 @@ export class TelegramService {
   }
 
   private async failPending(pending: PendingLogin, error: unknown) {
-    this.options.logger.warn(`Telegram login failed: ${describe(error)}`);
+    this.options.logger.warn(`Telegram login failed: ${errorText(error)}`);
     pending.failed = true;
     this.lastError = LINK_FAILED;
     await this.cancelPending();
@@ -552,7 +552,7 @@ export class TelegramService {
         await this.handleMessage(message).catch((error) => this.options.logger.error("Could not handle a Telegram message", error));
       }
     } catch (error) {
-      this.options.logger.warn(`Could not read the latest Telegram messages: ${describe(error)}`);
+      this.options.logger.warn(`Could not read the latest Telegram messages: ${errorText(error)}`);
     }
     await this.retryUnhandled().catch((error) => this.options.logger.error("Could not retry unhandled Telegram messages", error));
   }
@@ -589,7 +589,7 @@ export class TelegramService {
     const wait = this.retryDelay;
     this.retryDelay = Math.min(wait * 2, this.options.retryMaxMs ?? 5 * 60_000);
     this.lastError = NOT_CONNECTED;
-    this.options.logger.warn(`Could not connect to Telegram, retrying in ${Math.round(wait / 1000)} s: ${describe(error)}`);
+    this.options.logger.warn(`Could not connect to Telegram, retrying in ${Math.round(wait / 1000)} s: ${errorText(error)}`);
     this.clearRetry();
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;

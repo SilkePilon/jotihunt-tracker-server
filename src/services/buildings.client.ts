@@ -1,4 +1,5 @@
 import type { Bounds, RawBuildingPart } from "./buildings.helpers";
+import { errorText } from "../utils/error-text";
 
 export const WFS_URL = "https://data.3dbag.nl/api/BAG3D/wfs";
 export const PAGE_SIZE = 10_000;
@@ -54,7 +55,7 @@ export class BagWfsClient implements BuildingsApi {
     try {
       response = await this.fetchImpl(url, { signal: AbortSignal.timeout(this.timeoutMs) });
     } catch (error) {
-      throw new BuildingsUpstreamError(`3DBAG not reachable: ${error instanceof Error ? error.message : String(error)}`);
+      throw new BuildingsUpstreamError(`3DBAG not reachable: ${errorText(error)}`);
     }
     if (!response.ok) {
       // Free the connection; the error body isn't needed

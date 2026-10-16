@@ -25,6 +25,7 @@ import { BagWfsClient } from "./services/buildings.client";
 import { BuildingsService, setBuildingsService } from "./services/buildings.service";
 import { migrateArticleTextHashes } from "./services/article-summary.service";
 import { migrateHintSplitKeys } from "./services/hint-split.service";
+import { errorText } from "./utils/error-text";
 
 // A forgotten promise rejection is logged and the server keeps running; after an uncaught exception the process state
 // is unknown, so log it and exit (docker restarts the server in a second or two)
@@ -54,7 +55,7 @@ try {
   webauthnConfig();
   publicAppUrl();
 } catch (error) {
-  logger.error(error instanceof Error ? error.message : String(error));
+  logger.error(errorText(error));
   process.exit(1);
 }
 

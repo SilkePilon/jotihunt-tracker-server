@@ -5,6 +5,7 @@ import { clearDemoUploads } from "../services/photo-store";
 import { activeWorkCount, beginWork, isDemoMode, nextGeneration, setDemoModeFlag, setDemoSwitchInProgress, waitForIdleWork } from "./demo-mode";
 import { openDemoStateStore, type DemoStateStore } from "./demo-state";
 import { demoConnectOptions, demoDbName, mongoUriDbName } from "./mongo-uri";
+import { errorText } from "../utils/error-text";
 
 export { demoConnectOptions, demoDbName, mongoUriDbName } from "./mongo-uri";
 
@@ -121,7 +122,7 @@ export async function initDemoMode(
   await connectReal();
   state = DISABLED_STATE;
   // A demo database left behind by a failed switch or a crash
-  await dropDemoDatabase().catch((error) => log.warn(`Could not drop a leftover demo database: ${describe(error)}`));
+  await dropDemoDatabase().catch((error) => log.warn(`Could not drop a leftover demo database: ${errorText(error)}`));
   return getDemoState();
 }
 
@@ -216,10 +217,6 @@ export async function closeDemoMode() {
 }
 
 // --- Internals --------------------------------------------------------------------------------------------------
-
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 async function waitForSwitch() {
   while (switching) await switching.catch(() => undefined);

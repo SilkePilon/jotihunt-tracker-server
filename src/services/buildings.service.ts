@@ -3,6 +3,7 @@ import { ServiceError } from "../http/service-error";
 import { buildingTileModel, type BuildingTileDoc } from "../models/building-tile.model";
 import type { BuildingsApi } from "./buildings.client";
 import { encodeTile, inNetherlands, MAX_RADIUS_KM, parseTileId, tileBounds, tileId, tilesAround, toBuildingFeatures, type TileXY } from "./buildings.helpers";
+import { errorText } from "../utils/error-text";
 
 export interface BuildingsJob {
   kind: "refresh" | "prefetch";
@@ -170,7 +171,7 @@ export class BuildingsService {
         } catch (error) {
           job.failed++;
           if (job.aborted) return;
-          this.options.logger.warn(`3D buildings tile ${tileId(tile)} failed: ${error instanceof Error ? error.message : String(error)}`);
+          this.options.logger.warn(`3D buildings tile ${tileId(tile)} failed: ${errorText(error)}`);
           if (++consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
             job.aborted = true;
             this.options.logger.warn(`3D buildings ${kind} aborted after ${consecutiveFailures} consecutive failures`);

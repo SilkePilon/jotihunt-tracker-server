@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import http from "node:http";
 import https from "node:https";
 import { parseDeviceLocations, type Life360Circle, type Life360DeviceLocation } from "./life360.helpers";
+import { errorText } from "../utils/error-text";
 
 /**
  * Thin client for Life360's unofficial mobile API. The headers are those of the proven test login (2026-10-13,
@@ -378,7 +379,7 @@ export class Life360Client implements Life360Api {
       try {
         response = await this.transport({ method: "GET", url: current.toString(), headers: { accept: "image/*", "user-agent": ANDROID_USER_AGENT } });
       } catch (error) {
-        throw new Life360NetworkError(`Life360 avatar not reachable: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Life360NetworkError(`Life360 avatar not reachable: ${errorText(error)}`);
       }
       if (REDIRECT_STATUSES.has(response.status)) {
         if (hop >= MAX_AVATAR_REDIRECTS) throw new Life360UpstreamError("Avatar redirected too often", response.status);
@@ -400,7 +401,7 @@ export class Life360Client implements Life360Api {
     try {
       response = await this.transport(request);
     } catch (error) {
-      throw new Life360NetworkError(`Life360 not reachable: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Life360NetworkError(`Life360 not reachable: ${errorText(error)}`);
     }
     if ((response.status >= 200 && response.status < 300) || response.status === 304) return response;
     throw failure(response, step);

@@ -1,4 +1,5 @@
 import { JOTIBOARD_API_KEY, JOTIBOARD_DB_URL, jotiboardEmail } from "./jotiboard.helpers";
+import { errorText } from "../utils/error-text";
 
 /** Firebase Auth + RTDB over plain REST. Error messages never contain the password or tokens. */
 
@@ -113,7 +114,7 @@ export class JotiboardClient implements JotiboardApi {
       return await this.fetchImpl(url, { ...init, signal: AbortSignal.timeout(TIMEOUT_MS) });
     } catch (error) {
       // The URL holds the API key / ID token: only the error's own message
-      throw new JotiboardUpstreamError(`Jotiboard not reachable: ${error instanceof Error ? error.message : String(error)}`);
+      throw new JotiboardUpstreamError(`Jotiboard not reachable: ${errorText(error)}`);
     }
   }
 }

@@ -16,6 +16,7 @@ import {
   type ParsedLife360Member,
 } from "./life360.helpers";
 import { decryptSession, encryptSession } from "./telegram.helpers";
+import { errorText } from "../utils/error-text";
 
 export interface Life360Logger {
   info(message: string): void;
@@ -74,7 +75,6 @@ const BUSY = "Even geduld, Life360 is nog bezig.";
 const NO_AVATAR = "Geen foto.";
 const AVATAR_UNAVAILABLE = "Foto niet beschikbaar.";
 
-const describeError = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 interface PendingCode {
   email: string;
@@ -230,11 +230,11 @@ export class Life360Service {
         if (error instanceof Life360RateLimitedError || error instanceof Life360BlockedError) {
           const wait = Math.max(error instanceof Life360RateLimitedError ? (error.retryAfterMs ?? 0) : 0, SEND_BLOCK_MIN_MS);
           this.nextSendAt = new Date(now.getTime() + wait);
-          this.options.logger.warn(`Life360 refused to send a code (${describeError(error)}), next try after ${this.nextSendAt.toISOString()}`);
+          this.options.logger.warn(`Life360 refused to send a code (${errorText(error)}), next try after ${this.nextSendAt.toISOString()}`);
           throw new ServiceError(429, SEND_WAIT);
         }
         if (error instanceof Life360UpstreamError && error.status === 400) throw new ServiceError(400, "E-mailadres is ongeldig.");
-        this.options.logger.warn(`Life360 code not sent: ${describeError(error)}`);
+        this.options.logger.warn(`Life360 code not sent: ${errorText(error)}`);
         throw new ServiceError(502, UNREACHABLE);
       }
       this.nextSendAt = new Date(now.getTime() + RESEND_MS);
@@ -403,7 +403,7 @@ export class Life360Service {
           const gone = error instanceof Life360NotFoundError || (error instanceof Life360UpstreamError && error.status === 400);
           if (!gone || generation !== this.generation) throw error;
           this.v5RetryAt = new Date(started.getTime() + V5_RETRY_MS);
-          this.options.logger.warn(`Life360 v5 device locations unavailable (${describeError(error)}), using v3 positions until ${this.v5RetryAt.toISOString()}`);
+          this.options.logger.warn(`Life360 v5 device locations unavailable (${errorText(error)}), using v3 positions until ${this.v5RetryAt.toISOString()}`);
           if (!rosterFetched && !(await this.fetchRoster(token, link.circleId, started, generation))) return;
         }
       }
@@ -459,7 +459,7 @@ export class Life360Service {
 
   private loginFailure(error: unknown, step: string): ServiceError {
     if (error instanceof Life360RateLimitedError || error instanceof Life360BlockedError) return new ServiceError(429, LIMITED);
-    this.options.logger.warn(`Life360 ${step} failed: ${describeError(error)}`);
+    this.options.logger.warn(`Life360 ${step} failed: ${errorText(error)}`);
     return new ServiceError(502, UNREACHABLE);
   }
 
@@ -587,13 +587,13 @@ export class Life360Service {
       this.phase = "paused";
       this.retryAt = new Date(started.getTime() + wait);
       this.backoffMs = 0;
-      this.options.logger.warn(`Life360 polling paused until ${this.retryAt.toISOString()}: ${describeError(error)}`);
+      this.options.logger.warn(`Life360 polling paused until ${this.retryAt.toISOString()}: ${errorText(error)}`);
       this.schedule(wait);
       return;
     }
     // Network or an unexpected answer: keep the state, try again later
     this.backoffMs = Math.min(this.backoffMs ? this.backoffMs * 2 : BACKOFF_INITIAL_MS, BACKOFF_MAX_MS);
-    this.options.logger.warn(`Life360 poll failed, retrying in ${Math.round(this.backoffMs / 1000)} s: ${describeError(error)}`);
+    this.options.logger.warn(`Life360 poll failed, retrying in ${Math.round(this.backoffMs / 1000)} s: ${errorText(error)}`);
     this.schedule(this.backoffMs);
   }
 
@@ -628,7 +628,7 @@ export class Life360Service {
       return entry;
     } catch (error) {
       const status: 404 | 502 = error instanceof Life360NotFoundError ? 404 : 502;
-      if (status === 502) this.options.logger.warn(`Life360 avatar not fetched: ${describeError(error)}`);
+      if (status === 502) this.options.logger.warn(`Life360 avatar not fetched: ${errorText(error)}`);
       if (generation === this.generation) this.avatarFailures.set(memberId, { source, status, until: this.now().getTime() + AVATAR_FAILURE_MS });
       return status;
     }
@@ -642,7 +642,7 @@ export class Life360Service {
       } catch (error) {
         // Some members can't be asked (ha-life360 #98): skip them
         if (error instanceof Life360NotFoundError) continue;
-        this.options.logger.warn(`Life360 refresh stopped: ${describeError(error)}`);
+        this.options.logger.warn(`Life360 refresh stopped: ${errorText(error)}`);
         return;
       }
     }

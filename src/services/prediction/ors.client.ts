@@ -3,6 +3,7 @@ import { MB } from "../http-limits";
 import { USER_AGENT } from "./constants";
 import { createThrottle, DailyCounter, MinuteBudget, type HttpPost, type Schedule } from "./http";
 import { RoutingUnavailableError, type MatrixResult, type RoutingFailureKind, type WalkingRouter } from "./routing";
+import { errorText } from "../../utils/error-text";
 
 export const ORS_BASE_URL = "https://api.openrouteservice.org/v2";
 /** Free-plan daily quotas per endpoint; beyond these we fall back to estimates. */
@@ -73,7 +74,7 @@ export function createOrsRouter(apiKey: string | undefined, deps: OrsDeps = {}):
         });
         return response.data;
       } catch (error) {
-        throw new RoutingUnavailableError(`ORS ${endpoint}: ${error instanceof Error ? error.message : String(error)}`, { kind: classifyOrsError(error) });
+        throw new RoutingUnavailableError(`ORS ${endpoint}: ${errorText(error)}`, { kind: classifyOrsError(error) });
       }
     });
   }

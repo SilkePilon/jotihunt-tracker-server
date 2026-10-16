@@ -6,6 +6,7 @@ import { JotiboardAuthError, JotiboardLoginError, JotiboardUpstreamError, type J
 import { parseHintSolves, parsePins, type JotiboardConfig } from "./jotiboard.helpers";
 import { jotiboardImporter, type JotiboardCounts, type JotiboardImporter } from "./jotiboard.import";
 import { decryptSession, encryptSession } from "./telegram.helpers";
+import { errorText } from "../utils/error-text";
 
 export interface JotiboardLogger {
   info(message: string): void;
@@ -53,7 +54,6 @@ const LOGIN_ERRORS: Record<JotiboardLoginError["code"], [number, string]> = {
   disabled: [400, "Dit Jotiboard-account is uitgeschakeld"],
 };
 
-const describeError = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 interface ActiveLink {
   /** null: the stored token could not be decrypted (key changed) */
@@ -149,7 +149,7 @@ export class JotiboardService {
           const [status, message] = LOGIN_ERRORS[error.code];
           throw new ServiceError(status, message);
         }
-        this.options.logger.warn(`Jotiboard login failed: ${describeError(error)}`);
+        this.options.logger.warn(`Jotiboard login failed: ${errorText(error)}`);
         throw new ServiceError(502, UNREACHABLE_LINK);
       }
       const sealed = encryptSession(session.refreshToken, config.sessionKey);
@@ -284,7 +284,7 @@ export class JotiboardService {
     } catch (error) {
       if (generation !== this.generation) return;
       if (error instanceof JotiboardAuthError) {
-        this.options.logger.warn(`Jotiboard refused the session (${describeError(error)}), an admin has to log in again`);
+        this.options.logger.warn(`Jotiboard refused the session (${errorText(error)}), an admin has to log in again`);
         if (this.active) this.active.state = "reauth";
         this.session = null;
         this.clearTimer();
@@ -296,7 +296,7 @@ export class JotiboardService {
         return;
       }
       this.lastError = error instanceof JotiboardUpstreamError ? UNREACHABLE_SYNC : SYNC_FAILED;
-      this.options.logger.warn(`Jotiboard sync failed, retrying in ${Math.round(interval / 1000)} s: ${describeError(error)}`);
+      this.options.logger.warn(`Jotiboard sync failed, retrying in ${Math.round(interval / 1000)} s: ${errorText(error)}`);
       this.schedule(interval);
     }
   }
