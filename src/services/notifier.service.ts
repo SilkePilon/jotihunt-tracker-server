@@ -43,8 +43,7 @@ export async function runNotifier(options: NotifierOptions = {}): Promise<AppNot
   const send = options.send ?? ((notification) => sendToAll(notification));
   const log = options.log ?? console;
 
-  const state = await NotifierState.findOne({ key: STATE_KEY }).lean();
-  const areas = await Area.find({}, { name: 1, status: 1 }).lean();
+  const [state, areas] = await Promise.all([NotifierState.findOne({ key: STATE_KEY }).lean(), Area.find({}, { name: 1, status: 1 }).lean()]);
   const currentStatus = Object.fromEntries(areas.map((area) => [area.name, area.status]));
 
   if (!state?.initialized) {

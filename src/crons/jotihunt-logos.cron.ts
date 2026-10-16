@@ -28,16 +28,13 @@ export default async function retrieveJotihuntLogos() {
     // Store only into the database the run started on (skipped when a demo switch happened meanwhile)
     const updated = await runTracked(
       async () => {
-        const teams = await Team.find({}, { name: 1, logoUrl: 1 });
-        let count = 0;
-        for (const team of teams) {
+        const teams = await Team.find({}, { name: 1, logoUrl: 1 }).lean();
+        const updates = teams.flatMap((team) => {
           const logoUrl = logos.get(normalizeTeamName(team.name));
-          if (logoUrl && logoUrl !== team.logoUrl) {
-            await Team.updateOne({ _id: team._id }, { $set: { logoUrl } });
-            count++;
-          }
-        }
-        return count;
+          return logoUrl && logoUrl !== team.logoUrl ? [{ updateOne: { filter: { _id: team._id }, update: { $set: { logoUrl } } } }] : [];
+        });
+        if (updates.length) await Team.bulkWrite(updates);
+        return updates.length;
       },
       { generation },
     );

@@ -43,8 +43,7 @@ export async function deleteUser(req: Request, res: Response) {
     });
     if (result === "not-found") return res.status(404).json({ message: "User not found" });
     if (result === "last-admin") return res.status(409).json({ message: LAST_ADMIN });
-    await PushSubscription.deleteMany({ user: id });
-    await revokeUserSessions(id);
+    await Promise.all([PushSubscription.deleteMany({ user: id }), revokeUserSessions(id)]);
 
     return res.status(200).json({ message: "User deleted" });
   } catch (error) {
