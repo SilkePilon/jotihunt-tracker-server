@@ -13,6 +13,8 @@ import verifyToken, { isAdmin } from "../middleware/auth.middleware";
 import { body, param } from "express-validator";
 import { User } from "../models/user.model";
 import { validate } from "../middleware/validate.middleware";
+import * as configController from "../settings/app-config.controller";
+import { generalValidation, plainValidation, secretNameValidation, secretValidation } from "../settings/app-config.validation";
 
 // Validations
 const userExists = (value: string) =>
@@ -126,5 +128,13 @@ router.put(
   validate([param("id").isInt({ min: 1 }).withMessage("Ongeldig toestel-ID."), body("vehicle").isIn(VEHICLES).withMessage("Voertuig moet walking, bike, car of motorcycle zijn.")]),
   trackerController.putDeviceVehicle,
 );
+// Settings that used to be env vars (Beheer → Algemeen / AI / Koppelingen)
+router.get("/config", configController.getAdminConfig);
+router.put("/config/general", validate(generalValidation), configController.putGeneral);
+router.put("/config/plain", validate(plainValidation), configController.putPlain);
+router.put("/config/secrets/:name", validate(secretValidation), configController.putSecret);
+router.delete("/config/secrets/:name", validate(secretNameValidation), configController.deleteSecret);
+router.post("/config/logo", configController.parseLogo, configController.postLogo);
+router.get("/traccar/groups", configController.getTraccarGroups);
 
 export default router;
