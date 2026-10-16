@@ -13,6 +13,7 @@ import {
   type NotificationInput,
 } from "./notifier.helpers";
 import { currentGeneration, runTracked } from "../demo/demo-mode";
+import { deadline } from "./http-limits";
 import { sendToAll } from "./push.service";
 import { isDuplicateKeyError } from "../utils/mongo";
 
@@ -129,17 +130,9 @@ export async function runNotifier(options: NotifierOptions = {}): Promise<AppNot
   for (const notification of created) {
     // Tracked, so a database switch waits for it and a push started before a switch never touches the other database
     // A hanging push endpoint stops counting after a while, so it can't block switching
-    runTracked(() => withTimeout(Promise.resolve().then(() => send(notification)), options.pushTrackLimitMs ?? PUSH_TRACK_LIMIT_MS), { generation })
+    const limitMs = options.pushTrackLimitMs ?? PUSH_TRACK_LIMIT_MS;
+    runTracked(() => deadline(Promise.resolve().then(() => send(notification)), limitMs, `Push still running after ${limitMs / 1000} s`), { generation })
       .catch((error) => log.error("Pushing a notification failed", error));
   }
   return created;
-}
-
-/** Resolves/rejects like `promise`, but rejects after `ms` (the promise itself keeps running). */
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`Push still running after ${ms / 1000} s`)), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
