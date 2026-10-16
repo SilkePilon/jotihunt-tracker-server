@@ -42,7 +42,7 @@ function fakePredictor(results: (unknown | Error)[]) {
 }
 
 function serviceAt(minutes: number, predictor: FoxPredictor | null) {
-  return createPredictionService({ predictor, walkMinutes: walk, now: () => at(minutes), sleep: async () => {} });
+  return createPredictionService({ predictor: () => predictor, walkMinutes: walk, now: () => at(minutes), sleep: async () => {} });
 }
 
 async function alpha() {
@@ -108,7 +108,7 @@ describe("recomputeArea", () => {
     await alpha();
     const waits: number[] = [];
     const { predictor } = fakePredictor([answer({ pin: null }), answer()]);
-    const service = createPredictionService({ predictor, walkMinutes: walk, now: () => at(30), sleep: async (ms) => void waits.push(ms) });
+    const service = createPredictionService({ predictor: () => predictor, walkMinutes: walk, now: () => at(30), sleep: async (ms) => void waits.push(ms) });
     await service.recomputeArea("alpha");
     expect(waits).toEqual([RETRY_DELAY_MS]);
   });
@@ -263,7 +263,7 @@ describe("Gemini circuit breaker", () => {
         return next;
       },
     };
-    const service = createPredictionService({ predictor, walkMinutes: walk, now: () => at(minutes), sleep: async () => {} });
+    const service = createPredictionService({ predictor: () => predictor, walkMinutes: walk, now: () => at(minutes), sleep: async () => {} });
 
     await service.recomputeDue();
     expect(calls).toEqual(["alpha"]); // bravo skipped: breaker open

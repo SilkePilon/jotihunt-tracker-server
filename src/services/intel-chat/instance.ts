@@ -1,23 +1,21 @@
-import { createModels } from "../ai/model";
+import { aiAvailable, requireAiModel } from "../ai/model";
 import { walkMinutes } from "../prediction/instance";
 import type { IntelChatModels } from "./agent";
 import type { IntelToolContext } from "./tools";
 
-let models: IntelChatModels | null | undefined;
+/** Tests: fixed models (null = AI off); undefined = from the app config */
+let override: IntelChatModels | null | undefined;
 const toolDeps: Partial<Pick<IntelToolContext, "walkMinutes" | "fetch" | "lookup">> = { walkMinutes };
 
-/** The chat's models (purpose chat; "Denk diep" uses the prediction model); null without GEMINI_API_KEY */
+/** The chat's models, read per request (Beheer → AI); null without a Gemini key */
 export function getIntelChatModels(): IntelChatModels | null {
-  if (models === undefined) {
-    const byPurpose = createModels();
-    models = byPurpose ? { chat: byPurpose("chat"), deep: byPurpose("prediction"), tool: byPurpose("chat") } : null;
-  }
-  return models;
+  if (override !== undefined) return override;
+  if (!aiAvailable()) return null;
+  return { chat: requireAiModel("chat"), deep: requireAiModel("deep"), tool: requireAiModel("tools") };
 }
 
-/** Tests: other models (null = AI off, undefined = from the environment again) */
 export function setIntelChatModels(value: IntelChatModels | null | undefined) {
-  models = value;
+  override = value;
 }
 
 /** Extra tool dependencies of the running server */

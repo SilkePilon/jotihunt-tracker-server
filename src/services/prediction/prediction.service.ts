@@ -11,8 +11,8 @@ import { validatePrediction, type Confidence, type ValidPrediction } from "./val
 import type { WalkMinutes } from "./walking";
 
 export interface PredictionDeps {
-  /** null when GEMINI_API_KEY is not set */
-  predictor: FoxPredictor | null;
+  /** The predictor right now; null without a Gemini key */
+  predictor: () => FoxPredictor | null;
   walkMinutes: WalkMinutes;
   now?: () => Date;
   /** Pause before a retry (default: real timer) */
@@ -120,13 +120,14 @@ export function createPredictionService(deps: PredictionDeps) {
     if (inputs.groups.length === 0) return store({ ...dto, reason: "Geen groepen gekoppeld" });
     if (inputs.status === "red") return store({ ...dto, paused: true, reason: "Inactief, voorspelling gepauzeerd" });
     if (inputs.trail.length === 0) return store({ ...dto, reason: "Nog geen locatie" });
-    if (!deps.predictor) return store({ ...dto, reason: "AI niet geconfigureerd" });
+    const predictor = deps.predictor();
+    if (!predictor) return store({ ...dto, reason: "AI niet geconfigureerd" });
 
     const facts = await gatherFacts(inputs, deps.walkMinutes, at);
     try {
       const remaining = pausedUntil - at.getTime();
       if (remaining > 0) throw new GeminiPausedError(remaining);
-      const result = await askGemini(deps.predictor, buildPrompt(facts), facts);
+      const result = await askGemini(predictor, buildPrompt(facts), facts);
       pauses = 0;
       return store({
         ...dto,
