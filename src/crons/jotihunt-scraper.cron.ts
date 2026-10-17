@@ -8,7 +8,7 @@ import { diffHunts, isInitialImport, lastOutcomeOf, type Outcome } from "../serv
 import { HUNT_MARKER_SOURCE } from "../services/hunt-sync.service";
 import { Marker } from "../models/marker.model";
 import { notifyHuntEvents, syncHuntMarkers } from "../services/hunt-sync.service";
-import { estimateHuntLocations } from "../services/hunt-location-estimate.service";
+import { ESTIMATE_DEADLINE_MS, estimateHuntLocations } from "../services/hunt-location-estimate.service";
 import { deadline } from "../services/http-limits";
 import { classifyStatus, rekeyTimeHunts, type ScrapedHunt } from "../services/jotihunt-hunts.parse";
 
@@ -191,16 +191,21 @@ async function rekeyMovedHunts(scraped: ScrapedHunt[]): Promise<void> {
 
 /**
  * Everything after a scrape: store the hunts, estimate locations for recent hunts without one (from our trackers),
- * then make the hunt markers match and tell everyone what changed. `estimate` is replaceable for tests.
+ * then make the hunt markers match and tell everyone what changed. `estimate` (and its deadline) is replaceable for
+ * tests.
  */
-export async function storeAndSync(scraped: ScrapedHunt[], options: { estimate?: (now: Date) => Promise<number>; skipped?: number } = {}): Promise<StoreResult> {
+export async function storeAndSync(scraped: ScrapedHunt[], options: { estimate?: (now: Date) => Promise<number>; skipped?: number; estimateDeadlineMs?: number } = {}): Promise<StoreResult> {
   const estimate = options.estimate ?? ((now: Date) => estimateHuntLocations(now));
   await keepStoredDates(scraped).catch((error) => logger.warn("(CRON) Could not look up stored hunt dates:", error));
   const result = await storeHunts(scraped, new Date(), { skipped: options.skipped });
   if (!result.deleted) logger.warn(`(CRON) Kept every stored hunt: the page showed ${scraped.length} hunt(s) (${options.skipped ?? 0} row(s) skipped), far fewer than stored, unreadable rows or no readable times`);
   markSyncSuccess(new Date());
   // jotihunt.nl shows no location: estimate it before the markers are made
-  await estimate(new Date()).catch((error) => logger.error("(CRON) Error estimating hunt locations:", error));
+  // With a deadline: slow trackers must not hold up the next scrape
+  const estimateDeadline = options.estimateDeadlineMs ?? ESTIMATE_DEADLINE_MS;
+  await deadline(estimate(new Date()), estimateDeadline, `Estimating hunt locations took longer than ${estimateDeadline / 1000} s`).catch((error) =>
+    logger.error("(CRON) Error estimating hunt locations:", error),
+  );
   // Hunt markers feed the map, cooldown and prediction; then tell everyone what changed
   await syncHuntMarkers().catch((error) => logger.error("(CRON) Error syncing hunt markers:", error));
   await notifyHuntEvents(result).catch((error) => logger.error("(CRON) Error sending hunt notifications:", error));

@@ -38,6 +38,8 @@ export interface TrackerTrack {
   /** Device or member display name */
   name: string;
   fixes: TrackFix[];
+  /** A current position only (Life360: no history), used while within MAX_FIX_GAP_MS of the hunt time */
+  live?: boolean;
 }
 
 export interface EstimatedLocation {

@@ -10,21 +10,33 @@ import { estimateHuntLocation, huntReferenceTime, LOOKBACK_MS, MAX_FIX_GAP_MS, s
 
 const KNOTS_TO_KMH = 1.852;
 
+/** The whole estimate phase of a scrape may take this long (the scraper cron waits for it) */
+export const ESTIMATE_DEADLINE_MS = 20_000;
+
 export interface EstimateSources {
-  /** Our trackers' fixes between `from` and `to` (skips sources that are not configured) */
-  loadTracks(from: Date, to: Date, time: Date): Promise<TrackerTrack[]>;
+  /**
+   * Our trackers' fixes between `from` and `to` (skips sources that are not configured), asked once per run for the
+   * window around every due hunt
+   */
+  loadTracks(from: Date, to: Date): Promise<TrackerTrack[]>;
   loadGroups(): Promise<AreaGroup[]>;
 }
 
-/** Traccar position history per device; none when Traccar is not configured. A failing device is skipped. */
+/** Traccar position history per device; none when Traccar is not configured. A failing device is skipped (one warning per run). */
 async function traccarTracks(from: Date, to: Date): Promise<TrackerTrack[]> {
   if (!traccar.isTraccarConfigured) return [];
   const devices = await traccar.getDevices();
+  let failed = 0;
+  let firstError: unknown = null;
   const tracks = await Promise.all(
     devices
       .filter((device) => !device.disabled)
       .map(async (device) => {
-        const positions = await traccar.getPositionHistory(device.id, from, to).catch(() => []);
+        const positions = await traccar.getPositionHistory(device.id, from, to).catch((error: unknown) => {
+          failed++;
+          firstError ??= error;
+          return [];
+        });
         const fixes = positions.map((position) => {
           const raw = position as unknown as { fixTime?: string; deviceTime?: string; serverTime?: string };
           return {
@@ -39,31 +51,42 @@ async function traccarTracks(from: Date, to: Date): Promise<TrackerTrack[]> {
         return { name: device.name, fixes: fixes.filter((fix) => !Number.isNaN(fix.at.getTime())) };
       }),
   );
+  if (failed > 0) logger.warn(`(HUNTS) No Traccar positions of ${failed} device(s) for the hunt location estimate: ${describeHttpError(firstError)}`);
   return tracks.filter((track) => track.fixes.length > 0);
 }
 
 /**
  * Life360 members' current fixes (memory only, no request to Life360): there is no history, so only useful while the
- * hunt is fresh; estimateHuntLocation drops fixes more than 10 min from the hunt time.
+ * hunt is fresh (live: used within MAX_FIX_GAP_MS of the hunt time).
  */
-function life360Tracks(time: Date): TrackerTrack[] {
+function life360Tracks(): TrackerTrack[] {
   const members = getLife360Service()?.members().members ?? [];
   return members.flatMap((member) => {
     const location = member.location;
     if (!location) return [];
-    const at = new Date(location.at);
-    if (Math.abs(at.getTime() - time.getTime()) > MAX_FIX_GAP_MS) return [];
-    return [{ name: member.name, fixes: [{ lat: location.lat, lng: location.lon, at, accuracy: location.accuracyM, speedKmh: location.speedKmh }] }];
+    return [{ name: member.name, live: true, fixes: [{ lat: location.lat, lng: location.lon, at: new Date(location.at), accuracy: location.accuracyM, speedKmh: location.speedKmh }] }];
+  });
+}
+
+/** The fixes of one hunt's window: -10 … +5 min for history, ±MAX_FIX_GAP_MS for live positions */
+function tracksAround(tracks: TrackerTrack[], time: Date): TrackerTrack[] {
+  const t = time.getTime();
+  return tracks.flatMap((track) => {
+    const fixes = track.fixes.filter((fix) => {
+      const at = fix.at.getTime();
+      return track.live ? Math.abs(at - t) <= MAX_FIX_GAP_MS : at >= t - WINDOW_BEFORE_MS && at <= t + WINDOW_AFTER_MS;
+    });
+    return fixes.length > 0 ? [{ ...track, fixes }] : [];
   });
 }
 
 const defaultSources: EstimateSources = {
-  loadTracks: async (from, to, time) => {
+  loadTracks: async (from, to) => {
     const fromTraccar = await traccarTracks(from, to).catch((error) => {
       logger.warn(`(HUNTS) No Traccar positions for the hunt location estimate: ${describeHttpError(error)}`);
       return [];
     });
-    return [...fromTraccar, ...life360Tracks(time)];
+    return [...fromTraccar, ...life360Tracks()];
   },
   loadGroups,
 };
@@ -74,7 +97,8 @@ const lastTried = new Map<string, Date>();
 /**
  * Give recent hunts without a location an estimated one from our trackers (see estimateHuntLocation): hunts whose time
  * is within LOOKBACK_MS, tried at most once per minute until GIVE_UP_MS. A location from anywhere else is never
- * overwritten. The estimate also goes onto the hunt's sync log entries that have none. Returns how many hunts got one.
+ * overwritten. The estimate also goes onto the hunt's sync log entries that have none. The trackers are asked once per
+ * run, for the window around all due hunts. Returns how many hunts got one.
  */
 export async function estimateHuntLocations(now = new Date(), sources: EstimateSources = defaultSources): Promise<number> {
   const since = new Date(now.getTime() - LOOKBACK_MS);
@@ -89,13 +113,20 @@ export async function estimateHuntLocations(now = new Date(), sources: EstimateS
   });
   if (due.length === 0) return 0;
 
+  for (const { hunt } of due) lastTried.set(String(hunt._id), now);
   const groups = await sources.loadGroups();
+  const times = due.map(({ time }) => time.getTime());
+  let tracks: TrackerTrack[];
+  try {
+    tracks = await sources.loadTracks(new Date(Math.min(...times) - WINDOW_BEFORE_MS), new Date(Math.max(...times) + WINDOW_AFTER_MS));
+  } catch (error) {
+    logger.warn(`(HUNTS) No tracker positions for the hunt location estimate: ${describeHttpError(error)}`);
+    return 0;
+  }
   let estimated = 0;
   for (const { hunt, time } of due) {
-    lastTried.set(String(hunt._id), now);
     try {
-      const tracks = await sources.loadTracks(new Date(time.getTime() - WINDOW_BEFORE_MS), new Date(time.getTime() + WINDOW_AFTER_MS), time);
-      const location = estimateHuntLocation({ area: hunt.area, time, tracks, groups });
+      const location = estimateHuntLocation({ area: hunt.area, time, tracks: tracksAround(tracks, time), groups });
       if (!location) continue;
       // Only while it still has none (a scrape may have stored one meanwhile)
       const { modifiedCount } = await Hunt.updateOne({ _id: hunt._id, location: null }, { $set: { location } });

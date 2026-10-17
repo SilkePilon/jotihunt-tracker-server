@@ -97,20 +97,36 @@ describe("estimateHuntLocations", () => {
     expect((await Hunt.findOne().lean())!.location).toMatchObject({ ...reported, estimated: false, source: null });
   });
 
-  test("a failing tracker source does not stop the other hunts", async () => {
+  test("several due hunts: the trackers are asked once, for the window around all of them", async () => {
+    await storeHunts([scraped("time:alpha:1"), scraped("time:alpha:2", { huntTime: at(20) }), scraped("time:bravo:1", { area: "bravo", huntTime: at(8) })], at(21));
+    const { sources, calls } = fakeSources([fiets(1), { name: "Fiets 2", fixes: [{ ...IN_ALPHA, at: at(19), accuracy: 20, speedKmh: 1 }] }]);
+    expect(await estimateHuntLocations(at(22), sources)).toBe(2);
+    expect(calls).toEqual([{ from: at(-10), to: at(25) }]);
+    // Each hunt only sees the fixes of its own window
+    expect((await Hunt.findOne({ siteKey: "time:alpha:1" }).lean())!.location).toMatchObject({ source: "Fiets 1" });
+    expect((await Hunt.findOne({ siteKey: "time:alpha:2" }).lean())!.location).toMatchObject({ source: "Fiets 2" });
+  });
+
+  test("a failing tracker source ends the run quietly; the hunts are tried again next minute", async () => {
     await storeHunts([scraped("time:alpha:1"), scraped("time:alpha:2", { huntTime: at(3) })], at(4));
-    let first = true;
+    let fail = true;
     const sources: EstimateSources = {
       loadTracks: async () => {
-        if (first) {
-          first = false;
-          throw new Error("Traccar down");
-        }
+        if (fail) throw new Error("Traccar down");
         return [fiets(3)];
       },
       loadGroups: async () => groups,
     };
-    expect(await estimateHuntLocations(at(4), sources)).toBe(1);
+    expect(await estimateHuntLocations(at(4), sources)).toBe(0);
+    fail = false;
+    expect(await estimateHuntLocations(at(5), sources)).toBe(2);
+  });
+
+  test("a live position (Life360) counts within 10 minutes of the hunt time, also after it", async () => {
+    await storeHunts([scraped("time:alpha:1")], at(1));
+    const { sources } = fakeSources([{ name: "Sanne", live: true, fixes: [{ ...IN_ALPHA, at: at(8), accuracy: 30, speedKmh: 0 }] }]);
+    expect(await estimateHuntLocations(at(8), sources)).toBe(1);
+    expect((await Hunt.findOne().lean())!.location).toMatchObject({ source: "Sanne" });
   });
 });
 
@@ -124,6 +140,12 @@ describe("storeAndSync (the scraper cron after a scrape)", () => {
     const markers = await Marker.find().lean();
     expect(markers).toHaveLength(1);
     expect(markers[0]).toMatchObject({ area: "alpha", source: "jotihunt", externalId: "time:alpha:1", location: { type: "Point", coordinates: [IN_ALPHA.lng, IN_ALPHA.lat] } });
+  });
+
+  test("a slow estimate is cut off by its deadline; the markers are still made", async () => {
+    const recent = new Date(Date.now() - 60_000);
+    await storeAndSync([scraped("time:alpha:1", { huntTime: recent, location: { lat: 51.98, lng: 5.93, accuracy: 10 } })], { estimate: () => new Promise<number>(() => {}), estimateDeadlineMs: 50 });
+    expect(await Marker.countDocuments()).toBe(1);
   });
 
   test("an estimate that fails never breaks the store", async () => {
