@@ -63,6 +63,9 @@ describe("estimateHuntLocation", () => {
     expect(estimate([parked, track("Fiets", [fix(-9, { lat: IN_ALPHA.lat - 0.005 }), fix(1)])])).toMatchObject({ source: "Fiets" });
     // Arrived 3 min before the hunt: walked up to the fox
     expect(estimate([track("Loopt", [fix(-9, { lat: IN_ALPHA.lat - 0.003 }), fix(-3), fix(0)])])).toMatchObject({ source: "Loopt" });
+    // A parked Traccar fix right on the hunt time loses to a Life360 member's live fix a minute later
+    const chis: TrackerTrack = { name: "Chis", live: true, fixes: [fix(1, { lat: IN_ALPHA.lat + 0.004, speedKmh: null })] };
+    expect(estimate([parked, chis])).toMatchObject({ source: "Chis", lat: IN_ALPHA.lat + 0.004 });
     // Not enough history to tell (first fix 5 min before): kept
     expect(estimate([track("Kort", [fix(-5), fix(0)])])).toMatchObject({ source: "Kort" });
   });
