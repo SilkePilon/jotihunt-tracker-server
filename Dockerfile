@@ -1,12 +1,9 @@
 FROM oven/bun:1 AS base
 
 ENV TZ=Europe/Amsterdam \
-    NODE_ENV=production \
-    PUPPETEER_SKIP_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+    NODE_ENV=production
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    chromium \
     tini \
     && rm -rf /var/lib/apt/lists/*
 
@@ -24,6 +21,6 @@ EXPOSE ${PORT:-3000}
 ARG GIT_SHA
 ENV SENTRY_RELEASE=${GIT_SHA}
 
-# tini runs as PID 1 and reaps the orphaned chromium/crashpad processes left behind by puppeteer
+# tini runs as PID 1 and forwards SIGTERM to bun (a PID 1 without a handler ignores it, so pods would wait for SIGKILL)
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["bun", "run", "--preload", "./src/instrument.ts", "src/index.ts"]
