@@ -9,6 +9,7 @@ import retrieveJotihuntAreas from "./jotihunt-areas.cron";
 import retrieveJotihuntArticles from "./jotihunt-articles.cron";
 import retrieveJotihuntLogos from "./jotihunt-logos.cron";
 import scrapeJotihuntWebsite from "./jotihunt-scraper.cron";
+import syncJotihuntScore from "./jotihunt-score.cron";
 import recomputePredictions from "./prediction.cron";
 import notify from "./notifier.cron";
 
@@ -26,6 +27,8 @@ export function scheduleCrons() {
   if (process.env.JOTIHUNT_WEB_URL) {
     // The login can be set later in Beheer: the job skips runs until it is
     cron.schedule("0 * * * * *", reportCronErrors("jotihunt-scraper", async () => (jotihuntLogin() ? scrapeJotihuntWebsite() : undefined)), { name: "jotihunt-scraper", noOverlap: true });
+    // Our provisional score from the dashboard, on the same session
+    cron.schedule("20 */2 * * * *", reportCronErrors("jotihunt-score", async () => (jotihuntLogin() ? syncJotihuntScore() : undefined)), { name: "jotihunt-score", noOverlap: true });
     if (!jotihuntLogin()) logger.warn("No Jotihunt website login (Beheer → Algemeen or JOTIHUNT_WEB_USERNAME/PASSWORD): the website scraper waits");
   } else {
     logger.warn("JOTIHUNT_WEB_URL is not set, skipping website scraper cron job");
