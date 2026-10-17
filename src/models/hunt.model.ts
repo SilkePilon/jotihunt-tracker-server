@@ -1,13 +1,20 @@
 import mongoose, { InferSchemaType } from "mongoose";
 import { invalidateOnWrite } from "../services/response-cache";
 
-/** Where jotihunt.nl registered the hunt (the hunter's phone when scanning the fox's QR code) */
-const HuntLocationSchema = new mongoose.Schema(
+/**
+ * Where the hunt happened. jotihunt.nl never shows it, so it is estimated from our own trackers
+ * (hunt-location-estimate): `estimated` true, `source` the tracker's name. Shared with HuntSyncEvent.
+ */
+export const HuntLocationSchema = new mongoose.Schema(
   {
     lat: { type: Number, required: true },
     lng: { type: Number, required: true },
-    /** Metres; null when the site shows none */
+    /** Metres; null when unknown */
     accuracy: { type: Number, required: false, default: null },
+    /** Estimated from our trackers, not reported by the site */
+    estimated: { type: Boolean, required: false, default: false },
+    /** Display name of the tracker (Traccar device or Life360 member) an estimate came from */
+    source: { type: String, required: false, default: null },
   },
   { _id: false },
 );
@@ -17,8 +24,8 @@ const HuntLocationSchema = new mongoose.Schema(
  * the only source of hunts: nobody registers them in the app.
  */
 const HuntSchema = new mongoose.Schema({
-  /** Upsert key (see siteKeyOf): `qr:<qr code>`, `code:<old hunt code>`, `id:<detail page id>` or
-   * `time:<area>:<iso time>`. Missing on hunts stored before 17 Oct 2026; the scraper backfills it from their code. */
+  /** Upsert key (see siteKeyOf): `code:<hunt code>` or `time:<area>:<iso time>` (older data may have `qr:`/`id:`
+   * keys). Missing on hunts stored before 17 Oct 2026; the scraper backfills it from their code. */
   siteKey: {
     type: String,
     required: false,
@@ -50,12 +57,13 @@ const HuntSchema = new mongoose.Schema({
     type: String,
     required: false,
   },
+  /** Not on the site's hunts page; kept for older data and clients (always null for synced hunts) */
   qrCode: {
     type: String,
     required: false,
     default: null,
   },
-  /** Never cleared by a scrape that found none (a detail page may not have been opened that run) */
+  /** Never cleared by a scrape; set by the location estimate (see HuntLocationSchema) */
   location: {
     type: HuntLocationSchema,
     required: false,

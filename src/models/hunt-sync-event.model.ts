@@ -1,5 +1,6 @@
 import mongoose, { InferSchemaType } from "mongoose";
 import { HUNT_SYNC_EVENT_TYPES } from "../services/hunt-sync-diff";
+import { HuntLocationSchema } from "./hunt.model";
 
 /** One line of the hunt sync log: a hunt came in, was approved or rejected, or its points changed */
 const HuntSyncEventSchema = new mongoose.Schema({
@@ -15,7 +16,7 @@ const HuntSyncEventSchema = new mongoose.Schema({
   /** The hunt's time and location when the event was logged (the hunt may be gone later) */
   huntTime: { type: Date, required: false, default: null },
   location: {
-    type: new mongoose.Schema({ lat: { type: Number, required: true }, lng: { type: Number, required: true }, accuracy: { type: Number, required: false, default: null } }, { _id: false }),
+    type: HuntLocationSchema,
     required: false,
     default: null,
   },

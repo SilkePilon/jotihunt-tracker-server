@@ -103,7 +103,7 @@ describe("hunt sync routes", () => {
         statusText: "Goedgekeurd",
         points: 10,
         qrCode: null,
-        location: { lat: 52.0123, lng: 5.9876, accuracy: 12 },
+        location: { lat: 52.0123, lng: 5.9876, accuracy: 12, estimated: false, source: null },
         firstSeenAt: now.toISOString(),
         statusChangedAt: later.toISOString(),
       },
@@ -114,6 +114,19 @@ describe("hunt sync routes", () => {
     await Hunt.collection.insertOne({ siteKey: "code:OLD", area: "Bravo", huntCode: "OLD", status: "Goedgekeurd", points: 6, huntTime, updatedAt: huntTime });
     const [hunt] = (await (await get("/hunts", await webUser())).json()) as Record<string, unknown>[];
     expect(hunt).toMatchObject({ siteKey: "code:OLD", area: "bravo", status: "approved", statusText: "Goedgekeurd", qrCode: null, location: null, firstSeenAt: huntTime.toISOString(), statusChangedAt: null });
+  });
+
+  test("GET /hunts and /hunts/events: an estimated location says so and names its tracker", async () => {
+    const token = await webUser();
+    await storeHunts([scraped("time:alpha:x", { location: null })], new Date("2026-10-17T19:50:00Z"));
+    const location = { lat: 52.01, lng: 5.98, accuracy: 150, estimated: true, source: "Fiets 1" };
+    await Hunt.updateOne({ siteKey: "time:alpha:x" }, { $set: { location } });
+    await HuntSyncEvent.updateMany({}, { $set: { location } });
+    invalidateResponseCache("hunts");
+    const [hunt] = (await (await get("/hunts", token)).json()) as Record<string, unknown>[];
+    expect(hunt.location).toEqual(location);
+    const [event] = (await (await get("/hunts/events", token)).json()) as Record<string, unknown>[];
+    expect(event.location).toEqual(location);
   });
 
   test("GET /hunts/events: newest first, the contract shape, paged with before", async () => {
@@ -131,7 +144,7 @@ describe("hunt sync routes", () => {
       ["alpha", "new", null],
     ]);
     const hunt = await Hunt.findOne({ siteKey: "qr:A" }).lean();
-    expect(all[1]).toEqual({ _id: expect.any(String), huntId: String(hunt!._id), area: "alpha", type: "points", points: 15, at: "2026-10-17T19:52:00.000Z", huntTime: huntTime.toISOString(), location: { lat: 52.0123, lng: 5.9876, accuracy: 12 } });
+    expect(all[1]).toEqual({ _id: expect.any(String), huntId: String(hunt!._id), area: "alpha", type: "points", points: 15, at: "2026-10-17T19:52:00.000Z", huntTime: huntTime.toISOString(), location: { lat: 52.0123, lng: 5.9876, accuracy: 12, estimated: false, source: null } });
     expect(all[0].location).toBeNull();
 
     const page = (await (await get("/hunts/events?limit=2", token)).json()) as { at: string }[];
@@ -144,7 +157,7 @@ describe("hunt sync routes", () => {
     await storeHunts([scraped("qr:A")], new Date("2026-10-17T19:50:00Z"));
     await Hunt.deleteMany({});
     const [event] = (await (await get("/hunts/events", await webUser())).json()) as Record<string, unknown>[];
-    expect(event.location).toEqual({ lat: 52.0123, lng: 5.9876, accuracy: 12 });
+    expect(event.location).toEqual({ lat: 52.0123, lng: 5.9876, accuracy: 12, estimated: false, source: null });
     expect(await HuntSyncEvent.countDocuments()).toBe(1);
   });
 

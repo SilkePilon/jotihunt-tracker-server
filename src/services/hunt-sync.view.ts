@@ -10,6 +10,10 @@ export interface HuntLocationView {
   lat: number;
   lng: number;
   accuracy: number | null;
+  /** Estimated from our own trackers (jotihunt.nl never shows the location) */
+  estimated: boolean;
+  /** The tracker an estimate came from */
+  source: string | null;
 }
 
 /** GET /hunts: a hunt as synced from jotihunt.nl */
@@ -56,6 +60,8 @@ interface StoredLocation {
   lat: number;
   lng: number;
   accuracy?: number | null;
+  estimated?: boolean | null;
+  source?: string | null;
 }
 
 interface StoredHunt {
@@ -75,7 +81,9 @@ interface StoredHunt {
 }
 
 const iso = (date: Date | null | undefined) => (date ? date.toISOString() : null);
-const locationView = (location: StoredLocation | null | undefined): HuntLocationView | null => (location ? { lat: location.lat, lng: location.lng, accuracy: location.accuracy ?? null } : null);
+/** Locations stored before the estimate existed have neither flag nor source */
+const locationView = (location: StoredLocation | null | undefined): HuntLocationView | null =>
+  location ? { lat: location.lat, lng: location.lng, accuracy: location.accuracy ?? null, estimated: location.estimated ?? false, source: location.source ?? null } : null;
 
 /** Status class of a stored hunt; hunts stored before 17 Oct 2026 have only the site's text */
 export function statusClassOf(hunt: Pick<StoredHunt, "status" | "statusClass" | "points">): HuntStatusClass {
