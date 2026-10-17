@@ -55,20 +55,25 @@ const cookieHeader = (cookies: CookieJar) => [...cookies].map(([name, value]) =>
 
 /**
  * One request with the jar's cookies, following redirects by hand (every hop's Set-Cookie is kept: the login's 302
- * carries the new session). Returns the last response and the URL it came from.
+ * carries the new session). Cookies are only sent to and taken from the site's own origin, and only redirects on that
+ * origin are followed. Returns the last response and the URL it came from.
  */
 async function request(cookies: CookieJar, path: string, init: { method?: string; form?: Record<string, string> } = {}): Promise<{ response: Response; url: URL }> {
+  const origin = new URL(websiteUrl).origin;
   let url = new URL(path, websiteUrl);
   let method = init.method ?? "GET";
   let body: string | undefined = init.form ? new URLSearchParams(init.form).toString() : undefined;
   for (let hop = 0; ; hop++) {
     const headers: Record<string, string> = { "User-Agent": userAgent, Accept: "text/html,application/xhtml+xml" };
-    if (cookies.size > 0) headers.Cookie = cookieHeader(cookies);
+    // The session never leaves the site
+    if (cookies.size > 0 && url.origin === origin) headers.Cookie = cookieHeader(cookies);
     if (body !== undefined) headers["Content-Type"] = "application/x-www-form-urlencoded";
     const response = await fetchImpl(url, { method, headers, body, redirect: "manual", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
-    storeCookies(cookies, response);
+    if (url.origin === origin) storeCookies(cookies, response);
     const location = response.headers.get("location");
     if (response.status < 300 || response.status >= 400 || !location) return { response, url };
+    // A redirect to another host is not followed: the caller gets the redirect itself
+    if (new URL(location, url).origin !== origin) return { response, url };
     if (hop >= MAX_REDIRECTS) throw new Error(`${method} ${url.pathname}: too many redirects`);
     // Drain the redirect body so the connection can be reused
     await response.arrayBuffer().catch(() => undefined);
@@ -99,7 +104,6 @@ function csrfToken(html: string): string | null {
  */
 async function logIn(cookies: CookieJar, login = jotihuntLogin()): Promise<void> {
   if (!login) throw new Error("No Jotihunt website login set");
-  logger.info("(SCRAPER) Logging in to Jotihunt website with e-mail: " + login.username);
   for (let attempt = 0; attempt < 2; attempt++) {
     const form = await request(cookies, "/login");
     // Still logged in: the site sends a guest away from /login
@@ -122,14 +126,31 @@ async function logIn(cookies: CookieJar, login = jotihuntLogin()): Promise<void>
   throw new Error("Login failed: the login form kept expiring (419)");
 }
 
-/** Forget the kept session; the next scrape logs in again. */
+/** Bumped by closeScraper: a login that was in flight then does not become the kept session */
+let sessionEpoch = 0;
+
+/** Forget the kept session; the next scrape logs in again. A login in flight is not kept. */
 export async function closeScraper(): Promise<void> {
+  sessionEpoch++;
   jar = new Map();
 }
 
-// A changed login applies at the next scrape: drop the session (other secret changes leave it alone)
+/** Waits after failed logins (then the longest), so a wrong password does not hammer POST /login every minute */
+export const LOGIN_BACKOFF_MS = [60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000];
+let failedLogins = 0;
+let nextLoginAt = 0;
+
+function resetLoginBackoff(): void {
+  failedLogins = 0;
+  nextLoginAt = 0;
+}
+
+// A changed login applies at the next scrape: drop the session and the wait after failed logins (other secret changes
+// leave them alone)
 onAppConfigChange((part) => {
-  if (part !== "secrets" || jar.size === 0 || JSON.stringify(jotihuntLogin()) === lastLogin) return;
+  if (part !== "secrets" || JSON.stringify(jotihuntLogin()) === lastLogin) return;
+  lastLogin = JSON.stringify(jotihuntLogin());
+  resetLoginBackoff();
   void closeScraper();
 });
 
@@ -151,25 +172,42 @@ const NOT_THE_HUNTS_PAGE = /just a moment|cf-challenge|challenge-platform|captch
 /** Bumped by every fresh login, so a request that lost its session to another job's login just retries */
 let loginGeneration = 0;
 /** The login in progress: jobs that find the session gone at the same time share one login */
-let loginInFlight: Promise<void> | null = null;
+let loginInFlight: Promise<CookieJar> | null = null;
 
-/** Start from a new jar and log in (one login at a time for every job) */
-function freshLogin(): Promise<void> {
+/**
+ * Log in into a new jar (one login at a time for every job) and return it; it becomes the kept session unless
+ * closeScraper ran meanwhile. After a failed login the next one waits (LOGIN_BACKOFF_MS); until then this throws.
+ */
+function freshLogin(): Promise<CookieJar> {
   loginInFlight ??= (async () => {
-    jar = new Map();
-    loginGeneration++;
+    const wait = nextLoginAt - Date.now();
+    if (wait > 0) throw new Error(`Login failed earlier: next try in ${Math.ceil(wait / 1000)} s`);
+    const epoch = sessionEpoch;
+    const next: CookieJar = new Map();
     const login = jotihuntLogin();
     lastLogin = JSON.stringify(login);
-    await logIn(jar, login);
+    try {
+      await logIn(next, login);
+    } catch (error) {
+      nextLoginAt = Date.now() + LOGIN_BACKOFF_MS[Math.min(failedLogins, LOGIN_BACKOFF_MS.length - 1)];
+      failedLogins++;
+      throw error;
+    }
+    resetLoginBackoff();
+    if (epoch === sessionEpoch) {
+      jar = next;
+      loginGeneration++;
+    }
+    return next;
   })().finally(() => {
     loginInFlight = null;
   });
   return loginInFlight;
 }
 
-/** GET a page with the kept session; null when the session is gone (sent to /login, or a 419) */
-async function sessionPage(path: string): Promise<{ status: number; html: string } | null> {
-  const { response, url } = await request(jar, path);
+/** GET a page with a session; null when the session is gone (sent to /login, or a 419) */
+async function sessionPage(cookies: CookieJar, path: string): Promise<{ status: number; html: string } | null> {
+  const { response, url } = await request(cookies, path);
   if (isLoginPage(url) || response.status === 419) {
     await response.arrayBuffer().catch(() => undefined);
     return null;
@@ -180,18 +218,18 @@ async function sessionPage(path: string): Promise<{ status: number; html: string
 /**
  * GET a logged-in page of jotihunt.nl with the one shared session (hunts, score and assignments use the same jar),
  * logging in first when there is no session and again when it expired. Any HTTP status is returned as-is; throws
- * "Login failed…" when logging in does not help.
+ * "Login failed…" when logging in does not help (or while waiting after a failed login).
  */
 export async function fetchPage(path: string): Promise<{ status: number; html: string }> {
   if (loginInFlight) await loginInFlight.catch(() => undefined);
   const generation = loginGeneration;
-  let page = jar.size > 0 ? await sessionPage(path) : null;
+  let page = jar.size > 0 ? await sessionPage(jar, path) : null;
   if (page !== null) return page;
   // Another job logged in meanwhile: its session may work for us too
-  if (generation !== loginGeneration && jar.size > 0) page = await sessionPage(path);
+  if (generation !== loginGeneration && jar.size > 0) page = await sessionPage(jar, path);
   if (page !== null) return page;
-  await freshLogin();
-  page = await sessionPage(path);
+  const session = await freshLogin();
+  page = await sessionPage(session, path);
   if (page === null) throw new Error(`Login failed: ${path} still asks to log in`);
   return page;
 }
@@ -222,5 +260,6 @@ export function setScraperFetch(fake: Fetch | null): void {
   fetchImpl = fake ?? ((input, init) => fetch(input, init));
   jar = new Map();
   loginInFlight = null;
+  resetLoginBackoff();
   lastWarning = null;
 }

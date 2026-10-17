@@ -1,16 +1,17 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, setSystemTime, test } from "bun:test";
 import type { Connection } from "mongoose";
 import { initAppConfig, resetAppConfig, setPlain } from "../settings/app-config";
 
 process.env.JOTIHUNT_WEB_URL = "https://jh.test";
 
 const warnings: string[] = [];
-mock.module("../logger", () => ({ logger: { info() {}, debug() {}, error() {}, warn: (message: string) => warnings.push(message) } }));
+const infos: string[] = [];
+mock.module("../logger", () => ({ logger: { info: (message: string) => infos.push(message), debug() {}, error() {}, warn: (message: string) => warnings.push(message) } }));
 
 // A fresh instance: another test file may have loaded the service already (before JOTIHUNT_WEB_URL was set,
 // and resetAppConfig in the settings tests drops its config listener)
 const freshService = "./jotihunt-scraper.service?fresh";
-const { closeScraper, fetchPage, jotihuntLogin, scrapeHunts, setScraperFetch, testJotihuntLogin } = (await import(freshService)) as typeof import("./jotihunt-scraper.service");
+const { closeScraper, fetchPage, jotihuntLogin, LOGIN_BACKOFF_MS, scrapeHunts, setScraperFetch, testJotihuntLogin } = (await import(freshService)) as typeof import("./jotihunt-scraper.service");
 
 const ROWS = `<table><thead><th>Deelgebied</th><th>Huntcode</th><th>Status</th><th>Punten</th><th>Hunttijd</th></thead><tbody><tr><td>Alpha</td><td>abc</td><td>Goedgekeurd</td><td>1</td><td>2026-10-17 12:00:00</td></tr></tbody></table>`;
 
@@ -80,6 +81,7 @@ async function fakeFetch(input: URL, init: RequestInit): Promise<Response> {
     site.sessions.add(id);
     return redirect("https://jh.test/scoutingGroup/dashboard", id);
   }
+  if (path === "/elders") return redirect("https://elsewhere.test/landing");
   if (path === "/scoutingGroup/dashboard") {
     if (!session || !site.sessions.has(session)) return redirect("https://jh.test/login");
     return new Response("<p>Dashboard</p>", { status: 200 });
@@ -110,7 +112,9 @@ beforeEach(async () => {
   site.reset();
   setScraperFetch(fakeFetch);
   warnings.length = 0;
+  infos.length = 0;
 });
+afterEach(() => setSystemTime());
 afterAll(() => {
   setScraperFetch(null);
   resetAppConfig();
@@ -203,6 +207,76 @@ describe("fetchPage", () => {
     site.password = "other";
     try {
       await expect(fetchPage("/scoutingGroup/dashboard")).rejects.toThrow(/Login failed/);
+    } finally {
+      site.password = "hunter2";
+    }
+  });
+});
+
+describe("session safety", () => {
+  test("cookies only go to the site; a redirect to another host is not followed", async () => {
+    const hosts: [string, string | null][] = [];
+    setScraperFetch(async (input, init) => {
+      hosts.push([input.host, new Headers(init.headers).get("cookie")]);
+      return fakeFetch(input, init);
+    });
+    expect(await fetchPage("/elders")).toEqual({ status: 302, html: "" });
+    expect(hosts.every(([host]) => host === "jh.test")).toBe(true);
+    expect(hosts.at(-1)![1]).toContain("jotihunt_app_session=");
+  });
+
+  test("the login e-mail is never logged", async () => {
+    await fetchPage("/scoutingGroup/dashboard");
+    expect(infos.join("\n")).not.toContain("team@example.nl");
+    expect(infos).toContain("(SCRAPER) Logged in to Jotihunt website.");
+  });
+
+  test("closeScraper during a login: that login is not kept", async () => {
+    const pending = fetchPage("/scoutingGroup/dashboard");
+    await closeScraper();
+    expect((await pending).status).toBe(200);
+    await fetchPage("/scoutingGroup/dashboard");
+    expect(logins()).toBe(2);
+  });
+
+  test("after a failed login the next waits 1, 2, 5, then 10 minutes; a success resets it", async () => {
+    const start = Date.now();
+    setSystemTime(start);
+    site.password = "other";
+    try {
+      await expect(fetchPage("/hunts")).rejects.toThrow(/Login failed/);
+      await expect(fetchPage("/hunts")).rejects.toThrow(/next try in 60 s/);
+      expect(logins()).toBe(1);
+      let at = start;
+      for (const [index, wait] of LOGIN_BACKOFF_MS.entries()) {
+        at += wait;
+        setSystemTime(at);
+        await expect(fetchPage("/hunts")).rejects.toThrow(/Login failed \(/);
+        expect(logins()).toBe(index + 2);
+        const next = LOGIN_BACKOFF_MS[Math.min(index + 1, LOGIN_BACKOFF_MS.length - 1)];
+        await expect(fetchPage("/hunts")).rejects.toThrow(`next try in ${next / 1000} s`);
+      }
+      site.password = "hunter2";
+      at += LOGIN_BACKOFF_MS.at(-1)!;
+      setSystemTime(at);
+      expect((await fetchPage("/hunts")).status).toBe(200);
+      site.sessions.clear();
+      site.password = "other";
+      await expect(fetchPage("/hunts")).rejects.toThrow(/Login failed \(/);
+      await expect(fetchPage("/hunts")).rejects.toThrow("next try in 60 s");
+    } finally {
+      site.password = "hunter2";
+    }
+  });
+
+  test("a changed login ends the wait", async () => {
+    site.password = "other";
+    try {
+      await expect(fetchPage("/hunts")).rejects.toThrow(/Login failed \(/);
+      site.password = "hunter2";
+      await setPlain({ jotihuntWebUsername: "other@example.nl" }, "test");
+      await Bun.sleep(0);
+      expect((await fetchPage("/hunts")).status).toBe(200);
     } finally {
       site.password = "hunter2";
     }
