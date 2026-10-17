@@ -23,7 +23,7 @@ describe("getFoxHistory", () => {
     await Hunt.create([
       { area: "Alpha", huntCode: "A1", status: "goedgekeurd", points: 6, huntTime: new Date("2026-10-17T13:00:00Z"), updatedAt: NOW },
       { area: "Bravo", huntCode: "B1", status: "goedgekeurd", points: 3, huntTime: new Date("2026-10-17T13:00:00Z"), updatedAt: NOW },
-      { siteKey: "qr:Q1", area: "alpha", status: "Wacht op bevestiging", statusText: "Wacht op bevestiging", statusClass: "pending", points: 0, huntTime: new Date("2026-10-17T14:00:00Z"), updatedAt: NOW, location: { lat: 51.95392, lng: 5.87252, accuracy: 12 } },
+      { siteKey: "time:alpha:1", area: "alpha", status: "Wacht op bevestiging", statusText: "Wacht op bevestiging", statusClass: "pending", points: 0, huntTime: new Date("2026-10-17T14:00:00Z"), updatedAt: NOW, location: { lat: 51.95392, lng: 5.87252, accuracy: 150, estimated: true, source: "Fiets 1" } },
     ]);
     await HintCell.create({ articleId: 10, area: "alpha", publishAt: NOW, slotTime: new Date("2026-10-17T12:00:00Z"), status: HintCellStatus.Solved, answer: "1884 4407", answerKind: "rd", answerLocation: [5.87252, 51.95392] });
     await Prediction.create({ area: "alpha", status: "ok", updatedAt: NOW, pin: { lat: 52, lng: 5.9 }, confidence: "medium", why: "loopt naar het oosten" });
@@ -31,8 +31,8 @@ describe("getFoxHistory", () => {
     expect(history.area).toBe("alpha");
     expect(history.events.map((event) => event.kind)).toEqual(["hint", "hunt", "hunt"]);
     expect(history.events[0]).toMatchObject({ detail: 'hint "Hint 10": 1884 4407', rdText: "1884 4407" });
-    expect(history.events[1]).toMatchObject({ detail: "hunt via jotihunt.nl: goedgekeurd, 6 punten", rdText: null });
-    expect(history.events[2]).toMatchObject({ detail: "hunt via jotihunt.nl: Wacht op bevestiging, 0 punten (±12 m)", rdText: "1884 4407" });
+    expect(history.events[1]).toMatchObject({ detail: "hunt via jotihunt.nl: goedgekeurd, 6 punten, locatie onbekend", rdText: null });
+    expect(history.events[2]).toMatchObject({ detail: "hunt via jotihunt.nl: Wacht op bevestiging, 0 punten, geschatte locatie (±150 m) via tracker Fiets 1", rdText: "1884 4407" });
     expect(history.prediction).toMatchObject({ pin: { lat: 52, lng: 5.9 }, confidence: "medium", why: "loopt naar het oosten" });
   });
 

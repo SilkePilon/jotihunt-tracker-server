@@ -257,7 +257,9 @@ export async function foxHistory(area: string) {
     ...hunts.map((hunt) => {
       const time = hunt.huntTime ?? hunt.firstSeenAt ?? hunt.updatedAt;
       const accuracy = hunt.location?.accuracy != null ? ` (±${Math.round(hunt.location.accuracy)} m)` : "";
-      const detail = `hunt via jotihunt.nl: ${hunt.statusText ?? hunt.status}, ${hunt.points} punten${accuracy}`;
+      // jotihunt.nl never shows where a hunt was: the location is our tracker's position at the hunt time, if any
+      const where = !hunt.location ? ", locatie onbekend" : hunt.location.estimated ? `, geschatte locatie${accuracy} via tracker ${hunt.location.source ?? "?"}` : accuracy;
+      const detail = `hunt via jotihunt.nl: ${hunt.statusText ?? hunt.status}, ${hunt.points} punten${where}`;
       return { sort: time.getTime(), time: time.toISOString(), kind: "hunt" as const, detail, ...(hunt.location ? at(hunt.location.lng, hunt.location.lat) : { latLng: null, rdText: null }) };
     }),
     ...cells.map((cell) => ({
@@ -322,7 +324,7 @@ export function appDataTools(ctx: IntelToolContext) {
       execute: () => safely("getAreas", () => areasOverview()),
     }),
     getFoxHistory: tool({
-      description: "Geschiedenis van één vossenteam, oud naar nieuw: hunts (overgenomen van jotihunt.nl, met locatie en status), opgeloste hintpunten, en de laatste AI-voorspelling.",
+      description: "Geschiedenis van één vossenteam, oud naar nieuw: hunts (overgenomen van jotihunt.nl, met status; de locatie is geschat uit onze eigen trackers en kan ontbreken), opgeloste hintpunten, en de laatste AI-voorspelling.",
       inputSchema: jsonSchema<{ area: string }>({ type: "object", properties: { area: { type: "string", enum: [...AREAS] } }, required: ["area"] }),
       execute: ({ area }) => safely("getFoxHistory", () => foxHistory(area)),
     }),
