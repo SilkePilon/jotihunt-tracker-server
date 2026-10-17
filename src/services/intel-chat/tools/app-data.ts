@@ -130,6 +130,8 @@ export interface AssignmentInfo {
   notes: { by: string; text: string; at: string }[];
   endTime: string | null;
   maxPoints: number | null;
+  /** What our page on jotihunt.nl showed when last checked (handed-in photo, our rating, judgement); null until checked */
+  site: { submitted: boolean; imageUrl: string | null; rating: number | null; judgement: string | null; judged: boolean; points: number | null; checkedAt: string } | null;
 }
 
 /** Our bookkeeping of an assignment: status, owner and notes with display names (open and empty before the first write) */
@@ -147,6 +149,17 @@ export async function assignmentInfo(articleId: number): Promise<AssignmentInfo>
     notes: (assignment?.notes ?? []).map((note) => ({ by: nameOf(note.user), text: note.text, at: note.createdAt.toISOString() })),
     endTime: article.endTime ? article.endTime.toISOString() : null,
     maxPoints: article.maxPoints ?? null,
+    site: assignment?.site
+      ? {
+          submitted: assignment.site.submitted,
+          imageUrl: assignment.site.imageUrl ?? null,
+          rating: assignment.site.rating ?? null,
+          judgement: assignment.site.judgement ?? null,
+          judged: assignment.site.judged,
+          points: assignment.site.points ?? null,
+          checkedAt: assignment.site.checkedAt.toISOString(),
+        }
+      : null,
   };
 }
 
@@ -329,7 +342,7 @@ export function appDataTools(ctx: IntelToolContext) {
       execute: ({ area }) => safely("getFoxHistory", () => foxHistory(area)),
     }),
     getAssignment: tool({
-      description: "Lees onze administratie van een opdracht: status (open, busy, submitted, skipped), wie hem doet, notities, deadline en max punten. Zonder articleId: het open item.",
+      description: "Lees onze administratie van een opdracht: status (open, busy, submitted, skipped), wie hem doet, notities, deadline en max punten, en wat jotihunt.nl toont (site: ingestuurd, foto, onze sterren, beoordeling en punten). Zonder articleId: het open item.",
       inputSchema: jsonSchema<{ articleId?: number }>({ type: "object", properties: { articleId: { type: "integer", description: "Id van een andere opdracht; weglaten voor het open item" } } }),
       execute: ({ articleId }) => safely("getAssignment", () => assignmentInfo(articleId ?? ctx.articleId)),
     }),

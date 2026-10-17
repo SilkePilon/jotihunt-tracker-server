@@ -127,7 +127,7 @@ describe("getAreas", () => {
 describe("getAssignment", () => {
   test("status, owner and notes with names; defaults when we never wrote anything", async () => {
     const assignment = appDataTools({ articleId: 11, now: () => NOW, toolModel: mockModel(() => "") });
-    expect(await runTool(assignment.getAssignment, {})).toEqual({ articleId: 11, title: "Bouw een kasteel", status: "open", owner: null, notes: [], endTime: "2026-10-17T18:00:00.000Z", maxPoints: 12 });
+    expect(await runTool(assignment.getAssignment, {})).toEqual({ articleId: 11, title: "Bouw een kasteel", status: "open", owner: null, notes: [], endTime: "2026-10-17T18:00:00.000Z", maxPoints: 12, site: null });
     const [anna, bram] = await User.create([{ name: "Anna" }, { name: "Bram" }]);
     await Assignment.create({
       articleId: 11,
@@ -145,6 +145,20 @@ describe("getAssignment", () => {
         { by: "Bram", text: "Karton gehaald", at: "2026-10-17T13:00:00.000Z" },
         { by: "Anna", text: "Foto volgt", at: "2026-10-17T13:30:00.000Z" },
       ],
+    });
+  });
+
+  test("what jotihunt.nl showed, once checked", async () => {
+    const checkedAt = new Date("2026-10-17T13:45:00Z");
+    await Assignment.create({
+      articleId: 11,
+      status: AssignmentStatus.Submitted,
+      statusBy: null,
+      site: { submitted: true, imageUrl: "https://cdn.jotihunt.net/kasteel.jpg", rating: 4, judgement: "Nog niet beoordeeld", judged: false, points: null, checkedAt },
+    });
+    expect(await runTool(tools.getAssignment, { articleId: 11 })).toMatchObject({
+      status: "submitted",
+      site: { submitted: true, imageUrl: "https://cdn.jotihunt.net/kasteel.jpg", rating: 4, judgement: "Nog niet beoordeeld", judged: false, points: null, checkedAt: checkedAt.toISOString() },
     });
   });
 
