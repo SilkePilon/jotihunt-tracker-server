@@ -16,6 +16,10 @@ export const MAX_FIX_GAP_MS = 10 * 60_000;
 export const MIN_ACCURACY_M = 150;
 /** The distance a tracker moved in the window counts up to this much (metres) */
 export const MAX_MOVED_M = 1000;
+/** A tracker that stayed within this many metres… */
+export const PARKED_RADIUS_M = 100;
+/** …from at least this long before the hunt until the hunt time was parked, not the hunter who scanned */
+export const PARKED_MS = 8 * 60_000;
 /** Hunts without a location are looked at when their time is within this… */
 export const LOOKBACK_MS = 2 * 60 * 60_000;
 /** …but given up once the hunt is this old (Traccar uploads can lag minutes, so a few retries matter) */
@@ -63,10 +67,23 @@ export function shouldTryEstimate(time: Date, now: Date, lastTriedAt: Date | nul
 }
 
 /**
+ * Whether a tracker stood still from well before the hunt until the hunt time (a parked car, someone at home): hunters
+ * walk or drive up to the fox, so such a tracker is not who scanned. Judged on the fixes from WINDOW_BEFORE_MS before
+ * the hunt until the hunt time plus `used` (the fix the estimate would take); needs one at least PARKED_MS before the
+ * hunt, and a single fix (Life360 live) never counts as parked.
+ */
+export function isParked(fixes: TrackFix[], used: TrackFix, time: Date): boolean {
+  const t = time.getTime();
+  const judged = [...new Set([...fixes.filter((fix) => fix.at.getTime() >= t - WINDOW_BEFORE_MS && fix.at.getTime() <= t), used])];
+  if (judged.length < 2 || !judged.some((fix) => fix.at.getTime() <= t - PARKED_MS)) return false;
+  return judged.every((a) => judged.every((b) => metresBetween(a, b) <= PARKED_RADIUS_M));
+}
+
+/**
  * The estimate for a hunt in `area` at `time`, or null when none of our trackers was in that deelgebied around then
  * (never a guess outside the area).
  * - per tracker: the fix closest to the hunt time (at most MAX_FIX_GAP_MS away), kept when estimateArea puts it in
- *   the hunt's area;
+ *   the hunt's area and the tracker was not parked (isParked);
  * - among those: the closest in time; on a tie the slowest (a hunter stands still at the fox; unknown speed last);
  * - accuracy = max(MIN_ACCURACY_M, the fix's accuracy, how far the tracker moved from that fix within the window
  *   (-10 … +5 min) capped at MAX_MOVED_M).
@@ -80,6 +97,7 @@ export function estimateHuntLocation(input: { area: string; time: Date; tracks: 
     if (usable.length === 0) return [];
     const closest = usable.reduce((best, fix) => (gap(fix) < gap(best) ? fix : best));
     if (estimateArea(closest, input.groups).area?.toLowerCase() !== area) return [];
+    if (isParked(track.fixes, closest, input.time)) return [];
     const inWindow = track.fixes.filter((fix) => fix.at.getTime() >= t - WINDOW_BEFORE_MS && fix.at.getTime() <= t + WINDOW_AFTER_MS);
     const moved = Math.min(MAX_MOVED_M, Math.max(0, ...inWindow.map((fix) => metresBetween(closest, fix))));
     return [{ name: track.name, fix: closest, moved }];
