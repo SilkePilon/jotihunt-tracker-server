@@ -17,6 +17,7 @@ import markersRoute from "./routes/markers.route";
 import teamsRoute from "./routes/teams.route";
 import areasRoute from "./routes/areas.route";
 import huntsRoute from "./routes/hunts.route";
+import scoreRoute from "./routes/score.route";
 import articlesRoute from "./routes/articles.route";
 import adminRoute from "./routes/admin.route";
 import hintsRoute from "./routes/hints.route";
@@ -98,6 +99,7 @@ app.use("/markers", markersRoute);
 app.use("/teams", teamsRoute);
 app.use("/areas", areasRoute);
 app.use("/hunts", huntsRoute);
+app.use("/score", scoreRoute);
 // Manual hunt registration is gone (hunts come from the jotihunt.nl sync): old apps (Android 1.0.x) get a reason to update
 app.use("/hunt-reports", (_req, res) => {
   res.status(410).json({ message: "Werk de app bij naar de nieuwste versie." });
