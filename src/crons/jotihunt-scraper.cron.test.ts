@@ -83,8 +83,29 @@ describe("storeHunts", () => {
     await storeHunts([web(null, { huntTimeText: "09:15", huntTime: saturday }), web("C", { area: "Charlie", huntTimeText: "09:15", huntTime: saturday })]);
     const sunday = new Date("2026-10-18T07:15:00Z");
     const rescraped = [web(null, { huntTimeText: "09:15", huntTime: sunday }), web("C", { area: "Charlie", huntTimeText: "09:15", huntTime: sunday }), web(null, { area: "Bravo", huntTimeText: "09:15", huntTime: sunday }), web(null, { huntTimeText: "2026-10-18 09:15", huntTime: sunday })];
-    await keepStoredDates(rescraped);
+    await keepStoredDates(rescraped, new Date(saturday.getTime() + 17 * 60 * 60_000));
     expect(rescraped.map((hunt) => hunt.huntTime)).toEqual([saturday, saturday, sunday, sunday]);
+  });
+
+  test("a stored date older than 18 hours is another day's hunt: the clock time keeps its own date", async () => {
+    const saturday = new Date("2026-10-17T07:15:00Z");
+    await storeHunts([web(null, { huntTimeText: "09:15", huntTime: saturday })]);
+    const sunday = new Date("2026-10-18T07:15:00Z");
+    const rescraped = [web(null, { huntTimeText: "09:15", huntTime: sunday })];
+    await keepStoredDates(rescraped, new Date(saturday.getTime() + 19 * 60 * 60_000));
+    expect(rescraped[0].huntTime).toEqual(sunday);
+    expect(rescraped[0].siteKey).toBe(`time:alpha:${sunday.toISOString()}`);
+  });
+
+  test("hunts from before siteKey with a blank code are not given a key (no clashing 'code:' keys)", async () => {
+    await Hunt.collection.insertMany([
+      { area: "Alpha", huntCode: " ", status: "Goedgekeurd", points: 1, huntTime: time, updatedAt: time },
+      { area: "Bravo", huntCode: "", status: "Goedgekeurd", points: 1, huntTime: time, updatedAt: time },
+      { area: "Charlie", huntCode: " K ", status: "Goedgekeurd", points: 1, huntTime: time, updatedAt: time },
+    ]);
+    await storeHunts([web("Z", { area: "Delta" })]);
+    const keys = (await Hunt.collection.find({}, { projection: { _id: 0, area: 1, siteKey: 1 } }).toArray()).map((entry) => [entry.area, entry.siteKey ?? null]);
+    expect(keys).toEqual(expect.arrayContaining([["Alpha", null], ["Bravo", null], ["Charlie", "code:K"]]));
   });
 
   test("migrates a database from before siteKey: old unique code index dropped, old hunts kept and updated", async () => {
@@ -170,7 +191,7 @@ describe("storeHunts: stable keys and safe deletes (review fixes)", () => {
     const sunday = new Date("2026-10-18T07:15:00Z");
     const timeKeyed = pending({ huntTimeText: "09:15", huntTime: sunday });
     const codeKeyed = pending({ huntTimeText: "09:15", huntTime: sunday, huntCode: "Q1" });
-    await keepStoredDates([timeKeyed, codeKeyed]);
+    await keepStoredDates([timeKeyed, codeKeyed], new Date(saturday.getTime() + 60 * 60_000));
     expect(timeKeyed.siteKey).toBe(`time:alpha:${saturday.toISOString()}`);
     expect(codeKeyed.siteKey).toBe("code:Q1");
   });
@@ -199,6 +220,27 @@ describe("storeHunts: stable keys and safe deletes (review fixes)", () => {
     const { removed } = await storeHunts([pending({ huntCode: "A", huntTime: at(0) }), pending({ huntCode: "C", huntTime: null, huntTimeText: "?" })], later);
     expect(removed).toEqual(["code:B"]);
     expect((await Hunt.find().lean()).map((hunt) => hunt.siteKey).sort()).toEqual(["code:A", "code:C", "code:N"]);
+  });
+
+  test("a row the parser skipped: nothing is deleted (its hunt would look gone)", async () => {
+    await storeHunts([pending({ huntCode: "A", huntTime: at(0) }), pending({ huntCode: "B", huntTime: at(10) })], now);
+    const result = await storeHunts([pending({ huntCode: "A", huntTime: at(0) })], later, { skipped: 1 });
+    expect(result).toMatchObject({ deleted: false, removed: [] });
+    expect(await Hunt.countDocuments()).toBe(2);
+  });
+
+  test("a row whose time could not be read (raw: key): nothing is deleted", async () => {
+    await storeHunts([pending({ huntTime: at(0) }), pending({ huntCode: "B", huntTime: at(10) })], now);
+    const result = await storeHunts([pending({ huntTime: null, huntTimeText: "kwart over" }), pending({ huntCode: "B", huntTime: at(10) })], later);
+    expect(result).toMatchObject({ deleted: false, removed: [] });
+    expect(await Hunt.countDocuments()).toBe(3);
+  });
+
+  test("re-keying matches areas case-insensitively without a regex (special characters are text)", async () => {
+    await storeHunts([pending({ area: "a.c", huntTime: at(0) })], now);
+    await storeHunts([pending({ area: "A.C", huntTime: at(0.5), huntCode: "Q1" }), pending({ area: "abc", huntTime: at(0.2), huntCode: "Q2" })], later);
+    expect((await Hunt.find().lean()).map((entry) => entry.siteKey).sort()).toEqual(["code:Q1", "code:Q2"]);
+    expect(await Hunt.findOne({ siteKey: "code:Q1" }).lean()).toMatchObject({ firstSeenAt: now });
   });
 
   test("no readable time on the page: nothing is deleted", async () => {

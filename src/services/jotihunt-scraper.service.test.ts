@@ -122,7 +122,7 @@ afterAll(() => {
 
 describe("scrapeHunts", () => {
   test("logs in once and keeps the session between runs", async () => {
-    expect(await scrapeHunts()).toMatchObject([{ siteKey: "code:abc", area: "alpha", status: "approved", location: null }]);
+    expect(await scrapeHunts()).toMatchObject({ hunts: [{ siteKey: "code:abc", area: "alpha", status: "approved", location: null }], skipped: 0 });
     await scrapeHunts();
     await scrapeHunts();
     expect(logins()).toBe(1);
@@ -132,13 +132,13 @@ describe("scrapeHunts", () => {
   test("an expired session (redirect to /login) logs in again and retries", async () => {
     await scrapeHunts();
     site.sessions.clear();
-    expect(await scrapeHunts()).toHaveLength(1);
+    expect((await scrapeHunts()).hunts).toHaveLength(1);
     expect(logins()).toBe(2);
   });
 
   test("a 419 on the login form fetches a fresh token and tries again", async () => {
     site.staleOnce = true;
-    expect(await scrapeHunts()).toHaveLength(1);
+    expect((await scrapeHunts()).hunts).toHaveLength(1);
     expect(site.requests.filter((entry) => entry === "GET /login")).toHaveLength(2);
   });
 
@@ -170,10 +170,10 @@ describe("scrapeHunts", () => {
     await expect(scrapeHunts()).rejects.toThrow("GET /hunts → 500");
   });
 
-  test("an unknown layout warns once per distinct warning", async () => {
+  test("an unknown layout fails the run and warns once per distinct warning", async () => {
     site.huntsHtml = "<main><p>Iets anders</p></main>";
-    expect(await scrapeHunts()).toEqual([]);
-    await scrapeHunts();
+    await expect(scrapeHunts()).rejects.toThrow("Unknown hunts layout");
+    await expect(scrapeHunts()).rejects.toThrow("Unknown hunts layout");
     expect(warnings).toEqual(["(SCRAPER) Unknown hunts layout (no tables)"]);
   });
 });

@@ -12,24 +12,31 @@ import { estimateHuntLocations } from "../services/hunt-location-estimate.servic
 import { deadline } from "../services/http-limits";
 import { classifyStatus, rekeyTimeHunts, type ScrapedHunt } from "../services/jotihunt-hunts.parse";
 
-/** A whole scrape (login + page load) may take this long; then the session is dropped and the run ends */
+/** A whole scrape (login + page load) may take this long; then the run ends */
 export const SCRAPE_DEADLINE_MS = 120_000;
 
-/** Hunts stored before siteKey existed get the key of their code (once; afterwards nothing matches). */
+/**
+ * Hunts stored before siteKey existed get the key of their code (once; afterwards nothing matches). Empty or blank
+ * codes are skipped: they would all become "code:" and clash on the unique index.
+ */
 async function backfillSiteKeys() {
-  await Hunt.updateMany({ siteKey: { $exists: false }, huntCode: { $type: "string" } }, [{ $set: { siteKey: { $concat: ["code:", { $trim: { input: "$huntCode" } }] } } }], { updatePipeline: true });
+  await Hunt.updateMany({ siteKey: { $exists: false }, huntCode: { $type: "string", $regex: /\S/ } }, [{ $set: { siteKey: { $concat: ["code:", { $trim: { input: "$huntCode" } }] } } }], { updatePipeline: true });
 }
 
 const CLOCK_ONLY = /^\d{1,2}[:.]\d{2}(?::\d{2})?$/;
 
+/** A stored hunt's date is only reused for a clock-only time when its hunt time is this recent */
+export const KEEP_DATE_MS = 18 * 60 * 60_000;
+
 /**
- * A time the site shows as a clock only ("09:15") is dated to its most recent occurrence, so on Sunday a Saturday
- * 09:15 would become Sunday 09:15. Rows already stored (same area, same text) keep their stored date. Mutates `time`.
+ * A time the site shows as a clock only ("09:15") is dated to its most recent occurrence (Amsterdam), so on Sunday a
+ * Saturday 09:15 would become Sunday 09:15. Rows already stored (same area, same text) keep their stored date, but only
+ * when that hunt time is within the last 18 hours: an older one is another day's hunt, not this row. Mutates `time`.
  */
-export async function keepStoredDates(scraped: ScrapedHunt[]): Promise<void> {
+export async function keepStoredDates(scraped: ScrapedHunt[], now = new Date()): Promise<void> {
   const clockOnly = scraped.filter((hunt) => CLOCK_ONLY.test(hunt.huntTimeText.trim()));
   if (clockOnly.length === 0) return;
-  const stored = await Hunt.find({ huntTimeText: { $in: [...new Set(clockOnly.map((hunt) => hunt.huntTimeText.trim()))] }, huntTime: { $type: "date" } })
+  const stored = await Hunt.find({ huntTimeText: { $in: [...new Set(clockOnly.map((hunt) => hunt.huntTimeText.trim()))] }, huntTime: { $gte: new Date(now.getTime() - KEEP_DATE_MS), $lte: now } })
     .select("area huntTimeText huntTime")
     .sort({ huntTime: -1 })
     .lean();
@@ -58,9 +65,10 @@ export interface StoreResult {
  * - drop hunts the website no longer lists, but only inside the time window the page shows (hunts older than its
  *   oldest row may simply have scrolled off a "last N hunts" list and are kept as history), and only when the answer
  *   looks complete: an empty list, or one less than half as long as what is stored in that window (a broken or
- *   half-loaded page), keeps every stored hunt.
+ *   half-loaded page), keeps every stored hunt. So does a page with rows the parser skipped (`skipped`) or could not
+ *   date (raw: keys): the hunt of such a row would look gone.
  */
-export async function storeHunts(scraped: ScrapedHunt[], now = new Date()): Promise<StoreResult> {
+export async function storeHunts(scraped: ScrapedHunt[], now = new Date(), options: { skipped?: number } = {}): Promise<StoreResult> {
   if (scraped.length === 0) return { deleted: false, events: [], initial: false, removed: [] };
   await backfillSiteKeys();
   const keys = scraped.map((hunt) => hunt.siteKey);
@@ -126,7 +134,8 @@ export async function storeHunts(scraped: ScrapedHunt[], now = new Date()): Prom
   // Only hunts inside the page's time window (from its oldest readable time) can be missing for real; hunts without a
   // time are never dropped, and a page without any readable time drops nothing
   const times = scraped.flatMap((hunt) => (hunt.huntTime ? [hunt.huntTime.getTime()] : []));
-  if (times.length === 0) return { deleted: false, events, initial, removed: [] };
+  const incomplete = (options.skipped ?? 0) > 0 || scraped.some((hunt) => hunt.siteKey.startsWith("raw:"));
+  if (times.length === 0 || incomplete) return { deleted: false, events, initial, removed: [] };
   const windowFilter = { huntTime: { $gte: new Date(Math.min(...times)) } };
   const inWindow = await Hunt.countDocuments(windowFilter);
   if (scraped.length * 2 < inWindow) return { deleted: false, events, initial, removed: [] };
@@ -150,7 +159,10 @@ async function rekeyMovedHunts(scraped: ScrapedHunt[]): Promise<void> {
   const known = new Set((await Hunt.find({ siteKey: { $in: keys } }).select("siteKey").lean()).map((hunt) => hunt.siteKey));
   const unseen = scraped.filter((hunt) => !known.has(hunt.siteKey) && hunt.huntTime);
   if (unseen.length === 0) return;
-  const candidates = await Hunt.find({ siteKey: { $nin: keys }, huntTime: { $type: "date" }, area: { $in: [...new Set(unseen.map((hunt) => new RegExp(`^${hunt.area}$`, "i")))] } })
+  // Areas are compared case-insensitively below; the query only narrows by time
+  const unseenTimes = unseen.map((hunt) => hunt.huntTime!.getTime());
+  const near = { $gte: new Date(Math.min(...unseenTimes) - REKEY_MATCH_MS), $lte: new Date(Math.max(...unseenTimes) + REKEY_MATCH_MS) };
+  const candidates = await Hunt.find({ siteKey: { $nin: keys }, huntTime: near })
     .select("_id siteKey area huntTime")
     .lean();
   const taken = new Set<string>();
@@ -181,11 +193,11 @@ async function rekeyMovedHunts(scraped: ScrapedHunt[]): Promise<void> {
  * Everything after a scrape: store the hunts, estimate locations for recent hunts without one (from our trackers),
  * then make the hunt markers match and tell everyone what changed. `estimate` is replaceable for tests.
  */
-export async function storeAndSync(scraped: ScrapedHunt[], options: { estimate?: (now: Date) => Promise<number> } = {}): Promise<StoreResult> {
+export async function storeAndSync(scraped: ScrapedHunt[], options: { estimate?: (now: Date) => Promise<number>; skipped?: number } = {}): Promise<StoreResult> {
   const estimate = options.estimate ?? ((now: Date) => estimateHuntLocations(now));
   await keepStoredDates(scraped).catch((error) => logger.warn("(CRON) Could not look up stored hunt dates:", error));
-  const result = await storeHunts(scraped);
-  if (!result.deleted) logger.warn(`(CRON) Kept every stored hunt: the page showed ${scraped.length} hunt(s), far fewer than stored, or no readable times`);
+  const result = await storeHunts(scraped, new Date(), { skipped: options.skipped });
+  if (!result.deleted) logger.warn(`(CRON) Kept every stored hunt: the page showed ${scraped.length} hunt(s) (${options.skipped ?? 0} row(s) skipped), far fewer than stored, unreadable rows or no readable times`);
   markSyncSuccess(new Date());
   // jotihunt.nl shows no location: estimate it before the markers are made
   await estimate(new Date()).catch((error) => logger.error("(CRON) Error estimating hunt locations:", error));
@@ -194,6 +206,9 @@ export async function storeAndSync(scraped: ScrapedHunt[], options: { estimate?:
   await notifyHuntEvents(result).catch((error) => logger.error("(CRON) Error sending hunt notifications:", error));
   return result;
 }
+
+/** A failure that means the session is no good: a failed login or an expired form (419) */
+export const dropsSession = (error: unknown) => error instanceof Error && /login failed|\b419\b/i.test(error.message);
 
 export default async function scrapeJotihuntWebsite() {
   if (skipInDemoMode("jotihunt-scraper", (message) => logger.debug(message))) {
@@ -212,12 +227,14 @@ export default async function scrapeJotihuntWebsite() {
   markSyncStart(new Date());
 
   let scraped: ScrapedHunt[];
+  let skipped: number;
   try {
-    scraped = await deadline(scrapeHunts(), SCRAPE_DEADLINE_MS, `Scraping took longer than ${SCRAPE_DEADLINE_MS / 1000} s`);
+    ({ hunts: scraped, skipped } = await deadline(scrapeHunts(), SCRAPE_DEADLINE_MS, `Scraping took longer than ${SCRAPE_DEADLINE_MS / 1000} s`));
   } catch (error) {
     markSyncFailure(error, new Date());
-    // Start from a fresh session next run; a broken page or login would otherwise keep failing
-    await closeScraper();
+    // Only a broken login drops the session (a page error keeps it); a failed login waits before the next try, see
+    // fetchPage
+    if (dropsSession(error)) await closeScraper();
     logger.error("(CRON) Scraping hunts failed:", error);
     return;
   }
@@ -231,7 +248,7 @@ export default async function scrapeJotihuntWebsite() {
   try {
     await runTracked(
       async () => {
-        await storeAndSync(scraped);
+        await storeAndSync(scraped, { skipped });
       },
       { generation },
     );

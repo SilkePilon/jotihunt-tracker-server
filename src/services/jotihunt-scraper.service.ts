@@ -234,22 +234,27 @@ export async function fetchPage(path: string): Promise<{ status: number; html: s
   return page;
 }
 
+/** Thrown when /hunts loaded but has no hunts table (the site changed): a failed sync, not an empty one */
+export const UNKNOWN_LAYOUT = "Unknown hunts layout";
+
 /**
  * Scrape the hunts from the logged-in /hunts page with plain HTTP (see fetchPage for the session). The HTML is parsed
- * by jotihunt-hunts.parse (tested against saved pages).
+ * by jotihunt-hunts.parse (tested against saved pages). `skipped`: rows with content that gave no hunt (the page is
+ * then incomplete). Throws when the page has no hunts table.
  */
-export async function scrapeHunts(): Promise<ScrapedHunt[]> {
+export async function scrapeHunts(): Promise<{ hunts: ScrapedHunt[]; skipped: number }> {
   logger.debug("(SCRAPER) Scraping hunts from Jotihunt website...");
   const { status, html } = await fetchPage("/hunts");
   if ((status < 200 || status >= 300) && !NOT_THE_HUNTS_PAGE.test(html)) throw new Error(`GET /hunts → ${status}`);
 
-  const { hunts, warning, found } = parseHuntsPage(html);
+  const { hunts, warning, found, skipped } = parseHuntsPage(html);
   if (!found && NOT_THE_HUNTS_PAGE.test(html)) throw new Error("No hunts page (Cloudflare or server error)");
   // Once per distinct warning: the cron runs every minute
   if (warning && warning !== lastWarning) logger.warn(`(SCRAPER) ${warning}`);
   lastWarning = warning;
+  if (!found) throw new Error(UNKNOWN_LAYOUT);
   logger.debug(`(SCRAPER) Found ${hunts.length} hunts from website.`);
-  return hunts;
+  return { hunts, skipped };
 }
 
 /** True when the HTML is a Cloudflare challenge or a server error page rather than the site's own page */

@@ -52,6 +52,8 @@ describe("hunt sync state", () => {
     expect(syncErrorText(new Error("Login failed"))).toBe("Inloggen bij jotihunt.nl mislukt");
     expect(syncErrorText(new Error("No Jotihunt website login set"))).toBe("Inloggen bij jotihunt.nl mislukt");
     expect(syncErrorText(new Error("No hunts page on https://jotihunt.nl/hunts"))).toBe("Synchroniseren mislukt");
+    expect(syncErrorText(new Error("Unknown hunts layout"))).toBe("jotihunt.nl ziet er anders uit");
+    expect(syncErrorText(new Error("No score card on the dashboard"))).toBe("jotihunt.nl ziet er anders uit");
     expect(syncErrorText("weird")).toBe("Synchroniseren mislukt");
   });
 });

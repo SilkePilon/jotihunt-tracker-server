@@ -87,6 +87,6 @@ describe("score cron", () => {
         throw new Error("No score card on the dashboard");
       },
     });
-    expect(await scoreView()).toMatchObject({ total: null, lastError: "Synchroniseren mislukt", lastSuccessAt: null });
+    expect(await scoreView()).toMatchObject({ total: null, lastError: "jotihunt.nl ziet er anders uit", lastSuccessAt: null });
   });
 });

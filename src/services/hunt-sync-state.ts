@@ -44,6 +44,7 @@ export function syncErrorText(error: unknown): string {
   const name = error instanceof Error ? error.name : "";
   const message = error instanceof Error ? error.message : String(error);
   if (/login/i.test(message)) return "Inloggen bij jotihunt.nl mislukt";
+  if (/unknown hunts layout|no score card/i.test(message)) return "jotihunt.nl ziet er anders uit";
   if (name === "TimeoutError" || /took longer|timeout|timed out|net::ERR_|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN/i.test(message)) return "jotihunt.nl reageert niet";
   return "Synchroniseren mislukt";
 }

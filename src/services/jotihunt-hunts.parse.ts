@@ -200,9 +200,10 @@ export function rekeyTimeHunts<T extends Parameters<typeof siteKeyOf>[0] & { sit
  * The hunts of a /hunts page: the table whose headers are the five hunt columns, one hunt per tbody row. Never throws.
  * `found` tells whether that table was there; without it the result carries an "Unknown hunts layout" warning (the
  * caller logs it). Rows without a fox or with too few cells (a "no hunts" placeholder) are skipped; skipped rows with
- * content give a warning.
+ * content give a warning. `skipped` counts the rows with content that gave no hunt (a one-cell placeholder aside): the
+ * page is then incomplete and nothing may be deleted for missing from it.
  */
-export function parseHuntsPage(html: string, now = new Date()): { hunts: ScrapedHunt[]; warning: string | null; found: boolean } {
+export function parseHuntsPage(html: string, now = new Date()): { hunts: ScrapedHunt[]; warning: string | null; found: boolean; skipped: number } {
   const tables = innerOf(html, "table");
   const seenHeaders: string[][] = [];
   for (const table of tables) {
@@ -215,6 +216,7 @@ export function parseHuntsPage(html: string, now = new Date()): { hunts: Scraped
     const body = innerOf(table, "tbody")[0] ?? table;
     const hunts: ScrapedHunt[] = [];
     let unreadable = 0;
+    let skipped = 0;
     for (const row of innerOf(body, "tr")) {
       const cells = innerOf(row, "td").map(textOf);
       if (cells.length === 0) continue;
@@ -222,6 +224,7 @@ export function parseHuntsPage(html: string, now = new Date()): { hunts: Scraped
       const area = AREA_WORD.exec(areaText)?.[1].toLowerCase() ?? areaText.toLowerCase();
       if (cells.length < width || !area) {
         if (cells.some(Boolean) && cells.length >= width) unreadable++;
+        if (cells.some(Boolean) && cells.length > 1) skipped++;
         continue;
       }
       const points = Number.parseInt(cells[columns.points].replace(/[^\d-]/g, ""), 10);
@@ -242,8 +245,8 @@ export function parseHuntsPage(html: string, now = new Date()): { hunts: Scraped
       });
     }
     const warning = unreadable > 0 ? `${unreadable} hunts row(s) without a deelgebied were skipped` : null;
-    return { hunts: assignSiteKeys(hunts), warning, found: true };
+    return { hunts: assignSiteKeys(hunts), warning, found: true, skipped };
   }
   const described = seenHeaders.length > 0 ? seenHeaders.map((headers) => `[${headers.map((header) => JSON.stringify(header)).join(", ")}]`).join(" ") : "no tables";
-  return { hunts: [], warning: `Unknown hunts layout (${described})`, found: false };
+  return { hunts: [], warning: `Unknown hunts layout (${described})`, found: false, skipped: 0 };
 }

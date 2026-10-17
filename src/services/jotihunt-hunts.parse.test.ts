@@ -59,7 +59,7 @@ describe("classifyStatus", () => {
 
 describe("parseHuntsPage", () => {
   test("the real page without hunts: none, no warning", () => {
-    expect(parseHuntsPage(fixture("hunts-page-real-empty.html"), now)).toEqual({ hunts: [], warning: null, found: true });
+    expect(parseHuntsPage(fixture("hunts-page-real-empty.html"), now)).toEqual({ hunts: [], warning: null, found: true, skipped: 0 });
   });
 
   test("the real markup with rows parses exactly", () => {
@@ -67,6 +67,7 @@ describe("parseHuntsPage", () => {
     expect(parseHuntsPage(fixture("hunts-page-real-rows.html"), now)).toEqual({
       found: true,
       warning: null,
+      skipped: 0,
       hunts: [
         {
           siteKey: `time:alpha:${tenTwelve.toISOString()}`,
@@ -117,7 +118,7 @@ describe("parseHuntsPage", () => {
   });
 
   test("a page without the hunts table warns", () => {
-    expect(parseHuntsPage("<main><p>Er ging iets mis</p></main>", now)).toEqual({ hunts: [], warning: "Unknown hunts layout (no tables)", found: false });
+    expect(parseHuntsPage("<main><p>Er ging iets mis</p></main>", now)).toEqual({ hunts: [], warning: "Unknown hunts layout (no tables)", found: false, skipped: 0 });
     const other = parseHuntsPage("<table><thead><tr><th>Naam</th><th>Telefoon</th></tr></thead><tbody></tbody></table>", now);
     expect(other).toMatchObject({ hunts: [], found: false });
     expect(other.warning).toBe('Unknown hunts layout (["Naam", "Telefoon"])');
@@ -125,15 +126,17 @@ describe("parseHuntsPage", () => {
 
   test("a placeholder row is skipped; a row without a deelgebied warns", () => {
     const table = (rows: string) => `<table><thead><th>Deelgebied</th><th>Huntcode</th><th>Status</th><th>Punten</th><th>Hunttijd</th></thead><tbody>${rows}</tbody></table>`;
-    expect(parseHuntsPage(table('<tr><td colspan="5">Nog geen hunts</td></tr>'), now)).toEqual({ hunts: [], warning: null, found: true });
-    const { hunts, warning } = parseHuntsPage(
+    expect(parseHuntsPage(table('<tr><td colspan="5">Nog geen hunts</td></tr>'), now)).toEqual({ hunts: [], warning: null, found: true, skipped: 0 });
+    const { hunts, warning, skipped } = parseHuntsPage(
       table(
-        "<tr><td></td><td>X</td><td>Goedgekeurd</td><td>3</td><td>2026-10-17 10:00:00</td></tr><tr><td>Echo&nbsp;</td><td></td><td><span>Afgekeurd</span></td><td>0</td><td>2026-10-17 10:00:00</td></tr>",
+        "<tr><td>Delta</td><td>Y</td></tr><tr><td></td><td>X</td><td>Goedgekeurd</td><td>3</td><td>2026-10-17 10:00:00</td></tr><tr><td>Echo&nbsp;</td><td></td><td><span>Afgekeurd</span></td><td>0</td><td>2026-10-17 10:00:00</td></tr>",
       ),
       now,
     );
     expect(hunts.map((hunt) => [hunt.area, hunt.status])).toEqual([["echo", "rejected"]]);
     expect(warning).toContain("without a deelgebied");
+    // The short row and the row without a deelgebied: the page is incomplete
+    expect(skipped).toBe(2);
   });
 });
 
