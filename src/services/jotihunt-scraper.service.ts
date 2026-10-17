@@ -1,16 +1,14 @@
-import puppeteer, { Page } from "puppeteer";
 import { logger } from "../logger";
-import { deadline } from "./http-limits";
 import { onAppConfigChange, plain, secret } from "../settings/app-config";
-import { extractHuntsPage, parseHuntDetail, parseHuntsPage, type ParsedLocation, type ScrapedHunt } from "./jotihunt-hunts.parse";
+import { parseHuntsPage, type ScrapedHunt } from "./jotihunt-hunts.parse";
 
 const websiteUrl = process.env.JOTIHUNT_WEB_URL as string;
 const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
 
-/** One browser with a logged-in page, kept between scraper runs (launching Chromium and logging in every minute is heavy). */
-let session: Promise<Page> | undefined;
-/** The login the kept browser used (JSON), to tell a changed login from other secret changes */
-let lastLogin: string | null = null;
+/** One request (each redirect hop included) may take this long */
+export const REQUEST_TIMEOUT_MS = 20_000;
+/** Redirects followed per request at most */
+const MAX_REDIRECTS = 5;
 
 /** The site login (Beheer → Algemeen, else JOTIHUNT_WEB_USERNAME/PASSWORD); null when incomplete */
 export function jotihuntLogin(): { username: string; password: string } | null {
@@ -19,180 +17,178 @@ export function jotihuntLogin(): { username: string; password: string } | null {
   return username && password ? { username, password } : null;
 }
 
-async function logIn(page: Page, login = jotihuntLogin()): Promise<void> {
+/** Cookies by name for the one site we talk to (domain and path are ignored: everything is jotihunt.nl at /) */
+type CookieJar = Map<string, string>;
+
+/**
+ * The logged-in session (Laravel's session + XSRF cookies), kept between scraper runs so a run is one GET /hunts.
+ * Empty: log in first.
+ */
+let jar: CookieJar = new Map();
+/** The login the kept session used (JSON), to tell a changed login from other secret changes */
+let lastLogin: string | null = null;
+let lastWarning: string | null = null;
+
+type Fetch = (input: URL, init: RequestInit) => Promise<Response>;
+
+/** fetch, replaced in tests */
+let fetchImpl: Fetch = (input, init) => fetch(input, init);
+
+function storeCookies(cookies: CookieJar, response: Response): void {
+  for (const header of response.headers.getSetCookie()) {
+    const [pair, ...attributes] = header.split(";");
+    const index = pair.indexOf("=");
+    if (index <= 0) continue;
+    const name = pair.slice(0, index).trim();
+    const value = pair.slice(index + 1).trim();
+    const expired = attributes.some((attribute) => {
+      const [key, raw = ""] = attribute.split("=");
+      const lower = key.trim().toLowerCase();
+      return (lower === "max-age" && Number(raw) <= 0) || (lower === "expires" && Date.parse(raw) < Date.now());
+    });
+    if (expired || value === "") cookies.delete(name);
+    else cookies.set(name, value);
+  }
+}
+
+const cookieHeader = (cookies: CookieJar) => [...cookies].map(([name, value]) => `${name}=${value}`).join("; ");
+
+/**
+ * One request with the jar's cookies, following redirects by hand (every hop's Set-Cookie is kept: the login's 302
+ * carries the new session). Returns the last response and the URL it came from.
+ */
+async function request(cookies: CookieJar, path: string, init: { method?: string; form?: Record<string, string> } = {}): Promise<{ response: Response; url: URL }> {
+  let url = new URL(path, websiteUrl);
+  let method = init.method ?? "GET";
+  let body: string | undefined = init.form ? new URLSearchParams(init.form).toString() : undefined;
+  for (let hop = 0; ; hop++) {
+    const headers: Record<string, string> = { "User-Agent": userAgent, Accept: "text/html,application/xhtml+xml" };
+    if (cookies.size > 0) headers.Cookie = cookieHeader(cookies);
+    if (body !== undefined) headers["Content-Type"] = "application/x-www-form-urlencoded";
+    const response = await fetchImpl(url, { method, headers, body, redirect: "manual", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    storeCookies(cookies, response);
+    const location = response.headers.get("location");
+    if (response.status < 300 || response.status >= 400 || !location) return { response, url };
+    if (hop >= MAX_REDIRECTS) throw new Error(`${method} ${url.pathname}: too many redirects`);
+    // Drain the redirect body so the connection can be reused
+    await response.arrayBuffer().catch(() => undefined);
+    url = new URL(location, url);
+    // A 302/303 after a POST is a GET (like a browser)
+    if (response.status !== 307 && response.status !== 308) {
+      method = "GET";
+      body = undefined;
+    }
+  }
+}
+
+const isLoginPage = (url: URL) => /\/login\/?$/.test(url.pathname);
+
+/** The CSRF token of the login form (attributes in any order) */
+function csrfToken(html: string): string | null {
+  for (const input of html.match(/<input\b[^>]*>/gi) ?? []) {
+    if (!/\bname\s*=\s*["']_token["']/i.test(input)) continue;
+    return /\bvalue\s*=\s*["']([^"']*)["']/i.exec(input)?.[1] ?? null;
+  }
+  return null;
+}
+
+/**
+ * Log in with a fresh CSRF token: GET /login (form + session cookies), POST the form. Success is a redirect away from
+ * /login (to the dashboard); back on /login means wrong credentials. A 419 (stale token) is retried once with a new
+ * token. Throws "Login failed…" otherwise.
+ */
+async function logIn(cookies: CookieJar, login = jotihuntLogin()): Promise<void> {
   if (!login) throw new Error("No Jotihunt website login set");
   logger.info("(SCRAPER) Logging in to Jotihunt website with e-mail: " + login.username);
-  await page.goto(websiteUrl + "/login", { waitUntil: "networkidle2" });
-  await page.type('input[name="email"]', login.username);
-  await page.type('input[name="password"]', login.password);
-  await Promise.all([page.click("button.btn"), page.waitForNavigation({ waitUntil: "networkidle2" })]);
-
-  if (page.url().endsWith("/login")) {
-    logger.error("(SCRAPER) Login failed, check your credentials.");
-    throw new Error("Login failed");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const form = await request(cookies, "/login");
+    // Still logged in: the site sends a guest away from /login
+    if (form.response.ok && !isLoginPage(form.url)) return;
+    const token = csrfToken(await form.response.text());
+    if (!form.response.ok || !token) throw new Error(`Login failed: no login form (GET /login → ${form.response.status})`);
+    const { response, url } = await request(cookies, "/login", { method: "POST", form: { _token: token, email: login.username, password: login.password } });
+    if (response.status === 419) {
+      cookies.clear();
+      continue;
+    }
+    await response.arrayBuffer().catch(() => undefined);
+    if (isLoginPage(url) || !response.ok) {
+      logger.error("(SCRAPER) Login failed, check your credentials.");
+      throw new Error(`Login failed (POST /login → ${isLoginPage(url) ? "back to /login" : response.status})`);
+    }
+    logger.info("(SCRAPER) Logged in to Jotihunt website.");
+    return;
   }
-  logger.info("(SCRAPER) Logged in to Jotihunt website.");
+  throw new Error("Login failed: the login form kept expiring (419)");
 }
 
-function launchBrowser() {
-  // Prefer an explicit PUPPETEER_EXECUTABLE_PATH (set in the Docker image to the system chromium),
-  // fall back to the system chromium in production and to puppeteer's bundled browser otherwise.
-  const isProduction = process.env.NODE_ENV === "production";
-  const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || (isProduction ? "/usr/bin/chromium" : undefined);
-  return puppeteer.launch({
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-    ...(executablePath && { executablePath }),
-  });
-}
-
-async function launch(): Promise<Page> {
-  const browser = await launchBrowser();
-  browser.once("disconnected", () => {
-    session = undefined;
-  });
-  try {
-    const page = await browser.newPage();
-    await page.setUserAgent({ userAgent });
-    const login = jotihuntLogin();
-    lastLogin = JSON.stringify(login);
-    await logIn(page, login);
-    return page;
-  } catch (error) {
-    await browser.close().catch(() => undefined);
-    throw error;
-  }
-}
-
-/** The kept logged-in page, launching the browser (and logging in) when there is none or it died. */
-async function scraperPage(): Promise<Page> {
-  const current = await session?.catch(() => undefined);
-  if (current && current.browser().connected && !current.isClosed()) return current;
-
-  const next = launch();
-  session = next;
-  next.catch(() => {
-    if (session === next) session = undefined;
-  });
-  return next;
-}
-
-/** Close the kept browser; the next scrape starts a fresh one. */
+/** Forget the kept session; the next scrape logs in again. */
 export async function closeScraper(): Promise<void> {
-  const current = session;
-  session = undefined;
-  const page = await current?.catch(() => undefined);
-  await page?.browser().close().catch(() => undefined);
+  jar = new Map();
 }
 
-// A changed login applies at the next scrape: close the logged-in browser (other secrets leave it alone)
+// A changed login applies at the next scrape: drop the session (other secret changes leave it alone)
 onAppConfigChange((part) => {
-  if (part !== "secrets" || !session || JSON.stringify(jotihuntLogin()) === lastLogin) return;
+  if (part !== "secrets" || jar.size === 0 || JSON.stringify(jotihuntLogin()) === lastLogin) return;
   void closeScraper();
 });
 
-/** Try a login in a fresh browser (Beheer → "Inloggen testen"); closes it afterwards. */
+/** Try a login in a separate session (Beheer → "Inloggen testen"); the kept session is not touched. */
 export async function testJotihuntLogin(login = jotihuntLogin()): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!websiteUrl) return { ok: false, error: "JOTIHUNT_WEB_URL is niet ingesteld op de server." };
   if (!login) return { ok: false, error: "Vul gebruikersnaam en wachtwoord in." };
-  const browser = await launchBrowser();
   try {
-    const page = await browser.newPage();
-    await page.setUserAgent({ userAgent });
-    await logIn(page, login);
+    await logIn(new Map(), login);
     return { ok: true };
   } catch {
     return { ok: false, error: "Inloggen mislukt: controleer gebruikersnaam en wachtwoord." };
-  } finally {
-    await browser.close().catch(() => undefined);
   }
 }
 
 /** Signs that /hunts did not load: a Cloudflare challenge or a server error page */
 const NOT_THE_HUNTS_PAGE = /just a moment|cf-challenge|challenge-platform|captcha|502 bad gateway|503 service|server error/i;
 
+/** GET /hunts; null when the session is gone (sent to /login, or a 419) */
+async function huntsPage(): Promise<string | null> {
+  const { response, url } = await request(jar, "/hunts");
+  if (isLoginPage(url) || response.status === 419) {
+    await response.arrayBuffer().catch(() => undefined);
+    return null;
+  }
+  const html = await response.text();
+  if (!response.ok && !NOT_THE_HUNTS_PAGE.test(html)) throw new Error(`GET /hunts → ${response.status}`);
+  return html;
+}
+
 /**
- * Scrape the hunts from the logged-in /hunts page, logging in again when the session expired. The page HTML is parsed
- * in Node (jotihunt-hunts.parse) so the parser can be tested against saved pages.
+ * Scrape the hunts from the logged-in /hunts page with plain HTTP, logging in first when there is no session and again
+ * when it expired. The HTML is parsed by jotihunt-hunts.parse (tested against saved pages).
  */
 export async function scrapeHunts(): Promise<ScrapedHunt[]> {
   logger.debug("(SCRAPER) Scraping hunts from Jotihunt website...");
-  const page = await scraperPage();
-
-  await page.goto(websiteUrl + "/hunts", { waitUntil: "networkidle2" });
-  if (page.url().endsWith("/login")) {
-    // The website session expired: log in on the same page and try once more
-    await logIn(page);
-    await page.goto(websiteUrl + "/hunts", { waitUntil: "networkidle2" });
+  let html: string | null = null;
+  if (jar.size > 0) html = await huntsPage();
+  if (html === null) {
+    jar = new Map();
+    const login = jotihuntLogin();
+    lastLogin = JSON.stringify(login);
+    await logIn(jar, login);
+    html = await huntsPage();
+    if (html === null) throw new Error("Login failed: /hunts still asks to log in");
   }
 
-  const html = await page.content();
-  const raw = extractHuntsPage(html);
-  if (raw.rows.length === 0 && raw.headers.length === 0 && NOT_THE_HUNTS_PAGE.test(html)) throw new Error(`No hunts page on ${page.url()}`);
-  const { hunts, warning } = parseHuntsPage(raw);
-  if (warning) {
-    // Once per distinct warning: the cron runs every minute
-    if (warning !== lastWarning) logger.warn(`(SCRAPER) ${warning}`);
-  }
+  const { hunts, warning, found } = parseHuntsPage(html);
+  if (!found && NOT_THE_HUNTS_PAGE.test(html)) throw new Error("No hunts page (Cloudflare or server error)");
+  // Once per distinct warning: the cron runs every minute
+  if (warning && warning !== lastWarning) logger.warn(`(SCRAPER) ${warning}`);
   lastWarning = warning;
-
-  // Never lose the list because of a detail page
-  await addDetails(page, hunts).catch((error) => logger.warn("(SCRAPER) Reading hunt pages failed:", error));
   logger.debug(`(SCRAPER) Found ${hunts.length} hunts from website.`);
   return hunts;
 }
 
-let lastWarning: string | null = null;
-
-/** Detail pages opened per run at most (each takes a page load) */
-export const MAX_DETAIL_PAGES = 5;
-/** A detail page without a location (or that failed) is opened again after this long */
-const DETAIL_RETRY_MS = 5 * 60 * 1000;
-/** One detail page may take this long; all of them together this long (the whole scrape has 120 s) */
-let detailTimeouts = { pageMs: 10_000, budgetMs: 45_000 };
-/** What a detail page gave, by its URL; a page with a location is not opened again */
-const details = new Map<string, { location: ParsedLocation | null; qrCode: string | null; at: number }>();
-
-/**
- * Hunts whose list row has no location get it (and the QR code, as detailQrCode) from their own page, when the list
- * links one. At most MAX_DETAIL_PAGES pages per run, each with its own timeout, within an overall budget; a failing
- * page is remembered (retried after 5 min) and never fails the scrape. The siteKey stays the list page's.
- */
-async function addDetails(page: Page, hunts: ScrapedHunt[], now = Date.now()): Promise<void> {
-  const started = Date.now();
-  let opened = 0;
-  for (const hunt of hunts) {
-    if (hunt.location || !hunt.detailUrl) continue;
-    const url = new URL(hunt.detailUrl, websiteUrl + "/hunts").href;
-    let found = details.get(url);
-    if (!found || (!found.location && now - found.at > DETAIL_RETRY_MS)) {
-      if (opened >= MAX_DETAIL_PAGES || Date.now() - started >= detailTimeouts.budgetMs) continue;
-      opened++;
-      const timeoutMs = Math.min(detailTimeouts.pageMs, Math.max(1, detailTimeouts.budgetMs - (Date.now() - started)));
-      try {
-        const html = await deadline(
-          page.goto(url, { waitUntil: "networkidle2", timeout: timeoutMs }).then(() => page.content()),
-          timeoutMs,
-          `Hunt page took longer than ${timeoutMs / 1000} s`,
-        );
-        found = { ...parseHuntDetail(html), at: now };
-      } catch (error) {
-        logger.warn(`(SCRAPER) Could not read hunt page ${url}:`, error);
-        found = { location: null, qrCode: null, at: now };
-      }
-      details.set(url, found);
-    }
-    hunt.location = found.location;
-    hunt.detailQrCode = found.qrCode;
-  }
-}
-
-/** For tests */
-export function setDetailTimeouts(timeouts: { pageMs: number; budgetMs: number }): void {
-  detailTimeouts = timeouts;
-}
-
-/** For tests */
-export function forgetHuntDetails(): void {
-  details.clear();
+/** For tests: a fake fetch (null restores the real one); also forgets the session and the last warning */
+export function setScraperFetch(fake: Fetch | null): void {
+  fetchImpl = fake ?? ((input, init) => fetch(input, init));
+  jar = new Map();
   lastWarning = null;
 }

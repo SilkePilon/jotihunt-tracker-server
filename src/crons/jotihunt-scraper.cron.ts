@@ -11,7 +11,7 @@ import { notifyHuntEvents, syncHuntMarkers } from "../services/hunt-sync.service
 import { deadline } from "../services/http-limits";
 import { classifyStatus, rekeyTimeHunts, type ScrapedHunt } from "../services/jotihunt-hunts.parse";
 
-/** A whole scrape (browser start, login, page load) may take this long; then the browser is closed and the run ends */
+/** A whole scrape (login + page load) may take this long; then the session is dropped and the run ends */
 export const SCRAPE_DEADLINE_MS = 120_000;
 
 /** Hunts stored before siteKey existed get the key of their code (once; afterwards nothing matches). */
@@ -81,7 +81,6 @@ export async function storeHunts(scraped: ScrapedHunt[], now = new Date()): Prom
       const judged = hunt.status === "approved" || hunt.status === "rejected";
       // The outcome the log now shows for it: the new one when judged, else what was logged before
       const last = judged ? { outcome: hunt.status as Outcome, points: hunt.points } : old ? lastOutcomeOf(old) : { outcome: null, points: null };
-      const qrCode = hunt.qrCode ?? hunt.detailQrCode ?? null;
       return {
         updateOne: {
           filter: { siteKey: hunt.siteKey },
@@ -98,7 +97,6 @@ export async function storeHunts(scraped: ScrapedHunt[], now = new Date()): Prom
               updatedAt: now,
               lastNotifiedOutcome: last.outcome,
               lastNotifiedPoints: last.points,
-              ...(qrCode && { qrCode }),
               ...(hunt.location && { location: hunt.location }),
               ...(old && old.statusClass !== hunt.status && { statusChangedAt: now }),
             },
@@ -138,7 +136,7 @@ export async function storeHunts(scraped: ScrapedHunt[], now = new Date()): Prom
   return { deleted: true, events, initial, removed: gone.flatMap((hunt) => (hunt.siteKey ? [hunt.siteKey] : [])) };
 }
 
-/** A hunt whose key changed (a QR code now shown, an old time-based key) is the same fox within this of the same time */
+/** A hunt whose key changed (a hunt code now shown, an old time-based key) is the same fox within this of the same time */
 export const REKEY_MATCH_MS = 60_000;
 
 /**
@@ -155,9 +153,9 @@ async function rekeyMovedHunts(scraped: ScrapedHunt[]): Promise<void> {
     .select("_id siteKey area huntTime")
     .lean();
   const taken = new Set<string>();
-  // Two different QR codes, hunt codes or detail ids are two hunts, however close in time
+  // Two different hunt codes are two hunts, however close in time
   const kind = (key: string | null | undefined) => key?.split(":")[0] ?? "";
-  const distinct = (a: string | null | undefined, b: string) => kind(a) === kind(b) && ["qr", "code", "id"].includes(kind(b));
+  const distinct = (a: string | null | undefined, b: string) => kind(a) === kind(b) && kind(b) === "code";
   for (const hunt of unseen) {
     const match = candidates
       .filter(
@@ -180,7 +178,7 @@ async function rekeyMovedHunts(scraped: ScrapedHunt[]): Promise<void> {
 
 export default async function scrapeJotihuntWebsite() {
   if (skipInDemoMode("jotihunt-scraper", (message) => logger.debug(message))) {
-    // No need to keep Chromium around while demo mode is on
+    // No need to keep the website session while demo mode is on
     await closeScraper();
     return;
   }
@@ -199,7 +197,7 @@ export default async function scrapeJotihuntWebsite() {
     scraped = await deadline(scrapeHunts(), SCRAPE_DEADLINE_MS, `Scraping took longer than ${SCRAPE_DEADLINE_MS / 1000} s`);
   } catch (error) {
     markSyncFailure(error, new Date());
-    // Start from a fresh browser next run; a broken page or login would otherwise keep failing
+    // Start from a fresh session next run; a broken page or login would otherwise keep failing
     await closeScraper();
     logger.error("(CRON) Scraping hunts failed:", error);
     return;

@@ -22,10 +22,8 @@ const scraped = (siteKey: string, overrides: Partial<ScrapedHunt> = {}): Scraped
   status: "pending",
   statusText: "Wacht op bevestiging",
   points: 0,
-  qrCode: null,
   huntCode: null,
   location,
-  detailUrl: null,
   ...overrides,
 });
 const huntMarkers = () => Marker.find({ source: "jotihunt" }).sort({ externalId: 1 }).lean();

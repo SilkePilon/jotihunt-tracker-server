@@ -7,7 +7,7 @@ import { keepStoredDates, storeHunts } from "./jotihunt-scraper.cron";
 
 const time = new Date("2026-10-17T19:03:00Z");
 const web = (code: string | null, overrides: Partial<ScrapedHunt> = {}): ScrapedHunt =>
-  assignSiteKeys([{ siteKey: "", area: "Alpha", huntCode: code, qrCode: null, detailUrl: null, status: "approved" as const, statusText: "Goedgekeurd", points: 1, huntTimeText: "21:03", huntTime: time, location: null, ...overrides }])[0];
+  assignSiteKeys([{ siteKey: "", area: "Alpha", huntCode: code, status: "approved" as const, statusText: "Goedgekeurd", points: 1, huntTimeText: "21:03", huntTime: time, location: null, ...overrides }])[0];
 const hunt = (code: string) => web(code);
 const codes = async () => (await Hunt.find().lean()).map((stored) => stored.huntCode).sort();
 
@@ -107,34 +107,34 @@ describe("storeHunts", () => {
 
 describe("storeHunts: synced fields and the sync log", () => {
   const location = { lat: 52.0123, lng: 5.9876, accuracy: 12 };
-  const qr = (code: string, overrides: Partial<ScrapedHunt> = {}) => web(null, { qrCode: code, area: "alpha", status: "pending", statusText: "Wacht op bevestiging", points: 0, ...overrides });
+  const coded = (code: string, overrides: Partial<ScrapedHunt> = {}) => web(code, { area: "alpha", status: "pending", statusText: "Wacht op bevestiging", points: 0, ...overrides });
   const now = new Date("2026-10-17T19:50:00Z");
   const later = new Date("2026-10-17T19:51:00Z");
 
-  test("stores status class, text, QR code, location and first-seen time", async () => {
-    await storeHunts([qr("A", { location })], now);
-    expect(await Hunt.findOne({ siteKey: "qr:A" }).lean()).toMatchObject({ statusClass: "pending", statusText: "Wacht op bevestiging", status: "Wacht op bevestiging", qrCode: "A", location, firstSeenAt: now, statusChangedAt: null });
+  test("stores status class, text, hunt code, location and first-seen time", async () => {
+    await storeHunts([coded("A", { location })], now);
+    expect(await Hunt.findOne({ siteKey: "code:A" }).lean()).toMatchObject({ statusClass: "pending", statusText: "Wacht op bevestiging", status: "Wacht op bevestiging", huntCode: "A", location, firstSeenAt: now, statusChangedAt: null });
   });
 
   test("a single new hunt logs 'new' with the hunt's id, time and location", async () => {
-    const { events, initial } = await storeHunts([qr("A", { location })], now);
+    const { events, initial } = await storeHunts([coded("A", { location })], now);
     expect(initial).toBe(false);
-    const stored = await Hunt.findOne({ siteKey: "qr:A" }).lean();
+    const stored = await Hunt.findOne({ siteKey: "code:A" }).lean();
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ type: "new", area: "alpha", siteKey: "qr:A", points: null, at: now, huntTime: time, location, initial: false });
+    expect(events[0]).toMatchObject({ type: "new", area: "alpha", siteKey: "code:A", points: null, at: now, huntTime: time, location, initial: false });
     expect(String(events[0].huntId)).toBe(String(stored!._id));
   });
 
   test("approval: an 'approved' event with points and statusChangedAt", async () => {
-    await storeHunts([qr("A"), qr("B")], now);
-    const { events } = await storeHunts([qr("A", { status: "approved", statusText: "Goedgekeurd", points: 10 }), qr("B")], later);
-    expect(events.map(({ type, siteKey, points }) => ({ type, siteKey, points }))).toEqual([{ type: "approved", siteKey: "qr:A", points: 10 }]);
-    expect(await Hunt.findOne({ siteKey: "qr:A" }).lean()).toMatchObject({ statusClass: "approved", points: 10, statusChangedAt: later, firstSeenAt: now });
+    await storeHunts([coded("A"), coded("B")], now);
+    const { events } = await storeHunts([coded("A", { status: "approved", statusText: "Goedgekeurd", points: 10 }), coded("B")], later);
+    expect(events.map(({ type, siteKey, points }) => ({ type, siteKey, points }))).toEqual([{ type: "approved", siteKey: "code:A", points: 10 }]);
+    expect(await Hunt.findOne({ siteKey: "code:A" }).lean()).toMatchObject({ statusClass: "approved", points: 10, statusChangedAt: later, firstSeenAt: now });
     expect(await HuntSyncEvent.countDocuments()).toBe(3);
   });
 
   test("the first import into an empty database is flagged initial and logs only 'new'", async () => {
-    const { events, initial } = await storeHunts([qr("A", { status: "approved", points: 10 }), qr("B", { status: "rejected" })], now);
+    const { events, initial } = await storeHunts([coded("A", { status: "approved", points: 10 }), coded("B", { status: "rejected" })], now);
     expect(initial).toBe(true);
     expect(events.map(({ type, initial }) => [type, initial])).toEqual([
       ["new", true],
@@ -143,18 +143,18 @@ describe("storeHunts: synced fields and the sync log", () => {
   });
 
   test("a scrape without a location keeps the stored one", async () => {
-    await storeHunts([qr("A", { location })], now);
-    await storeHunts([qr("A")], later);
-    expect((await Hunt.findOne({ siteKey: "qr:A" }).lean())!.location).toMatchObject(location);
+    await storeHunts([coded("A", { location })], now);
+    await storeHunts([coded("A")], later);
+    expect((await Hunt.findOne({ siteKey: "code:A" }).lean())!.location).toMatchObject(location);
   });
 
   test("hunts older than the page's oldest row are kept (a 'last N hunts' list), newer missing ones are dropped", async () => {
     const at = (minutes: number) => new Date(time.getTime() + minutes * 60_000);
-    await storeHunts([qr("OLD", { huntTime: at(-120) }), qr("A", { huntTime: at(0) }), qr("B", { huntTime: at(10) }), qr("C", { huntTime: at(20) })], now);
-    const { deleted, removed } = await storeHunts([qr("A", { huntTime: at(0) }), qr("C", { huntTime: at(20) }), qr("D", { huntTime: at(30) })], later);
+    await storeHunts([coded("OLD", { huntTime: at(-120) }), coded("A", { huntTime: at(0) }), coded("B", { huntTime: at(10) }), coded("C", { huntTime: at(20) })], now);
+    const { deleted, removed } = await storeHunts([coded("A", { huntTime: at(0) }), coded("C", { huntTime: at(20) }), coded("D", { huntTime: at(30) })], later);
     expect(deleted).toBe(true);
-    expect(removed).toEqual(["qr:B"]);
-    expect((await Hunt.find().lean()).map((hunt) => hunt.siteKey).sort()).toEqual(["qr:A", "qr:C", "qr:D", "qr:OLD"]);
+    expect(removed).toEqual(["code:B"]);
+    expect((await Hunt.find().lean()).map((hunt) => hunt.siteKey).sort()).toEqual(["code:A", "code:C", "code:D", "code:OLD"]);
   });
 });
 
@@ -164,56 +164,46 @@ describe("storeHunts: stable keys and safe deletes (review fixes)", () => {
   const at = (minutes: number) => new Date(time.getTime() + minutes * 60_000);
   const pending = (overrides: Partial<ScrapedHunt>) => web(null, { area: "alpha", status: "pending", statusText: "Wacht op bevestiging", points: 0, ...overrides });
 
-  test("a QR code from the detail page is stored but never changes the key", async () => {
-    const hunt = pending({ detailUrl: "/hunts/5", huntTimeText: "21:03" });
-    expect(hunt.siteKey).toBe("id:5");
-    hunt.detailQrCode = "Q5";
-    await keepStoredDates([hunt]);
-    expect(hunt.siteKey).toBe("id:5");
-    await storeHunts([hunt], now);
-    expect(await Hunt.findOne({ siteKey: "id:5" }).lean()).toMatchObject({ qrCode: "Q5" });
-  });
-
   test("re-dating a clock-only time re-keys only time-based keys", async () => {
     const saturday = new Date("2026-10-17T07:15:00Z");
     await storeHunts([pending({ huntTimeText: "09:15", huntTime: saturday })], now);
     const sunday = new Date("2026-10-18T07:15:00Z");
     const timeKeyed = pending({ huntTimeText: "09:15", huntTime: sunday });
-    const qrKeyed = pending({ huntTimeText: "09:15", huntTime: sunday, qrCode: "Q1" });
-    await keepStoredDates([timeKeyed, qrKeyed]);
+    const codeKeyed = pending({ huntTimeText: "09:15", huntTime: sunday, huntCode: "Q1" });
+    await keepStoredDates([timeKeyed, codeKeyed]);
     expect(timeKeyed.siteKey).toBe(`time:alpha:${saturday.toISOString()}`);
-    expect(qrKeyed.siteKey).toBe("qr:Q1");
+    expect(codeKeyed.siteKey).toBe("code:Q1");
   });
 
   test("a stored hunt under another key (same fox, time within 1 min) is re-keyed, not logged again", async () => {
     await storeHunts([pending({ huntTime: at(0) }), pending({ area: "bravo", huntTime: at(5) })], now);
     expect(await HuntSyncEvent.countDocuments()).toBe(2);
-    const rekeyed = pending({ huntTime: at(0.5), qrCode: "QA", status: "approved", statusText: "Goedgekeurd", points: 10 });
+    const rekeyed = pending({ huntTime: at(0.5), huntCode: "QA", status: "approved", statusText: "Goedgekeurd", points: 10 });
     const { events } = await storeHunts([rekeyed, pending({ area: "bravo", huntTime: at(5) })], later);
-    expect(events.map(({ type, siteKey }) => [type, siteKey])).toEqual([["approved", "qr:QA"]]);
+    expect(events.map(({ type, siteKey }) => [type, siteKey])).toEqual([["approved", "code:QA"]]);
     expect(await Hunt.countDocuments()).toBe(2);
-    expect(await Hunt.findOne({ siteKey: "qr:QA" }).lean()).toMatchObject({ statusClass: "approved", firstSeenAt: now });
+    expect(await Hunt.findOne({ siteKey: "code:QA" }).lean()).toMatchObject({ statusClass: "approved", firstSeenAt: now });
   });
 
   test("flapping through unknown does not log the outcome again", async () => {
-    await storeHunts([pending({ qrCode: "A" }), pending({ qrCode: "B", area: "bravo" })], now);
-    await storeHunts([pending({ qrCode: "A", status: "approved", points: 10 }), pending({ qrCode: "B", area: "bravo" })], now);
-    await storeHunts([pending({ qrCode: "A", status: "unknown", statusText: "", points: 0 }), pending({ qrCode: "B", area: "bravo" })], now);
-    const { events } = await storeHunts([pending({ qrCode: "A", status: "approved", points: 10 }), pending({ qrCode: "B", area: "bravo" })], now);
+    await storeHunts([pending({ huntCode: "A" }), pending({ huntCode: "B", area: "bravo" })], now);
+    await storeHunts([pending({ huntCode: "A", status: "approved", points: 10 }), pending({ huntCode: "B", area: "bravo" })], now);
+    await storeHunts([pending({ huntCode: "A", status: "unknown", statusText: "", points: 0 }), pending({ huntCode: "B", area: "bravo" })], now);
+    const { events } = await storeHunts([pending({ huntCode: "A", status: "approved", points: 10 }), pending({ huntCode: "B", area: "bravo" })], now);
     expect(events).toEqual([]);
-    expect(await Hunt.findOne({ siteKey: "qr:A" }).lean()).toMatchObject({ lastNotifiedOutcome: "approved", lastNotifiedPoints: 10 });
+    expect(await Hunt.findOne({ siteKey: "code:A" }).lean()).toMatchObject({ lastNotifiedOutcome: "approved", lastNotifiedPoints: 10 });
   });
 
   test("the delete window uses known times only; hunts without a time are never dropped by it", async () => {
-    await storeHunts([pending({ qrCode: "A", huntTime: at(0) }), pending({ qrCode: "B", huntTime: at(10) }), pending({ qrCode: "N", huntTime: null, huntTimeText: "?" })], now);
-    const { removed } = await storeHunts([pending({ qrCode: "A", huntTime: at(0) }), pending({ qrCode: "C", huntTime: null, huntTimeText: "?" })], later);
-    expect(removed).toEqual(["qr:B"]);
-    expect((await Hunt.find().lean()).map((hunt) => hunt.siteKey).sort()).toEqual(["qr:A", "qr:C", "qr:N"]);
+    await storeHunts([pending({ huntCode: "A", huntTime: at(0) }), pending({ huntCode: "B", huntTime: at(10) }), pending({ huntCode: "N", huntTime: null, huntTimeText: "?" })], now);
+    const { removed } = await storeHunts([pending({ huntCode: "A", huntTime: at(0) }), pending({ huntCode: "C", huntTime: null, huntTimeText: "?" })], later);
+    expect(removed).toEqual(["code:B"]);
+    expect((await Hunt.find().lean()).map((hunt) => hunt.siteKey).sort()).toEqual(["code:A", "code:C", "code:N"]);
   });
 
   test("no readable time on the page: nothing is deleted", async () => {
-    await storeHunts([pending({ qrCode: "A", huntTime: at(0) }), pending({ qrCode: "B", huntTime: at(10) })], now);
-    const result = await storeHunts([pending({ qrCode: "C", huntTime: null, huntTimeText: "?" }), pending({ qrCode: "D", huntTime: null, huntTimeText: "?" })], later);
+    await storeHunts([pending({ huntCode: "A", huntTime: at(0) }), pending({ huntCode: "B", huntTime: at(10) })], now);
+    const result = await storeHunts([pending({ huntCode: "C", huntTime: null, huntTimeText: "?" }), pending({ huntCode: "D", huntTime: null, huntTimeText: "?" })], later);
     expect(result).toMatchObject({ deleted: false, removed: [] });
     expect(await Hunt.countDocuments()).toBe(4);
   });

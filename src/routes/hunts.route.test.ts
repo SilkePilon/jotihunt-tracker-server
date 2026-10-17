@@ -50,10 +50,8 @@ const scraped = (siteKey: string, overrides: Partial<ScrapedHunt> = {}): Scraped
   status: "pending",
   statusText: "Wacht op bevestiging",
   points: 0,
-  qrCode: siteKey.replace(/^qr:/, ""),
   huntCode: null,
   location: { lat: 52.0123, lng: 5.9876, accuracy: 12 },
-  detailUrl: null,
   ...overrides,
 });
 
@@ -104,7 +102,7 @@ describe("hunt sync routes", () => {
         status: "approved",
         statusText: "Goedgekeurd",
         points: 10,
-        qrCode: "A",
+        qrCode: null,
         location: { lat: 52.0123, lng: 5.9876, accuracy: 12 },
         firstSeenAt: now.toISOString(),
         statusChangedAt: later.toISOString(),

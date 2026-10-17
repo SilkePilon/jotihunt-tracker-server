@@ -4,74 +4,89 @@ import { initAppConfig, resetAppConfig, setPlain } from "../settings/app-config"
 
 process.env.JOTIHUNT_WEB_URL = "https://jh.test";
 
-let launches = 0;
-let logins = 0;
-let closes = 0;
-/** URL the next goto("/hunts") lands on; "/login" simulates an expired website session */
-let huntsRedirect: string | null = null;
-/** When set, submitting the login form stays on /login (wrong credentials) */
-let rejectLogin = false;
-const TABLE = "<table><tr><th>Deelgebied</th><th>Huntcode</th><th>Status</th><th>Punten</th><th>Tijdstip</th></tr><tr><td>Alpha</td><td>abc</td><td>ok</td><td>1</td><td>12:00</td></tr></table>";
-/** HTML per page path; /hunts defaults to TABLE */
-let pages: Record<string, string> = {};
-/** Every page opened */
-let visited: string[] = [];
-/** Paths whose page load never finishes */
-let hanging = new Set<string>();
-
-function fakeBrowser() {
-  let connected = true;
-  let url = "";
-  const page = {
-    isClosed: () => false,
-    browser: () => browser,
-    setUserAgent: async () => {},
-    type: async () => {},
-    click: async () => {},
-    waitForNavigation: async () => {
-      logins++;
-      url = rejectLogin ? "https://jh.test/login" : "https://jh.test/dashboard";
-    },
-    goto: async (target: string) => {
-      visited.push(target);
-      if (hanging.has(new URL(target).pathname)) await new Promise(() => {});
-      url = target.endsWith("/hunts") && huntsRedirect ? huntsRedirect : target;
-      huntsRedirect = null;
-    },
-    url: () => url,
-    content: async () => {
-      const path = new URL(url).pathname;
-      return pages[path] ?? (path === "/hunts" ? TABLE : "<p>Niet gevonden</p>");
-    },
-  };
-  const browser = {
-    get connected() {
-      return connected;
-    },
-    once: () => {},
-    newPage: async () => page,
-    close: async () => {
-      connected = false;
-      closes++;
-    },
-  };
-  return browser;
-}
-
-mock.module("puppeteer", () => ({
-  default: {
-    launch: async () => {
-      launches++;
-      return fakeBrowser();
-    },
-  },
-}));
-mock.module("../logger", () => ({ logger: { info() {}, debug() {}, error() {}, warn() {} } }));
+const warnings: string[] = [];
+mock.module("../logger", () => ({ logger: { info() {}, debug() {}, error() {}, warn: (message: string) => warnings.push(message) } }));
 
 // A fresh instance: another test file may have loaded the service already (before JOTIHUNT_WEB_URL was set,
 // and resetAppConfig in the settings tests drops its config listener)
 const freshService = "./jotihunt-scraper.service?fresh";
-const { closeScraper, forgetHuntDetails, jotihuntLogin, scrapeHunts, setDetailTimeouts, testJotihuntLogin } = (await import(freshService)) as typeof import("./jotihunt-scraper.service");
+const { closeScraper, jotihuntLogin, scrapeHunts, setScraperFetch, testJotihuntLogin } = (await import(freshService)) as typeof import("./jotihunt-scraper.service");
+
+const ROWS = `<table><thead><th>Deelgebied</th><th>Huntcode</th><th>Status</th><th>Punten</th><th>Hunttijd</th></thead><tbody><tr><td>Alpha</td><td>abc</td><td>Goedgekeurd</td><td>1</td><td>2026-10-17 12:00:00</td></tr></tbody></table>`;
+
+/**
+ * A fake jotihunt.nl: GET /login gives a form with a fresh CSRF token and a session cookie; POST /login with that
+ * token and the right password logs the session in (302 to the dashboard, new session cookie), a wrong password 302s
+ * back to /login, an old token answers 419. GET /hunts without a logged-in session 302s to /login.
+ */
+const site = {
+  password: "hunter2",
+  /** Sessions that are logged in */
+  sessions: new Set<string>(),
+  tokens: new Map<string, string>(),
+  next: 0,
+  /** Answer the next POST /login with 419 (the token went stale) */
+  staleOnce: false,
+  huntsHtml: ROWS,
+  huntsStatus: 200,
+  requests: [] as string[],
+  reset() {
+    this.sessions.clear();
+    this.tokens.clear();
+    this.next = 0;
+    this.staleOnce = false;
+    this.huntsHtml = ROWS;
+    this.huntsStatus = 200;
+    this.requests = [];
+  },
+};
+
+function cookieOf(request: Request, name: string): string | null {
+  const match = new RegExp(`(?:^|;\\s*)${name}=([^;]*)`).exec(request.headers.get("cookie") ?? "");
+  return match ? match[1] : null;
+}
+
+const redirect = (location: string, cookie?: string) => {
+  const headers = new Headers({ location });
+  if (cookie) headers.append("set-cookie", `jotihunt_app_session=${cookie}; path=/; secure; httponly`);
+  return new Response("", { status: 302, headers });
+};
+
+async function fakeFetch(input: URL, init: RequestInit): Promise<Response> {
+  const request = new Request(input, init);
+  expect(init.redirect).toBe("manual");
+  const path = new URL(request.url).pathname;
+  site.requests.push(`${request.method} ${path}`);
+  const session = cookieOf(request, "jotihunt_app_session");
+  if (path === "/login" && request.method === "GET") {
+    if (session && site.sessions.has(session)) return redirect("https://jh.test/scoutingGroup/dashboard");
+    const id = `s${++site.next}`;
+    const token = `t${site.next}`;
+    site.tokens.set(id, token);
+    const headers = new Headers();
+    headers.append("set-cookie", `jotihunt_app_session=${id}; path=/; secure; httponly`);
+    headers.append("set-cookie", `XSRF-TOKEN=x${site.next}; path=/; secure`);
+    return new Response(`<form method="POST"><input type="hidden" name="_token" value="${token}" autocomplete="off"><input name="email"></form>`, { status: 200, headers });
+  }
+  if (path === "/login" && request.method === "POST") {
+    const form = new URLSearchParams(await request.text());
+    expect(request.headers.get("content-type")).toBe("application/x-www-form-urlencoded");
+    if (site.staleOnce || !session || site.tokens.get(session) !== form.get("_token")) {
+      site.staleOnce = false;
+      return new Response("Page Expired", { status: 419 });
+    }
+    if (form.get("password") !== site.password) return redirect("https://jh.test/login", session);
+    const id = `s${++site.next}`;
+    site.sessions.add(id);
+    return redirect("https://jh.test/scoutingGroup/dashboard", id);
+  }
+  if (path === "/scoutingGroup/dashboard") return new Response("<p>Dashboard</p>", { status: 200 });
+  if (path === "/hunts") {
+    if (!session || !site.sessions.has(session)) return redirect("https://jh.test/login");
+    return new Response(site.huntsHtml, { status: site.huntsStatus });
+  }
+  return new Response("Not found", { status: 404 });
+}
 
 /** A settings collection with only the plain username stored; the env holds the login */
 function fakeConnection(): Connection {
@@ -85,96 +100,74 @@ function fakeConnection(): Connection {
   return { collection: () => collection } as unknown as Connection;
 }
 const ENV_LOGIN = { JOTIHUNT_WEB_USERNAME: "team@example.nl", JOTIHUNT_WEB_PASSWORD: "hunter2" };
+const logins = () => site.requests.filter((entry) => entry === "POST /login").length;
 
 beforeEach(async () => {
   await initAppConfig(fakeConnection(), ENV_LOGIN);
-  await closeScraper();
-  launches = 0;
-  logins = 0;
-  closes = 0;
-  huntsRedirect = null;
-  rejectLogin = false;
-  pages = {};
-  visited = [];
-  hanging = new Set();
-  forgetHuntDetails();
-  setDetailTimeouts({ pageMs: 50, budgetMs: 1_000 });
+  site.reset();
+  setScraperFetch(fakeFetch);
+  warnings.length = 0;
 });
-afterAll(resetAppConfig);
+afterAll(() => {
+  setScraperFetch(null);
+  resetAppConfig();
+});
 
 describe("scrapeHunts", () => {
-  test("keeps one logged-in browser between runs", async () => {
-    expect(await scrapeHunts()).toHaveLength(1);
+  test("logs in once and keeps the session between runs", async () => {
+    expect(await scrapeHunts()).toMatchObject([{ siteKey: "code:abc", area: "alpha", status: "approved", location: null }]);
     await scrapeHunts();
     await scrapeHunts();
-    expect(launches).toBe(1);
-    expect(logins).toBe(1);
+    expect(logins()).toBe(1);
+    expect(site.requests.slice(-2)).toEqual(["GET /hunts", "GET /hunts"]);
   });
 
-  test("logs in again on the same browser when the website session expired", async () => {
+  test("an expired session (redirect to /login) logs in again and retries", async () => {
     await scrapeHunts();
-    huntsRedirect = "https://jh.test/login";
+    site.sessions.clear();
     expect(await scrapeHunts()).toHaveLength(1);
-    expect(launches).toBe(1);
-    expect(logins).toBe(2);
+    expect(logins()).toBe(2);
   });
 
-  test("starts a fresh browser after closeScraper", async () => {
+  test("a 419 on the login form fetches a fresh token and tries again", async () => {
+    site.staleOnce = true;
+    expect(await scrapeHunts()).toHaveLength(1);
+    expect(site.requests.filter((entry) => entry === "GET /login")).toHaveLength(2);
+  });
+
+  test("wrong credentials fail with a login error", async () => {
+    site.password = "other";
+    try {
+      await expect(scrapeHunts()).rejects.toThrow(/Login failed/);
+    } finally {
+      site.password = "hunter2";
+    }
+  });
+
+  test("closeScraper forgets the session", async () => {
     await scrapeHunts();
     await closeScraper();
     await scrapeHunts();
-    expect(launches).toBe(2);
-  });
-});
-
-describe("hunt detail pages", () => {
-  const card = (id: number, area: string, attrs = "") => `<div class="hunt" ${attrs}><h3>Vossenteam ${area}</h3><p>Tijd: 21:${String(id % 60).padStart(2, "0")}</p><a href="/hunts/${id}">Details</a></div>`;
-  const detail = (lat: number) => `<main><dl><dt>QR-code</dt><dd>Q${lat}</dd><dt>Locatie</dt><dd>${lat}, 5.65</dd><dt>Nauwkeurigheid</dt><dd>9 m</dd></dl></main>`;
-
-  test("a hunt without a location gets it (and its QR code) from its own page; the key stays", async () => {
-    pages["/hunts"] = `<main>${card(1, "Alpha", 'data-lat="52.01" data-lng="5.98"')}${card(2, "Bravo")}</main>`;
-    pages["/hunts/2"] = detail(52.05);
-    const hunts = await scrapeHunts();
-    expect(hunts[0]).toMatchObject({ siteKey: "id:1", location: { lat: 52.01, lng: 5.98, accuracy: null } });
-    expect(hunts[1]).toMatchObject({ siteKey: "id:2", qrCode: null, detailQrCode: "Q52.05", location: { lat: 52.05, lng: 5.65, accuracy: 9 } });
-    expect(visited.filter((target) => target.includes("/hunts/"))).toEqual(["https://jh.test/hunts/2"]);
+    expect(logins()).toBe(2);
   });
 
-  test("at most 5 detail pages per run; a page with a location is not opened again", async () => {
-    pages["/hunts"] = `<main>${[1, 2, 3, 4, 5, 6, 7].map((id) => card(id, "Charlie")).join("")}</main>`;
-    for (const id of [1, 2, 3, 4, 5, 6, 7]) pages[`/hunts/${id}`] = detail(52 + id / 100);
-    const first = await scrapeHunts();
-    expect(first.filter((hunt) => hunt.location)).toHaveLength(5);
-    visited = [];
-    const second = await scrapeHunts();
-    expect(second.filter((hunt) => hunt.location)).toHaveLength(7);
-    expect(visited.filter((target) => target.includes("/hunts/"))).toEqual(["https://jh.test/hunts/6", "https://jh.test/hunts/7"]);
+  test("a Cloudflare or error page is no hunts page", async () => {
+    site.huntsHtml = "<html><title>Just a moment...</title></html>";
+    site.huntsStatus = 503;
+    await expect(scrapeHunts()).rejects.toThrow(/No hunts page/);
   });
-});
 
-describe("hunt detail pages that fail", () => {
-  const card = (id: number) => `<div class="hunt"><h3>Vossenteam Delta</h3><p>Tijd: 20:0${id}</p><a href="/hunts/${id}">Details</a></div>`;
+  test("another HTTP error fails the run", async () => {
+    site.huntsHtml = "oops";
+    site.huntsStatus = 500;
+    await expect(scrapeHunts()).rejects.toThrow("GET /hunts → 500");
+  });
 
-  test("a hanging page times out; the list (and the other pages) still come through; the failure is not retried at once", async () => {
-    pages["/hunts"] = `<main>${card(1)}${card(2)}</main>`;
-    pages["/hunts/2"] = "<main><dl><dt>Locatie</dt><dd>52.05, 5.65</dd></dl></main>";
-    hanging.add("/hunts/1");
-    const hunts = await scrapeHunts();
-    expect(hunts.map((hunt) => [hunt.siteKey, hunt.location?.lat ?? null])).toEqual([
-      ["id:1", null],
-      ["id:2", 52.05],
-    ]);
-    visited = [];
+  test("an unknown layout warns once per distinct warning", async () => {
+    site.huntsHtml = "<main><p>Iets anders</p></main>";
+    expect(await scrapeHunts()).toEqual([]);
     await scrapeHunts();
-    expect(visited.filter((target) => target.includes("/hunts/"))).toEqual([]);
-  });
-
-  test("the detail budget stops opening pages", async () => {
-    setDetailTimeouts({ pageMs: 50, budgetMs: 60 });
-    pages["/hunts"] = `<main>${[1, 2, 3, 4].map(card).join("")}</main>`;
-    for (const id of [1, 2, 3, 4]) hanging.add(`/hunts/${id}`);
-    await scrapeHunts();
-    expect(visited.filter((target) => target.includes("/hunts/")).length).toBeLessThanOrEqual(2);
+    expect(warnings).toEqual(["(SCRAPER) Unknown hunts layout (no tables)"]);
   });
 });
 
@@ -185,40 +178,38 @@ describe("Jotihunt website login", () => {
     expect(jotihuntLogin()).toBeNull();
   });
 
-  test("a changed login closes the kept browser", async () => {
+  test("a changed login drops the kept session", async () => {
     await scrapeHunts();
     await setPlain({ jotihuntWebUsername: "other@example.nl" }, "test");
     await Bun.sleep(0);
-    expect(closes).toBe(1);
     await scrapeHunts();
-    expect(launches).toBe(2);
+    expect(logins()).toBe(2);
   });
 
-  test("another secrets change keeps the logged-in browser", async () => {
+  test("another secrets change keeps the session", async () => {
     await scrapeHunts();
     await setPlain({ telegramApiId: "12345" }, "test");
     await Bun.sleep(0);
-    expect(closes).toBe(0);
     await scrapeHunts();
-    expect(launches).toBe(1);
+    expect(logins()).toBe(1);
   });
 
-  test("test-login tries the given login in a fresh browser and closes it", async () => {
+  test("test-login tries the given login in its own session; the kept one stays", async () => {
     await scrapeHunts();
-    expect(await testJotihuntLogin({ username: "new@example.nl", password: "pw" })).toEqual({ ok: true });
-    expect(launches).toBe(2);
-    expect(closes).toBe(1);
+    expect(await testJotihuntLogin({ username: "new@example.nl", password: "hunter2" })).toEqual({ ok: true });
+    await scrapeHunts();
+    expect(logins()).toBe(2);
+    expect(site.requests.at(-1)).toBe("GET /hunts");
+    expect(site.requests.at(-2)).not.toBe("POST /login");
   });
 
   test("test-login reports wrong credentials", async () => {
-    rejectLogin = true;
-    expect(await testJotihuntLogin()).toEqual({ ok: false, error: "Inloggen mislukt: controleer gebruikersnaam en wachtwoord." });
-    expect(closes).toBe(1);
+    expect(await testJotihuntLogin({ username: "team@example.nl", password: "wrong" })).toEqual({ ok: false, error: "Inloggen mislukt: controleer gebruikersnaam en wachtwoord." });
   });
 
-  test("test-login without a login fails before launching a browser", async () => {
+  test("test-login without a login fails before any request", async () => {
     await initAppConfig(fakeConnection(), {});
     expect(await testJotihuntLogin()).toEqual({ ok: false, error: "Vul gebruikersnaam en wachtwoord in." });
-    expect(launches).toBe(0);
+    expect(site.requests).toEqual([]);
   });
 });

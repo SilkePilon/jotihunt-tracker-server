@@ -11,10 +11,8 @@ const scraped = (siteKey: string, overrides: Partial<ScrapedHunt> = {}): Scraped
   status: "pending",
   statusText: "Wacht op bevestiging",
   points: 0,
-  qrCode: null,
   huntCode: null,
   location: null,
-  detailUrl: null,
   ...overrides,
 });
 const stored = (siteKey: string, statusClass: string, points = 0, extra: { lastNotifiedOutcome?: "approved" | "rejected" | null; lastNotifiedPoints?: number | null } = {}) => ({ siteKey, statusClass, points, ...extra });
