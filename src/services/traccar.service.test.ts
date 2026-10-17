@@ -1,16 +1,18 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { logger } from "../logger";
 import { traccarHttp } from "./traccar-http";
-import { clearTraccarCache, getDevices, getGroups, getPositions } from "./traccar.service";
+import { clearTraccarCache, getDevices, getGroups, getPositionHistory, getPositions } from "./traccar.service";
 
 let mode = "ok";
 const hits: Record<string, number> = {};
+let lastQuery = "";
 const server = Bun.serve({
   port: 0,
   hostname: "127.0.0.1",
   async fetch(request) {
     const path = new URL(request.url).pathname;
     hits[path] = (hits[path] ?? 0) + 1;
+    lastQuery = new URL(request.url).search;
     await Bun.sleep(20);
     if (mode === "nulls") return Response.json([null, { id: 1, name: "dev1", deviceId: 1 }, 3]);
     if (mode === "wrongshape") return Response.json({ data: [] });
@@ -55,5 +57,21 @@ describe("Traccar lists", () => {
     mode = "nulls";
     expect(await getDevices()).toEqual([{ id: 1, name: "dev1", deviceId: 1 } as never]);
     expect(await getPositions()).toHaveLength(1);
+  });
+});
+
+describe("getPositionHistory", () => {
+  test("asks one device's positions between two times, never from the shared cache", async () => {
+    const from = new Date("2026-10-17T19:33:00Z");
+    const to = new Date("2026-10-17T19:48:00Z");
+    expect(await getPositionHistory(1, from, to)).toEqual([{ id: 10, deviceId: 1, latitude: 52, longitude: 5 } as never]);
+    expect(Object.fromEntries(new URLSearchParams(lastQuery))).toEqual({ deviceId: "1", from: from.toISOString(), to: to.toISOString() });
+    await getPositionHistory(1, from, to);
+    expect(hits["/api/positions"]).toBe(2);
+  });
+
+  test("a wrong answer fails", async () => {
+    mode = "wrongshape";
+    await expect(getPositionHistory(1, new Date(), new Date())).rejects.toThrow("Could not fetch position history");
   });
 });

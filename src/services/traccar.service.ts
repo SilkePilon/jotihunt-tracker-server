@@ -129,3 +129,17 @@ export async function getGroups(): Promise<Array<TraccarGroup>> {
     throw new Error("Could not fetch groups", { cause: error });
   }
 }
+
+/**
+ * The positions one device sent between `from` and `to` (Traccar's position history, oldest first).
+ */
+export async function getPositionHistory(deviceId: number, from: Date, to: Date): Promise<Array<TraccarPosition>> {
+  try {
+    const response = await apiClient.get<unknown>("/api/positions", { params: { deviceId, from: from.toISOString(), to: to.toISOString() } });
+    if (!Array.isArray(response.data)) throw new Error("GET /api/positions → unexpected response");
+    return response.data.filter((item): item is TraccarPosition => typeof item === "object" && item !== null);
+  } catch (error) {
+    logger.error(`Error fetching position history: ${describeTraccarError(error)}`);
+    throw new Error("Could not fetch position history", { cause: error });
+  }
+}
