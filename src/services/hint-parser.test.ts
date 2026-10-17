@@ -33,8 +33,20 @@ describe("parseHintArticle", () => {
     expect(result.delta).toEqual({ snippet: null, none: true });
   });
 
-  test("areas not present get a null snippet", () => {
-    expect(parseHintArticle(sample).foxtrot).toEqual({ snippet: null, none: false });
+  test("areas the article never names are none once another area has a part", () => {
+    expect(parseHintArticle(sample).foxtrot).toEqual({ snippet: null, none: true });
+    expect(parseHintArticle(sample).oscar).toEqual({ snippet: null, none: true });
+  });
+
+  test("an area named elsewhere (e.g. a file name) but without a label keeps a null snippet", () => {
+    const html = `${sample}<br><a href="https://cdn.jotihunt.net/hint-foxtrot.png">plaatje</a>`;
+    expect(parseHintArticle(html).foxtrot).toEqual({ snippet: null, none: false });
+  });
+
+  test("an area label with nothing after it is none", () => {
+    const result = parseHintArticle("<div>Alpha: 1234 5678</div><div>Bravo:<br><br></div><div> <br></div><div>Charlie: 4321</div>");
+    expect(result.bravo).toEqual({ snippet: null, none: true });
+    expect(result.charlie.snippet).toContain("4321");
   });
 
   test("image-only article (2025 style) yields no snippets", () => {

@@ -19,11 +19,17 @@ function toPlainText(html: string) {
     .trim();
 }
 
+/** The area name appears in the text (or HTML) as a word of its own, e.g. "Oscar:" or "hint-oscar.png" */
+export function mentionsArea(text: string, area: string): boolean {
+  return new RegExp(`(^|[^a-z])${escapeRegExp(area)}($|[^a-z])`, "i").test(text);
+}
+
 /**
  * Split a Jotihunt hint article into per-area parts.
- * Hint articles contain lines like "Alpha: <img>", "Bravo: -". A dash-only part means
- * the area has no hint this round. Areas that can't be found get a null snippet, so the
- * client falls back to showing the full article.
+ * Hint articles contain lines like "Alpha: <img>", "Bravo: -". A dash-only or empty part means
+ * the area has no hint this round, and so does an area the article never names while another
+ * area got a part. Other areas that can't be found get a null snippet, so the client falls
+ * back to showing the full article.
  * @param html The article HTML content
  * @param areaNames The area names to look for (case-insensitive)
  * @returns A record keyed by lowercase area name
@@ -46,12 +52,16 @@ export function parseHintArticle(html: string, areaNames: string[] = DEFAULT_ARE
     const raw = html.slice(match.end, matches[index + 1]?.start ?? html.length);
     const text = toPlainText(raw);
     const hasMedia = /<(img|figure|a)\b/i.test(raw);
-    if (!hasMedia && /^[-–—\s]+$/.test(text)) {
+    if (!hasMedia && /^[-–—\s]*$/.test(text)) {
       result[match.area] = { snippet: null, none: true };
-    } else if (hasMedia || text !== "") {
+    } else {
       result[match.area] = { snippet: raw.trim(), none: false };
     }
   });
+
+  if (Object.values(result).some((part) => part.snippet !== null)) {
+    for (const name of names) if (!mentionsArea(html, name)) result[name] = { snippet: null, none: true };
+  }
 
   return result;
 }

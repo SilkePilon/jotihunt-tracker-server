@@ -114,6 +114,7 @@ describe("buildHintSplitPrompt", () => {
     expect(prompt).toContain("[afbeelding: name]");
     expect(prompt).toContain("[bestand: name]");
     expect(prompt).toContain('a lone "Alpha:" line');
+    expect(prompt).toContain("never names");
   });
 });
 
@@ -143,12 +144,27 @@ describe("createHintSplitter", () => {
     expect(split).toEqual([
       { area: "alpha", none: false, blocks: [1] },
       { area: "bravo", none: true, blocks: [] },
+      // Never named in the article
+      { area: "charlie", none: true, blocks: [] },
     ]);
+  });
+
+  test("an area left out or undecided becomes none only when no block or the title names it and another area got blocks", async () => {
+    const split = await splitWith({ areas: [{ area: "alpha", none: false, blocks: [1] }] });
+    // bravo is named ("Bravo: -"), charlie is not
+    expect(split).toEqual([
+      { area: "alpha", none: false, blocks: [1] },
+      { area: "charlie", none: true, blocks: [] },
+    ]);
+    const titled = await createHintSplitter({ model: mockModel(() => JSON.stringify({ areas: [{ area: "alpha", none: false, blocks: [1] }] })) }).split({ title: "Hint Charlie", content: SAMPLE }, AREAS);
+    expect(titled).toEqual([{ area: "alpha", none: false, blocks: [1] }]);
+    // Only none answers: nothing is added
+    expect(await splitWith({ areas: [{ area: "bravo", none: true, blocks: [] }] })).toEqual([{ area: "bravo", none: true, blocks: [] }]);
   });
 
   test("none with blocks is treated as not none", async () => {
     const split = await splitWith({ areas: [{ area: "alpha", none: true, blocks: [1] }] });
-    expect(split).toEqual([{ area: "alpha", none: false, blocks: [1] }]);
+    expect(split[0]).toEqual({ area: "alpha", none: false, blocks: [1] });
   });
 
   test("an area with no usable blocks and not none is unknown (dropped, keeps the rule result)", async () => {

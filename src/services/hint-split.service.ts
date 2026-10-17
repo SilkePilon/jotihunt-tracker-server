@@ -7,6 +7,7 @@ import { attribute, figureParts, fileName } from "./article-media";
 import { getAreaNames } from "./article-sync.service";
 import { articleTextHash, hashContent } from "./article-text-hash";
 import { invalidateBoardCache } from "./hint-board.service";
+import { mentionsArea } from "./hint-parser";
 import { htmlToText } from "./html-text";
 
 /** One block of a hint article: its original HTML and its plain text (images as "[afbeelding: <alt or file name>]") */
@@ -124,6 +125,7 @@ Tell for every area which numbered blocks below hold its part:
 - Include the block with the area's own label (e.g. a lone "Alpha:" line) in that area's blocks.
 - A part may be introduced for several areas at once, e.g. "Alpha en Bravo:": all of them get those blocks.
 - "-" or "--" as an area's part means there is no hint for that area this round: answer "none": true and "blocks": [].
+- So does an area label with nothing after it, and an area the article never names (no label, no file name) while other areas do get a part.
 - Intro blocks, closing words and anything shared belong to no area.
 - Use only the block numbers listed. Do not guess: give an area no blocks and "none": false when you cannot tell.
 
@@ -134,8 +136,12 @@ Blocks:
 ${lines.join("\n")}`;
 }
 
-/** The usable part of the answer; an answer without any usable area is invalid */
-function cleanSplit(output: unknown, areas: string[], blockCount: number): HintSplit {
+/**
+ * The usable part of the answer; an answer without any usable area is invalid. An area the AI left out or could not
+ * tell becomes none when another area got blocks and neither the title nor any block names it.
+ */
+function cleanSplit(output: unknown, areas: string[], article: { title: string }, hintBlocks: HintBlock[]): HintSplit {
+  const blockCount = hintBlocks.length;
   const known = new Set(areas.map((area) => area.toLowerCase()));
   const raw = (output ?? {}) as { areas?: unknown };
   const entries = Array.isArray(raw.areas) ? raw.areas : [];
@@ -152,6 +158,12 @@ function cleanSplit(output: unknown, areas: string[], blockCount: number): HintS
     split.push({ area: name, none: usable.length === 0, blocks: usable });
   }
   if (split.length === 0) throw invalidAnswer();
+  if (split.some((done) => !done.none)) {
+    const text = [article.title, ...hintBlocks.map((block) => block.text)].join("\n");
+    for (const name of known) {
+      if (!split.some((done) => done.area === name) && !mentionsArea(text, name)) split.push({ area: name, none: true, blocks: [] });
+    }
+  }
   return split;
 }
 
@@ -173,7 +185,7 @@ export function createHintSplitter({ model, timeoutMs = HINT_SPLIT_TIMEOUT_MS }:
       } catch (error) {
         throw toGeminiError(error);
       }
-      return cleanSplit(output, areas, hintBlocks(article.content).length);
+      return cleanSplit(output, areas, article, hintBlocks(article.content));
     },
   };
 }

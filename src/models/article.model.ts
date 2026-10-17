@@ -58,7 +58,7 @@ const ArticleSchema = new mongoose.Schema({
     type: String,
     required: false,
   },
-  /** `${textHash}:s2` of the text the AI hint split was made from (hintSplitKey; hint articles only): a changed text is split again */
+  /** `${textHash}:s3` of the text the AI hint split was made from (hintSplitKey; hint articles only): a changed text is split again */
   hintSplitHash: {
     type: String,
     required: false,
@@ -92,10 +92,11 @@ export const TEXT_DEBOUNCE_MS = 120_000;
 export const SUMMARY_DEBOUNCE_MS = TEXT_DEBOUNCE_MS;
 
 /**
- * Version of the AI hint splits: s2 is keyed on textHash, so markup-only edits keep the split. Before, hintSplitHash
+ * Version of the AI hint splits: s2 is keyed on textHash, so markup-only edits keep the split. s3 marks areas the
+ * article never names as none. Before, hintSplitHash
  * was the contentHash (raw HTML); a split of the current content is re-keyed, not made again.
  */
-export const HINT_SPLIT_VERSION = "s2";
+export const HINT_SPLIT_VERSION = "s3";
 
 /** The hintSplitHash of a split of this text made by the current version */
 export const hintSplitKey = (textHash: string) => `${textHash}:${HINT_SPLIT_VERSION}`;
