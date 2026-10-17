@@ -6,6 +6,7 @@ import { HintCell } from "../models/hint-cell.model";
 import { isDuplicateKeyError } from "../utils/mongo";
 import { sendCachedJson } from "../services/response-cache";
 import { takeOverImportedHintMarker } from "../services/hint-board.service";
+import { forgetDeletedMarker } from "../services/jotiboard.import";
 
 /** Polled by every hunter: one shared body for a moment (cleared by every marker write) */
 export async function getMarkers(_req: Request, res: Response) {
@@ -51,5 +52,7 @@ export async function deleteMarker(req: Request, res: Response) {
 
   // Solved hint cells link to their marker; drop the dangling links
   await HintCell.updateMany({ markerId: marker._id }, { $unset: { markerId: 1 } });
+  // A deleted Jotiboard marker was wrong: the next sync must not import its pin again
+  if (marker.source === "jotiboard") await forgetDeletedMarker(marker._id);
   return res.status(200).json(marker);
 }

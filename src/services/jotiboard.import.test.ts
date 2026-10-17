@@ -5,7 +5,7 @@ import { Marker, MarkerType } from "../models/marker.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { solveCell } from "./hint-board.service";
 import type { JotiboardHintSolve, JotiboardPin } from "./jotiboard.helpers";
-import { jotiboardImporter as importer } from "./jotiboard.import";
+import { forgetDeletedMarker, jotiboardImporter as importer } from "./jotiboard.import";
 
 beforeAll(connectTestDb);
 beforeEach(clearTestDb);
@@ -75,6 +75,39 @@ describe("pins", () => {
     const left = await Marker.find().lean();
     expect(left.map((marker) => String(marker._id)).sort()).toEqual([String(ours._id), String((await Marker.findOne({ externalId: "p2" }))!._id)].sort());
     expect(await JotiboardImport.countDocuments({ externalId: "p1" })).toBe(0);
+  });
+});
+
+describe("deleted markers", () => {
+  /** What DELETE /markers/:id does with an imported marker */
+  const deleteImported = async () => {
+    const marker = await Marker.findOneAndDelete({ source: "jotiboard" }).lean();
+    await forgetDeletedMarker(marker!._id);
+  };
+
+  test("a marker a hunter deleted is not imported again", async () => {
+    await importer.importPins([pin()]);
+    await deleteImported();
+    await importer.importPins([pin()]);
+    expect(await Marker.countDocuments()).toBe(0);
+    expect(await JotiboardImport.findOne().lean()).toMatchObject({ result: "skipped", reason: "deleted" });
+    expect(await importer.counts()).toEqual({ pins: 0, hints: 0 });
+  });
+
+  test("stays deleted through a purge", async () => {
+    await importer.importPins([pin(), pin({ id: "p2" })]);
+    await Marker.deleteOne({ externalId: "p1" });
+    await forgetDeletedMarker((await JotiboardImport.findOne({ externalId: "p1" }).lean())!.markerId!);
+    expect(await importer.purge()).toEqual({ markers: 1, hints: 0 });
+    await importer.importPins([pin(), pin({ id: "p2" })]);
+    expect((await Marker.find().lean()).map((marker) => marker.externalId)).toEqual(["p2"]);
+  });
+
+  test("a pin gone from Jotiboard drops its tombstone", async () => {
+    await importer.importPins([pin()]);
+    await deleteImported();
+    await importer.importPins([]);
+    expect(await JotiboardImport.countDocuments()).toBe(0);
   });
 });
 

@@ -255,6 +255,20 @@ describe("markers", () => {
     expect((await HintCell.findById(linked._id).lean())?.markerId).toBeUndefined();
   });
 
+  test("DELETE /markers/:id: a deleted Jotiboard marker is not imported again", async () => {
+    const { Marker } = await import("./models/marker.model");
+    const { JotiboardImport } = await import("./models/jotiboard-import.model");
+    const { jotiboardImporter } = await import("./services/jotiboard.import");
+    const pin = { id: "p1", foxAreas: ["Bravo"], lat: 52.29, lon: 5.61, time: Date.parse("2026-10-17T14:20:00Z"), type: "other" as const };
+    await jotiboardImporter.importPins([pin]);
+    const imported = await Marker.findOne({ source: "jotiboard" }).lean();
+    const res = await request(`/markers/${imported!._id}`, { method: "DELETE", token: tokenFor(await createUser()) });
+    expect(res.status).toBe(200);
+    expect(await JotiboardImport.findOne().lean()).toMatchObject({ result: "skipped", reason: "deleted" });
+    await jotiboardImporter.importPins([pin]);
+    expect(await Marker.countDocuments()).toBe(0);
+  });
+
   test("POST /markers: a hint marker of ours on that hour still answers 409", async () => {
     const { Marker, MarkerType } = await import("./models/marker.model");
     await Marker.create({ area: "alpha", time: new Date("2026-10-17T14:00:00.000Z"), type: MarkerType.Hint, location: { type: "Point", coordinates: [5.6, 52.3] } });

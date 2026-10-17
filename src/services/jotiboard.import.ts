@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import { ServiceError } from "../http/service-error";
 import { HintCell, HintCellStatus } from "../models/hint-cell.model";
 import { JotiboardImport } from "../models/jotiboard-import.model";
@@ -18,7 +19,8 @@ export interface JotiboardImporter {
   /** `pins` is the full `manualLocations` snapshot: imported pins missing from it are removed again */
   importPins(pins: JotiboardPin[]): Promise<void>;
   importHintSolves(solves: JotiboardHintSolve[]): Promise<void>;
-  /** Remove everything the sync imported (markers, solved cells that still hold the imported answer) and all records */
+  /** Remove everything the sync imported (markers, solved cells that still hold the imported answer) and all records except
+   * the pins hunters deleted, so those stay away when the sync comes back on */
   purge(): Promise<{ markers: number; hints: number }>;
   counts(): Promise<JotiboardCounts>;
 }
@@ -115,7 +117,7 @@ async function purge(): Promise<{ markers: number; hints: number }> {
   for (const record of solved) {
     if (record.cellId && record.answer && (await reopenImportedCell(record.cellId, record.answer))) hints++;
   }
-  await JotiboardImport.deleteMany({});
+  await JotiboardImport.deleteMany({ reason: { $ne: "deleted" } });
   return { markers: deletedCount ?? 0, hints };
 }
 
@@ -125,6 +127,11 @@ async function counts(): Promise<JotiboardCounts> {
     JotiboardImport.countDocuments({ kind: "hintSolve", result: "imported" }),
   ]);
   return { pins, hints };
+}
+
+/** A hunter deleted an imported marker (it was wrong): the sync must not bring its pin back. */
+export async function forgetDeletedMarker(markerId: mongoose.Types.ObjectId): Promise<void> {
+  await JotiboardImport.updateMany({ kind: "pin", markerId }, { $set: { result: "skipped", reason: "deleted" }, $unset: { markerId: 1 } });
 }
 
 export const jotiboardImporter: JotiboardImporter = { importPins, importHintSolves, purge, counts };
