@@ -30,45 +30,17 @@ function turnTools() {
   return { tools, counts };
 }
 
-const LIMIT = { error: "Limiet voor deze vraag bereikt" };
-
-describe("per-turn budget for paid sub-calls", () => {
-  test("limits are 6 web searches, 4 code runs, 5 walking routes, 4 place searches, 3 aerial photos and 25 OV requests", () => {
-    expect(TURN_LIMITS).toEqual({ webSearch: 6, runCode: 4, walkingRoute: 5, findPlaces: 4, lookAtPoint: 3, ov: 25 });
+describe("no per-turn limit on paid sub-calls", () => {
+  test("no tool has a limit", () => {
+    expect(Object.values(TURN_LIMITS).every((limit) => limit === Infinity)).toBe(true);
   });
 
-  test("webSearch: the 7th call of a turn is refused without calling Gemini", async () => {
+  test("web searches, code runs and walking routes keep going far past the old limits", async () => {
     const { tools, counts } = turnTools();
-    for (let i = 0; i < 6; i++) expect(await runTool(tools.webSearch, { query: `vraag ${i}` })).toMatchObject({ answer: "ok" });
-    expect(await runTool(tools.webSearch, { query: "nog een" })).toEqual(LIMIT);
-    expect(counts.gemini).toBe(6);
-  });
-
-  test("runCode: the 5th call of a turn is refused without calling Gemini", async () => {
-    const { tools, counts } = turnTools();
-    for (let i = 0; i < 4; i++) expect(await runTool(tools.runCode, { task: `som ${i}` })).toMatchObject({ answer: "ok" });
-    expect(await runTool(tools.runCode, { task: "nog een" })).toEqual(LIMIT);
-    expect(counts.gemini).toBe(4);
-  });
-
-  test("distance: after 5 walking routes the walking time is a straight-line estimate", async () => {
-    const { tools, counts } = turnTools();
+    for (let i = 0; i < 20; i++) expect(await runTool(tools.webSearch, { query: `vraag ${i}` })).toMatchObject({ answer: "ok" });
+    for (let i = 0; i < 20; i++) expect(await runTool(tools.runCode, { task: `som ${i}` })).toMatchObject({ answer: "ok" });
     const input = { from: "188362 440722", to: "188362 441722", walking: true };
-    for (let i = 0; i < 5; i++) expect(await runTool(tools.distance, input)).toMatchObject({ walkMinutes: 42, walkEstimate: false });
-    const sixth = (await runTool(tools.distance, input)) as { walkMinutes: number; walkEstimate: boolean; distanceM: number };
-    expect(sixth.walkEstimate).toBe(true);
-    expect(sixth.walkMinutes).toBeGreaterThan(5);
-    expect(counts.walking).toBe(5);
-    // Without walking the distance is free
-    expect(await runTool(tools.distance, { from: input.from, to: input.to })).toHaveProperty("distanceM");
-  });
-
-  test("every turn (createIntelTools call) starts with a fresh budget", async () => {
-    const first = turnTools();
-    for (let i = 0; i < 4; i++) await runTool(first.tools.runCode, { task: `som ${i}` });
-    expect(await runTool(first.tools.runCode, { task: "x" })).toEqual(LIMIT);
-    stop?.();
-    const second = turnTools();
-    expect(await runTool(second.tools.runCode, { task: "x" })).toMatchObject({ answer: "ok" });
+    for (let i = 0; i < 20; i++) expect(await runTool(tools.distance, input)).toMatchObject({ walkMinutes: 42, walkEstimate: false });
+    expect(counts).toEqual({ gemini: 40, walking: 20 });
   });
 });

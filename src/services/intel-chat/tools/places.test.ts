@@ -13,7 +13,6 @@ const north = (dy: number) => {
   const { lat, lng } = fromRd(188_362, 440_722 + dy);
   return { lat, lon: lng };
 };
-const LIMIT = { error: "Limiet voor deze vraag bereikt" };
 
 type Call = { url: string; init: RequestInit };
 
@@ -177,13 +176,6 @@ describe("findPlaces", () => {
     expect(calls).toHaveLength(1);
   });
 
-  test("at most 4 searches per turn", async () => {
-    const { fetch, calls } = fakeFetch({ elements: [] });
-    const turn = tools({ fetch });
-    for (let i = 0; i < 4; i++) expect(await runTool(turn.findPlaces, { near: HQ, kinds: ["church"] })).toEqual({ places: [] });
-    expect(await runTool(turn.findPlaces, { near: HQ, kinds: ["church"] })).toEqual(LIMIT);
-    expect(calls).toHaveLength(4);
-  });
 });
 
 describe("lookAtPoint", () => {
@@ -248,12 +240,4 @@ describe("lookAtPoint", () => {
     expect(await runTool(tools({ fetch: photoFetch().fetch, toolModel: model }).lookAtPoint, { point: "48.85, 2.35" })).toEqual({ error: "Luchtfoto's zijn er alleen voor Nederland" });
   });
 
-  test("at most 3 photos per turn", async () => {
-    const photo = photoFetch();
-    const { model, bodies } = gemini(() => geminiReply("ok"));
-    const turn = tools({ fetch: photo.fetch, toolModel: model });
-    for (let i = 0; i < 3; i++) expect(await runTool(turn.lookAtPoint, { point: HQ })).toMatchObject({ description: "ok" });
-    expect(await runTool(turn.lookAtPoint, { point: HQ })).toEqual(LIMIT);
-    expect(bodies).toHaveLength(3);
-  });
 });

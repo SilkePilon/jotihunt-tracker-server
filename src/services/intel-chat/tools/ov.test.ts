@@ -98,18 +98,6 @@ describe("ovStopsNear", () => {
     expect(await runTool(tools.ovStopsNear, { near: ZUTPHEN_STATION })).toEqual({ error: "OVapi gaf HTTP 503" });
   });
 
-  test("modes that could not be learned (budget) are noted", async () => {
-    const { tools, budget } = setup();
-    budget.ov = 23;
-    const result = (await runTool(tools.ovStopsNear, { near: ZUTPHEN_STATION })) as { stops: Stop[]; note: string };
-    expect(result.stops.map((stop) => [stop.id, stop.modes])).toEqual([
-      ["ZpBus", []],
-      ["224", []],
-      ["NS:ZP", ["TRAIN"]],
-    ]);
-    expect(result.note).toBe("Vervoerswijzen van bushaltes onbekend: limiet voor deze vraag bereikt");
-  });
-
   test("modes that could not be learned (passes unavailable) are noted", async () => {
     const fake = fakeOvFetch();
     const fetch = async (url: string, init: RequestInit) => (url.startsWith(`${OVAPI}/stopareacode/`) ? new Response("nee", { status: 503 }) : fake.fetch(url, init));
@@ -354,18 +342,4 @@ describe("predictOvMovement", () => {
     expect(await runTool(tools.predictOvMovement, { from: ZUTPHEN_STATION, seenAt: "2026-10-15T14:00:00+02:00", modes: ["FIETS"] })).toEqual({ error: "Onbekende vervoerswijze: FIETS" });
   });
 
-  test("over this turn's OV budget nothing is fetched", async () => {
-    const { tools, ovCalls, budget } = setup();
-    budget.ov = 25;
-    expect(await runTool(tools.predictOvMovement, { from: ZUTPHEN_STATION, seenAt: "2026-10-15T14:00:00+02:00" })).toEqual({ error: "Limiet voor deze vraag bereikt" });
-    expect(ovCalls()).toHaveLength(0);
-  });
-
-  test("the budget running out halfway still gives the candidates found so far", async () => {
-    const { tools, budget } = setup();
-    budget.ov = 21;
-    const result = (await runTool(tools.predictOvMovement, { from: ZUTPHEN_STATION, seenAt: "2026-10-15T14:00:00+02:00" })) as Prediction;
-    expect(budget.ov).toBe(25);
-    expect(result.assumptions.join(" ")).toContain("Limiet van 25 OV-verzoeken");
-  });
 });

@@ -22,8 +22,11 @@ export interface IntelToolContext {
   budget?: TurnBudget;
 }
 
-/** Paid or rate-limited sub-calls per turn (one question) */
-export const TURN_LIMITS = { webSearch: 6, runCode: 4, walkingRoute: 5, findPlaces: 4, lookAtPoint: 3, ov: 25 } as const;
+/**
+ * Paid or rate-limited sub-calls per turn (one question): no limit, a turn runs until the model is done or the user
+ * stops it (Stop, "Nieuw gesprek"). Counted anyway (tests, and to set a limit again later).
+ */
+export const TURN_LIMITS = { webSearch: Infinity, runCode: Infinity, walkingRoute: Infinity, findPlaces: Infinity, lookAtPoint: Infinity, ov: Infinity } as const;
 export type TurnBudget = Record<keyof typeof TURN_LIMITS, number>;
 export const BUDGET_EXHAUSTED = "Limiet voor deze vraag bereikt";
 

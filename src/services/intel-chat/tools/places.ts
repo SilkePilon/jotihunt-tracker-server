@@ -307,7 +307,7 @@ export function placesTools(turn: IntelToolContext) {
     }),
     lookAtPoint: tool({
       description:
-        "Bekijk de actuele luchtfoto (PDOK) rond een punt in Nederland en krijg een korte beschrijving: gebouwen, wegen, water, velden, parkeerplaatsen, ingangen. De gebruiker ziet de foto ook. Max 3 keer per vraag.",
+        "Bekijk de actuele luchtfoto (PDOK) rond een punt in Nederland en krijg een korte beschrijving: gebouwen, wegen, water, velden, parkeerplaatsen, ingangen. De gebruiker ziet de foto ook.",
       inputSchema: jsonSchema<{ point: string; zoomM?: number }>({
         type: "object",
         properties: { point: { type: "string", description: POINT_DESCRIPTION }, zoomM: { type: "number", description: "Halve breedte van de foto in meters (standaard 150, 50-1000)" } },

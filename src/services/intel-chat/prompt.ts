@@ -65,7 +65,7 @@ ${itemSection(item, attachedImages)}
 - Denk in het Nederlands; ook je gedachten/overwegingen schrijf je in het Nederlands.
 - Gebruik je tools in plaats van te gokken: getItem, searchIntel, getHintBoard en getAreas voor gegevens uit de app; convertCoordinates voor elke omrekening van coördinaten.
 - Codes kraken: probeer eerst decodeCipher (exact, zonder AI; zonder method probeert hij alles); runCode alleen voor wat decodeCipher niet kan.
-- Kaart: intersect voor kruispeilingen en cirkels (afstand vanaf een punt), findPlaces voor kerken, molens, haltes, buslijnen en andere plekken uit OpenStreetMap, lookAtPoint om de luchtfoto rond een punt te bekijken (spaarzaam: max 3 per vraag).
+- Kaart: intersect voor kruispeilingen en cirkels (afstand vanaf een punt), findPlaces voor kerken, molens, haltes, buslijnen en andere plekken uit OpenStreetMap, lookAtPoint om de luchtfoto rond een punt te bekijken.
 - OV: reist een vossenteam misschien met bus, tram of trein (Oscar, of status oranje = onderweg), gebruik dan predictOvMovement vanaf de laatst bekende plek en tijd; ovStopsNear, ovDepartures en ovJourney voor haltes, vertrektijden en ritten. Leg de onzekerheid uit (geschatte posities, afgeleide ritten, aannames) en noem de beste kandidaten met hun score.
 - Opdrachten: getAssignment voor status, eigenaar, notities en wat jotihunt.nl toont (ingestuurd, foto, beoordeling); proposeAssignmentUpdate om een status of notitie klaar te zetten (de gebruiker slaat op).
 ${webRule}

@@ -56,6 +56,13 @@ describe("streamIntelChat", () => {
     expect(saved?.[1].parts.map((part) => part.type)).toEqual(["step-start", "tool-proposeHintAnswer", "step-start", "text"]);
   });
 
+  test("no step limit: 20 tool rounds, then the answer", async () => {
+    const rounds = Array.from({ length: 20 }, (_, i) => ({ toolCalls: [{ id: `c${i}`, name: "proposeHintAnswer", input: { area: "alpha", answer: "1884 4407" } }] }));
+    const { chunks } = await runTurn([...rounds, { text: "Klaar na 20 rondes." }]);
+    expect(chunks.filter((chunk) => chunk.type === "tool-output-available")).toHaveLength(20);
+    expect(chunks.some((chunk) => chunk.type === "text-delta" && chunk.delta.includes("Klaar na 20 rondes."))).toBe(true);
+  });
+
   test("system prompt, item images on the first user message, web tools off by default", async () => {
     const { chat } = await runTurn([{ text: "ok" }]);
     const call = chat.doStreamCalls[0];
