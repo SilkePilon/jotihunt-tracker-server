@@ -145,37 +145,65 @@ export async function testJotihuntLogin(login = jotihuntLogin()): Promise<{ ok: 
   }
 }
 
-/** Signs that /hunts did not load: a Cloudflare challenge or a server error page */
+/** Signs that a page did not load: a Cloudflare challenge or a server error page */
 const NOT_THE_HUNTS_PAGE = /just a moment|cf-challenge|challenge-platform|captcha|502 bad gateway|503 service|server error/i;
 
-/** GET /hunts; null when the session is gone (sent to /login, or a 419) */
-async function huntsPage(): Promise<string | null> {
-  const { response, url } = await request(jar, "/hunts");
+/** Bumped by every fresh login, so a request that lost its session to another job's login just retries */
+let loginGeneration = 0;
+/** The login in progress: jobs that find the session gone at the same time share one login */
+let loginInFlight: Promise<void> | null = null;
+
+/** Start from a new jar and log in (one login at a time for every job) */
+function freshLogin(): Promise<void> {
+  loginInFlight ??= (async () => {
+    jar = new Map();
+    loginGeneration++;
+    const login = jotihuntLogin();
+    lastLogin = JSON.stringify(login);
+    await logIn(jar, login);
+  })().finally(() => {
+    loginInFlight = null;
+  });
+  return loginInFlight;
+}
+
+/** GET a page with the kept session; null when the session is gone (sent to /login, or a 419) */
+async function sessionPage(path: string): Promise<{ status: number; html: string } | null> {
+  const { response, url } = await request(jar, path);
   if (isLoginPage(url) || response.status === 419) {
     await response.arrayBuffer().catch(() => undefined);
     return null;
   }
-  const html = await response.text();
-  if (!response.ok && !NOT_THE_HUNTS_PAGE.test(html)) throw new Error(`GET /hunts → ${response.status}`);
-  return html;
+  return { status: response.status, html: await response.text() };
 }
 
 /**
- * Scrape the hunts from the logged-in /hunts page with plain HTTP, logging in first when there is no session and again
- * when it expired. The HTML is parsed by jotihunt-hunts.parse (tested against saved pages).
+ * GET a logged-in page of jotihunt.nl with the one shared session (hunts, score and assignments use the same jar),
+ * logging in first when there is no session and again when it expired. Any HTTP status is returned as-is; throws
+ * "Login failed…" when logging in does not help.
+ */
+export async function fetchPage(path: string): Promise<{ status: number; html: string }> {
+  if (loginInFlight) await loginInFlight.catch(() => undefined);
+  const generation = loginGeneration;
+  let page = jar.size > 0 ? await sessionPage(path) : null;
+  if (page !== null) return page;
+  // Another job logged in meanwhile: its session may work for us too
+  if (generation !== loginGeneration && jar.size > 0) page = await sessionPage(path);
+  if (page !== null) return page;
+  await freshLogin();
+  page = await sessionPage(path);
+  if (page === null) throw new Error(`Login failed: ${path} still asks to log in`);
+  return page;
+}
+
+/**
+ * Scrape the hunts from the logged-in /hunts page with plain HTTP (see fetchPage for the session). The HTML is parsed
+ * by jotihunt-hunts.parse (tested against saved pages).
  */
 export async function scrapeHunts(): Promise<ScrapedHunt[]> {
   logger.debug("(SCRAPER) Scraping hunts from Jotihunt website...");
-  let html: string | null = null;
-  if (jar.size > 0) html = await huntsPage();
-  if (html === null) {
-    jar = new Map();
-    const login = jotihuntLogin();
-    lastLogin = JSON.stringify(login);
-    await logIn(jar, login);
-    html = await huntsPage();
-    if (html === null) throw new Error("Login failed: /hunts still asks to log in");
-  }
+  const { status, html } = await fetchPage("/hunts");
+  if ((status < 200 || status >= 300) && !NOT_THE_HUNTS_PAGE.test(html)) throw new Error(`GET /hunts → ${status}`);
 
   const { hunts, warning, found } = parseHuntsPage(html);
   if (!found && NOT_THE_HUNTS_PAGE.test(html)) throw new Error("No hunts page (Cloudflare or server error)");
@@ -186,9 +214,13 @@ export async function scrapeHunts(): Promise<ScrapedHunt[]> {
   return hunts;
 }
 
+/** True when the HTML is a Cloudflare challenge or a server error page rather than the site's own page */
+export const isNotASitePage = (html: string) => NOT_THE_HUNTS_PAGE.test(html);
+
 /** For tests: a fake fetch (null restores the real one); also forgets the session and the last warning */
 export function setScraperFetch(fake: Fetch | null): void {
   fetchImpl = fake ?? ((input, init) => fetch(input, init));
   jar = new Map();
+  loginInFlight = null;
   lastWarning = null;
 }

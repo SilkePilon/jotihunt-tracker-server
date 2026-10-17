@@ -10,7 +10,7 @@ mock.module("../logger", () => ({ logger: { info() {}, debug() {}, error() {}, w
 // A fresh instance: another test file may have loaded the service already (before JOTIHUNT_WEB_URL was set,
 // and resetAppConfig in the settings tests drops its config listener)
 const freshService = "./jotihunt-scraper.service?fresh";
-const { closeScraper, jotihuntLogin, scrapeHunts, setScraperFetch, testJotihuntLogin } = (await import(freshService)) as typeof import("./jotihunt-scraper.service");
+const { closeScraper, fetchPage, jotihuntLogin, scrapeHunts, setScraperFetch, testJotihuntLogin } = (await import(freshService)) as typeof import("./jotihunt-scraper.service");
 
 const ROWS = `<table><thead><th>Deelgebied</th><th>Huntcode</th><th>Status</th><th>Punten</th><th>Hunttijd</th></thead><tbody><tr><td>Alpha</td><td>abc</td><td>Goedgekeurd</td><td>1</td><td>2026-10-17 12:00:00</td></tr></tbody></table>`;
 
@@ -80,7 +80,10 @@ async function fakeFetch(input: URL, init: RequestInit): Promise<Response> {
     site.sessions.add(id);
     return redirect("https://jh.test/scoutingGroup/dashboard", id);
   }
-  if (path === "/scoutingGroup/dashboard") return new Response("<p>Dashboard</p>", { status: 200 });
+  if (path === "/scoutingGroup/dashboard") {
+    if (!session || !site.sessions.has(session)) return redirect("https://jh.test/login");
+    return new Response("<p>Dashboard</p>", { status: 200 });
+  }
   if (path === "/hunts") {
     if (!session || !site.sessions.has(session)) return redirect("https://jh.test/login");
     return new Response(site.huntsHtml, { status: site.huntsStatus });
@@ -168,6 +171,41 @@ describe("scrapeHunts", () => {
     expect(await scrapeHunts()).toEqual([]);
     await scrapeHunts();
     expect(warnings).toEqual(["(SCRAPER) Unknown hunts layout (no tables)"]);
+  });
+});
+
+describe("fetchPage", () => {
+  test("shares the session with the hunt scrape", async () => {
+    await scrapeHunts();
+    expect(await fetchPage("/scoutingGroup/dashboard")).toEqual({ status: 200, html: "<p>Dashboard</p>" });
+    expect(logins()).toBe(1);
+    expect(site.requests.at(-1)).toBe("GET /scoutingGroup/dashboard");
+  });
+
+  test("an expired session logs in again and retries the page", async () => {
+    await fetchPage("/scoutingGroup/dashboard");
+    site.sessions.clear();
+    expect((await fetchPage("/scoutingGroup/dashboard")).html).toBe("<p>Dashboard</p>");
+    expect(logins()).toBe(2);
+  });
+
+  test("jobs that find no session at the same time share one login", async () => {
+    const pages = await Promise.all([fetchPage("/scoutingGroup/dashboard"), fetchPage("/hunts"), fetchPage("/scoutingGroup/dashboard")]);
+    expect(pages.map((page) => page.status)).toEqual([200, 200, 200]);
+    expect(logins()).toBe(1);
+  });
+
+  test("returns other HTTP statuses as they are", async () => {
+    expect(await fetchPage("/bericht/404")).toEqual({ status: 404, html: "Not found" });
+  });
+
+  test("wrong credentials fail with a login error", async () => {
+    site.password = "other";
+    try {
+      await expect(fetchPage("/scoutingGroup/dashboard")).rejects.toThrow(/Login failed/);
+    } finally {
+      site.password = "hunter2";
+    }
   });
 });
 
