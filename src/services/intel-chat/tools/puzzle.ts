@@ -1,10 +1,12 @@
 import { google } from "@ai-sdk/google";
 import { generateText, jsonSchema, tool, type LanguageModel } from "ai";
-import { toGeminiError } from "../../ai/gemini-error";
+import { GeminiError, toGeminiError } from "../../ai/gemini-error";
 import { CIPHER_METHODS, decodeCipher } from "../cipher";
 import { BUDGET_EXHAUSTED, createTurnBudget, safely, spend, ToolInputError, type IntelToolContext } from "./context";
 
-export const RUN_CODE_TIMEOUT_MS = 60_000;
+/** Heavy tasks (dozens of items, several code runs) take over a minute */
+export const RUN_CODE_TIMEOUT_MS = 150_000;
+export const RUN_CODE_TOO_SLOW = "Rekentaak duurde te lang; maak de taak kleiner of splits hem op";
 const MAX_TASK = 4000;
 const MAX_OUTPUT = 4000;
 
@@ -18,7 +20,7 @@ export interface RunCodeResult {
  * Let Gemini write and run Python for a precise task (ciphers, counting, arithmetic) in its own sub-call with the
  * built-in code execution tool. Returns its answer plus the last code it ran and that code's output.
  */
-export async function runCode(model: LanguageModel, task: string, abortSignal?: AbortSignal): Promise<RunCodeResult> {
+export async function runCode(model: LanguageModel, task: string, abortSignal?: AbortSignal, timeoutMs = RUN_CODE_TIMEOUT_MS): Promise<RunCodeResult> {
   const text = String(task ?? "").trim();
   if (!text || text.length > MAX_TASK) throw new ToolInputError("Taak moet 1 tot 4000 tekens zijn");
   try {
@@ -28,7 +30,7 @@ export async function runCode(model: LanguageModel, task: string, abortSignal?: 
       prompt: text,
       tools: { code_execution: google.tools.codeExecution({}) },
       maxRetries: 0,
-      timeout: RUN_CODE_TIMEOUT_MS,
+      timeout: timeoutMs,
       abortSignal,
     });
     let code: string | null = null;
@@ -39,6 +41,9 @@ export async function runCode(model: LanguageModel, task: string, abortSignal?: 
     }
     return { answer: result.text.trim().slice(0, MAX_OUTPUT), code: code?.slice(0, MAX_OUTPUT) ?? null, output: output?.slice(0, MAX_OUTPUT) ?? null };
   } catch (error) {
+    // Our own deadline, not the turn being stopped: say so, else the model reads "niet bereikbaar" and gives up
+    const name = (error as { name?: unknown } | null)?.name;
+    if (!abortSignal?.aborted && (name === "TimeoutError" || name === "AbortError")) throw new GeminiError(RUN_CODE_TOO_SLOW, false);
     throw toGeminiError(error);
   }
 }

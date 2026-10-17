@@ -18,8 +18,8 @@ export interface IntelChatModels {
 /** Model steps per turn (each tool round is a step) */
 export const MAX_STEPS = 12;
 /** Total time of one turn, all steps and tools included */
-export const TURN_TIMEOUT_MS = 150_000;
-export const DEEP_TURN_TIMEOUT_MS = 300_000;
+export const TURN_TIMEOUT_MS = 240_000;
+export const DEEP_TURN_TIMEOUT_MS = 360_000;
 
 export interface IntelChatTurn {
   models: IntelChatModels;
