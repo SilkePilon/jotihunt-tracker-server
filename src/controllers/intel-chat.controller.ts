@@ -8,18 +8,49 @@ import { getIntelChatModels, getIntelToolDeps } from "../services/intel-chat/ins
 import { appendMessage, forStorage, parseIncomingMessage } from "../services/intel-chat/messages";
 import { clearChat, loadChat, saveChat } from "../services/intel-chat/store";
 import { findPublicArticle, loadItemView } from "../services/intel-chat/tools/app-data";
-import { discardTurn, endTurn, startTurn, type ActiveTurn } from "../services/intel-chat/turns";
+import { discardTurn, endTurn, findTurn, followTurn, runTurnStream, startTurn, type ActiveTurn } from "../services/intel-chat/turns";
 
 const articleIdOf = (req: Request) => Number(req.params.articleId);
 const notFound = (res: Response) => res.status(404).json({ error: "not_found" });
 const aiUnavailable = (res: Response) => res.status(503).json({ error: "ai_unavailable" });
 
-/** GET /intel-chat/:articleId → { messages } */
+/** A turn whose answer can still be followed: streaming or saving, and not stopped by "Nieuw gesprek" */
+function followableTurn(req: Request, articleId: number) {
+  const turn = findTurn(req.user!._id, articleId);
+  return turn && !turn.discarded && turn.conversation ? turn : undefined;
+}
+
+/**
+ * GET /intel-chat/:articleId → { messages, running }. While a turn runs (also after its client left) the messages end
+ * with its question and `running` is true: GET /:articleId/stream then gives its answer.
+ */
 export async function getChat(req: Request, res: Response) {
   const articleId = articleIdOf(req);
   if (!(await findPublicArticle(articleId))) return notFound(res);
   if (!getIntelChatModels()) return aiUnavailable(res);
-  return res.status(200).json({ messages: await loadChat(req.user!._id, articleId) });
+  const turn = followableTurn(req, articleId);
+  if (turn) return res.status(200).json({ messages: turn.conversation, running: true });
+  return res.status(200).json({ messages: await loadChat(req.user!._id, articleId), running: false });
+}
+
+/** GET /intel-chat/:articleId/stream → the running turn's UI message stream from its start, or 204 when none runs */
+export async function resumeChat(req: Request, res: Response) {
+  const articleId = articleIdOf(req);
+  const turn = followableTurn(req, articleId);
+  if (!turn) return res.status(204).end();
+  const gone = new AbortController();
+  res.on("close", () => gone.abort());
+  // Following a turn is not demo work: the turn itself is
+  releaseDemoWork(res);
+  await pipeUIMessageStreamToResponse({ response: res, stream: followTurn(turn, gone.signal) });
+}
+
+/** POST /intel-chat/:articleId/stop → 204: the Stop button. The turn saves what it produced so far */
+export async function stopChat(req: Request, res: Response) {
+  const articleId = articleIdOf(req);
+  if (!(await findPublicArticle(articleId))) return notFound(res);
+  followableTurn(req, articleId)?.abort.abort();
+  return res.status(204).end();
 }
 
 /** DELETE /intel-chat/:articleId → 204 ("Nieuw gesprek"); a running turn is stopped and never saved */
@@ -33,8 +64,9 @@ export async function deleteChat(req: Request, res: Response) {
 
 /**
  * POST /intel-chat/:articleId { message, web, deep } → UI message stream. The stored history plus the new message go to
- * the model; when the stream ends (also after an abort or error) everything produced is saved, unless the chat was
+ * the model; when the stream ends (also after a stop or error) everything produced is saved, unless the chat was
  * cleared ("Nieuw gesprek") or the database was switched (demo) meanwhile. One turn per chat at a time (409 busy).
+ * The turn runs on when the client leaves (closed chat or page); only POST /stop or "Nieuw gesprek" stop it.
  */
 export async function postChat(req: Request, res: Response) {
   const articleId = articleIdOf(req);
@@ -48,14 +80,14 @@ export async function postChat(req: Request, res: Response) {
   const userId = req.user!._id;
   const turn = startTurn(userId, articleId);
   if (!turn) return res.status(409).json({ error: "busy" });
-  res.on("close", () => {
-    if (!res.writableFinished) turn.abort.abort();
-  });
+  const gone = new AbortController();
+  res.on("close", () => gone.abort());
   let streaming = false;
   try {
     const item = await loadItemView(articleId);
     if (!item) return notFound(res);
     const conversation = forStorage(appendMessage(await loadChat(userId, articleId), message));
+    turn.conversation = conversation;
     const generation = currentGeneration();
 
     const stream = await streamIntelChat({
@@ -78,20 +110,23 @@ export async function postChat(req: Request, res: Response) {
     streaming = true;
     // A turn may stream for minutes: it must not hold up a demo switch (its save is counted and generation-checked)
     releaseDemoWork(res);
-    await pipeUIMessageStreamToResponse({ response: res, stream });
-  } catch (error) {
-    // Only the name: the error may hold the prompt
-    logger.error(`Intel chat turn of item ${articleId} failed${streaming ? "" : " before streaming"}: ${error instanceof Error ? error.name : "unknown error"}`);
-    if (!res.headersSent) res.status(500).json({ error: "chat_failed" });
-    if (streaming) {
-      // The stream may never be read to its end (so no onEnd): stop the turn and free the chat (no-op when onEnd already did)
-      // Discarded first: a late onEnd then saves nothing over the chat's next turn
+    // Read on the server to the end (onEnd then saves and ends the turn); this client follows while it is connected
+    runTurnStream(turn, stream).catch((error) => {
+      logger.error(`Intel chat turn of item ${articleId} failed: ${error instanceof Error ? error.name : "unknown error"}`);
       turn.discarded = true;
       turn.abort.abort();
       endTurn(turn);
-    }
+    });
+    await pipeUIMessageStreamToResponse({ response: res, stream: followTurn(turn, gone.signal) });
+  } catch (error) {
+    // Only the name: the error may hold the prompt
+    const name = error instanceof Error ? error.name : "unknown error";
+    // Once streaming only this client's copy failed: the turn runs on (runTurnStream)
+    if (streaming) logger.warn(`Intel chat answer of item ${articleId} could not be sent: ${name}`);
+    else logger.error(`Intel chat turn of item ${articleId} failed before streaming: ${name}`);
+    if (!res.headersSent) res.status(500).json({ error: "chat_failed" });
   } finally {
-    // Once streaming, the stream's onEnd ends the turn
+    // Once streaming, the stream's onEnd (or runTurnStream's failure) ends the turn
     if (!streaming) endTurn(turn);
   }
 }

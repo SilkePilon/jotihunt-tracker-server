@@ -11,7 +11,7 @@ import { EventEmitter } from "node:events";
 import type { Request, Response } from "express";
 import { activeWorkCount, setDemoSwitchInProgress } from "../demo/demo-mode";
 import { postChat } from "../controllers/intel-chat.controller";
-import { endTurn, startTurn } from "../services/intel-chat/turns";
+import { endTurn, findTurn, startTurn } from "../services/intel-chat/turns";
 import { setIntelChatModels } from "../services/intel-chat/instance";
 import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import { mockModel, mockStreamModel, type StreamStep } from "../test/ai";
@@ -86,7 +86,7 @@ const ask = (token: string, message: unknown, extra: Record<string, unknown> = {
 
 /** Wait until the stream's onEnd saved the chat */
 async function savedMessages(userId: mongoose.Types.ObjectId, count: number): Promise<UIMessage[]> {
-  for (let i = 0; i < 50; i++) {
+  for (let i = 0; i < 200; i++) {
     const chat = await IntelChat.findOne({ userId, articleId: 10 }).lean();
     if ((chat?.messages.length ?? 0) >= count) return chat!.messages as UIMessage[];
     await Bun.sleep(20);
@@ -99,6 +99,8 @@ describe("/intel-chat", () => {
     expect((await request("/intel-chat/10")).status).toBe(401);
     expect((await request("/intel-chat/10", { method: "POST", json: {} })).status).toBe(401);
     expect((await request("/intel-chat/10", { method: "DELETE" })).status).toBe(401);
+    expect((await request("/intel-chat/10/stream")).status).toBe(401);
+    expect((await request("/intel-chat/10/stop", { method: "POST" })).status).toBe(401);
   });
 
   test("404 for a missing or hidden test article", async () => {
@@ -131,7 +133,7 @@ describe("/intel-chat", () => {
   test("POST streams the answer and saves the conversation; GET returns it; DELETE clears it", async () => {
     const user = await createUser();
     const token = tokenFor(user);
-    expect(await (await request("/intel-chat/10", { token })).json()).toEqual({ messages: [] });
+    expect(await (await request("/intel-chat/10", { token })).json()).toEqual({ messages: [], running: false });
 
     const res = await ask(token, question("m1"));
     expect(res.status).toBe(200);
@@ -147,10 +149,10 @@ describe("/intel-chat", () => {
     expect((await (await request("/intel-chat/10", { token })).json()).messages).toEqual(saved);
 
     // Another user sees nothing
-    expect(await (await request("/intel-chat/10", { token: tokenFor(await createUser()) })).json()).toEqual({ messages: [] });
+    expect(await (await request("/intel-chat/10", { token: tokenFor(await createUser()) })).json()).toEqual({ messages: [], running: false });
 
     expect((await request("/intel-chat/10", { method: "DELETE", token })).status).toBe(204);
-    expect(await (await request("/intel-chat/10", { token })).json()).toEqual({ messages: [] });
+    expect(await (await request("/intel-chat/10", { token })).json()).toEqual({ messages: [], running: false });
   });
 
   test("the next question goes to the model with the history; web off hides the web tools", async () => {
@@ -212,20 +214,55 @@ describe("/intel-chat", () => {
     expect(saved[0].parts[1]).toMatchObject({ type: "file", mediaType: "image/png" });
   });
 
-  test("a question the client walks away from is saved with what was produced", async () => {
+  test("a question the client walks away from runs on: GET shows it running, /stream replays it, the whole answer is saved", async () => {
     useSlowModel();
     const user = await createUser();
+    const token = tokenFor(user);
     const abort = new AbortController();
-    const res = await request("/intel-chat/10", { method: "POST", token: tokenFor(user), json: { message: question("m1"), web: false, deep: false }, signal: abort.signal });
+    const res = await request("/intel-chat/10", { method: "POST", token, json: { message: question("m1"), web: false, deep: false }, signal: abort.signal });
     const reader = res.body!.getReader();
     await reader.read();
     await Bun.sleep(300);
     abort.abort();
+    await Bun.sleep(100);
+
+    expect(await (await request("/intel-chat/10", { token })).json()).toEqual({ messages: [question("m1")], running: true });
+    // Another user has no running turn
+    expect((await request("/intel-chat/10/stream", { token: tokenFor(await createUser()) })).status).toBe(204);
+    const resumed = await request("/intel-chat/10/stream", { token });
+    expect(resumed.status).toBe(200);
+    expect(resumed.headers.get("x-vercel-ai-ui-message-stream")).toBe("v1");
+    const body = await resumed.text();
+    // From the very start (replay), to the end
+    expect(body).toContain('"type":"start"');
+    expect(body).toContain("w0 ");
+    expect(body).toContain("w39 ");
+
+    const saved = await savedMessages(user._id, 2);
+    const text = saved[1].parts.find((part) => part.type === "text") as { text: string };
+    expect(text.text).toContain("w39 ");
+    expect(await (await request("/intel-chat/10", { token })).json()).toEqual({ messages: saved, running: false });
+    expect((await request("/intel-chat/10/stream", { token })).status).toBe(204);
+  });
+
+  test("POST /stop stops the running turn, which saves what was produced", async () => {
+    useSlowModel();
+    const user = await createUser();
+    const token = tokenFor(user);
+    const res = await ask(token, question("m1"));
+    const reader = res.body!.getReader();
+    await reader.read();
+    await Bun.sleep(300);
+    expect((await request("/intel-chat/10/stop", { method: "POST", token })).status).toBe(204);
+    while (!(await reader.read()).done);
     const saved = await savedMessages(user._id, 2);
     const text = saved[1].parts.find((part) => part.type === "text") as { text: string; state: string };
     expect(text.text).toStartWith("w0 ");
     expect(text.text.length).toBeLessThan(40 * 4);
     expect(text.state).toBe("done");
+    // Nothing running: a no-op
+    expect((await request("/intel-chat/10/stop", { method: "POST", token })).status).toBe(204);
+    expect((await request("/intel-chat/5/stop", { method: "POST", token })).status).toBe(404);
   });
 
   test("Nieuw gesprek during a turn stops it and the chat stays empty; a second question meanwhile is 409 busy", async () => {
@@ -256,13 +293,19 @@ describe("/intel-chat", () => {
   test("a streaming answer does not hold up a demo database switch", async () => {
     useSlowModel();
     const before = activeWorkCount();
+    const token = tokenFor(await createUser());
     const abort = new AbortController();
-    const res = await request("/intel-chat/10", { method: "POST", token: tokenFor(await createUser()), json: { message: question("m1"), web: false, deep: false }, signal: abort.signal });
+    const res = await request("/intel-chat/10", { method: "POST", token, json: { message: question("m1"), web: false, deep: false }, signal: abort.signal });
     const reader = res.body!.getReader();
     await reader.read();
     expect(activeWorkCount()).toBe(before);
+    const resumed = await request("/intel-chat/10/stream", { token });
+    const follower = resumed.body!.getReader();
+    await follower.read();
+    expect(activeWorkCount()).toBe(before);
     abort.abort();
-    await Bun.sleep(200);
+    await request("/intel-chat/10/stop", { method: "POST", token });
+    while (!(await follower.read()).done);
   });
 
   test("a turn that ends while a demo switch is in progress saves nothing (and frees the chat)", async () => {
@@ -285,7 +328,7 @@ describe("/intel-chat", () => {
     endTurn(next!);
   });
 
-  test("piping the stream failing after it started still frees the chat", async () => {
+  test("piping the stream failing after it started does not stop the turn: it is saved and the chat freed", async () => {
     useSlowModel();
     const user = await createUser();
     const res = Object.assign(new EventEmitter(), {
@@ -305,11 +348,12 @@ describe("/intel-chat", () => {
     });
     const req = { params: { articleId: "10" }, body: { message: question("m1"), web: false, deep: false }, user: { _id: user._id } };
     await postChat(req as unknown as Request, res as unknown as Response);
+    expect(startTurn(user._id, 10)).toBeNull();
+    const saved = await savedMessages(user._id, 2);
+    expect((saved[1].parts.find((part) => part.type === "text") as { text: string }).text).toContain("w39 ");
+    for (let i = 0; i < 50 && findTurn(user._id, 10); i++) await Bun.sleep(20);
     const next = startTurn(user._id, 10);
     expect(next).not.toBeNull();
-    // A late end of the stream must not save over the next turn
-    await Bun.sleep(300);
-    expect(await IntelChat.findOne({ userId: user._id, articleId: 10 })).toBeNull();
     endTurn(next!);
   });
 

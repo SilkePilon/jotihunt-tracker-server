@@ -15,6 +15,8 @@ const router = express.Router();
 
 router.get("/:articleId", [verifyToken, articleParam], intelChatController.getChat);
 router.post("/:articleId", [verifyToken, limitQuestions, articleParam], intelChatController.postChat);
+router.get("/:articleId/stream", [verifyToken, articleParam], intelChatController.resumeChat);
+router.post("/:articleId/stop", [verifyToken, articleParam], intelChatController.stopChat);
 router.delete("/:articleId", [verifyToken, articleParam], intelChatController.deleteChat);
 
 export default router;
