@@ -55,6 +55,18 @@ describe("estimateHuntLocation", () => {
     expect(estimate([track("T", [fix(0), fix(8, { lat: 51.9 })])])?.accuracy).toBe(150);
   });
 
+  test("a tracker parked since well before the hunt is not the hunter", () => {
+    // Stood within ~20 m from 10 min before until the hunt (a parked car): no estimate
+    const parked = track("Je moeder", [fix(-10), fix(-6, { lat: IN_ALPHA.lat + 0.0001 }), fix(-2), fix(0, { lng: IN_ALPHA.lng + 0.0002 })]);
+    expect(estimate([parked])).toBeNull();
+    // Another tracker in the area still gives one
+    expect(estimate([parked, track("Fiets", [fix(-9, { lat: IN_ALPHA.lat - 0.005 }), fix(1)])])).toMatchObject({ source: "Fiets" });
+    // Arrived 3 min before the hunt: walked up to the fox
+    expect(estimate([track("Loopt", [fix(-9, { lat: IN_ALPHA.lat - 0.003 }), fix(-3), fix(0)])])).toMatchObject({ source: "Loopt" });
+    // Not enough history to tell (first fix 5 min before): kept
+    expect(estimate([track("Kort", [fix(-5), fix(0)])])).toMatchObject({ source: "Kort" });
+  });
+
   test("no trackers, no estimate", () => {
     expect(estimate([])).toBeNull();
     expect(estimate([track("Leeg", [])])).toBeNull();
