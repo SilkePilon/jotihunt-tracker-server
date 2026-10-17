@@ -3,8 +3,8 @@ export const AREAS = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "
 
 export type AreaName = (typeof AREAS)[number];
 
-/** Fox team statuses of the Jotihunt API: green (actief), orange (onderweg), red (inactief). */
-export const AREA_STATUSES = ["green", "orange", "red"] as const;
+/** Fox team statuses of the Jotihunt API: green (actief), orange (onderweg), red (inactief), blue (met OV, since 2026; not huntable). */
+export const AREA_STATUSES = ["green", "orange", "red", "blue"] as const;
 
 export type AreaStatus = (typeof AREA_STATUSES)[number];
 

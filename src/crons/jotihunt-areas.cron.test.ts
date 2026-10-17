@@ -32,6 +32,17 @@ describe("parseAreasAnswer", () => {
       { name: "Charlie", status: "red" },
     ]);
     expect(parsed?.ignored).toBe(3);
+    expect(parsed?.unknownStatuses).toEqual([{ area: "Bravo", status: "<script>" }]);
+  });
+
+  test("blue (OV) is a known status; unknown statuses are reported with their area", () => {
+    const parsed = parseAreasAnswer([
+      { name: "Oscar", status: "blue", updated_at: T },
+      { name: "Hotel", status: "purple", updated_at: T },
+    ]);
+    expect(parsed?.areas).toEqual([{ name: "Oscar", status: "blue", updatedAt: new Date(T) }]);
+    expect(parsed?.ignored).toBe(1);
+    expect(parsed?.unknownStatuses).toEqual([{ area: "Hotel", status: "purple" }]);
   });
 
   test("an answer without known areas, or far more entries than areas, is ignored as a whole", () => {

@@ -18,7 +18,7 @@ export interface AreaStatusChange {
   to: string;
 }
 
-const STATUS_NL: Record<string, string> = { green: "groen", orange: "oranje", red: "rood" };
+const STATUS_NL: Record<string, string> = { green: "groen", orange: "oranje", red: "rood", blue: "met OV" };
 const statusNl = (status: string) => STATUS_NL[status] ?? status;
 const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 const clock = (date: Date) => date.toLocaleTimeString("nl-NL", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Amsterdam" });
@@ -58,6 +58,9 @@ export function buildFoxStatusNotification(change: AreaStatusChange): Notificati
   const data = { area: change.area, status: change.to, previousStatus: change.from };
   if (change.to === "green") {
     return { type: "fox-status", title: `GROEN: ${area} — jagen mag!`, body: `Was ${statusNl(change.from)}.`, urgent: true, data };
+  }
+  if (change.to === "blue") {
+    return { type: "fox-status", title: `OV: ${area} reist met OV — niet hunten`, body: `Was ${statusNl(change.from)}.`, urgent: false, data };
   }
   return { type: "fox-status", title: `${area} is nu ${statusNl(change.to)}`, body: `Was ${statusNl(change.from)}.`, urgent: false, data };
 }

@@ -204,7 +204,7 @@ export async function hintBoard(area?: string) {
   };
 }
 
-const STATUS_TEXT: Record<string, string> = { green: "actief", orange: "onderweg", red: "inactief" };
+const STATUS_TEXT: Record<string, string> = { green: "actief", orange: "onderweg", red: "inactief", blue: "met OV" };
 
 /** Our own (hoofd) fox team: the area of the home team (HOME_TEAM_API_ID) */
 async function ownArea(): Promise<AreaName | null> {
@@ -332,7 +332,7 @@ export function appDataTools(ctx: IntelToolContext) {
       execute: ({ area }) => safely("getHintBoard", () => hintBoard(area)),
     }),
     getAreas: tool({
-      description: "Alle vossenteams (deelgebieden) met status (green = actief, orange = onderweg, red = inactief), ons eigen vossenteam en of we ze mogen hunten.",
+      description: "Alle vossenteams (deelgebieden) met status (green = actief, orange = onderweg, red = inactief, blue = reist met OV, niet hunten), ons eigen vossenteam en of we ze mogen hunten.",
       inputSchema: jsonSchema<Record<string, never>>({ type: "object", properties: {} }),
       execute: () => safely("getAreas", () => areasOverview()),
     }),

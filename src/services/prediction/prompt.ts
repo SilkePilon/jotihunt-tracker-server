@@ -13,7 +13,7 @@ Rules:
 - The fox team (one per area) walks, about 4-5 km/h. Walking minutes to each group are measured along real paths (walkMinutes, from the last trail point).
 - The foxes must visit every group of their area once per round, in an order they choose. They usually stay 5-20 minutes at a group.
 - A new round starts only after every group was visited. The last group of a round may only be the first of the next round 30 minutes later.
-- Status: green = walking, huntable. orange = travelling with a movement budget (car/transit possible, faster than walking). red = inactive.
+- Status: green = walking, huntable. orange = travelling with a movement budget (car/transit possible, faster than walking). blue = travelling by public transport (bus/train), not huntable; expect jumps along OV lines. red = inactive.
 - At 23:00 the fox teams swap; everyone is inactive 22:45-23:15, and the new team starts near where the old team ended.
 - After handing out a counter-hunt code, a fox may not be hunted for 5 minutes.
 - The trail: kind "hint" = the solved hourly coordinate (where they were at that time), "hunt" = hunters caught them there, "spot" = hunters saw them there. Newer points are more important.

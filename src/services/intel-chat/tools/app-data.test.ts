@@ -114,6 +114,13 @@ describe("getAreas", () => {
     expect(byArea.oscar).toMatchObject({ status: "unknown", statusText: "onbekend", allowed: false, updatedAt: null });
   });
 
+  test("blue reads met OV and is never huntable", async () => {
+    await Area.create({ name: "Oscar", status: "blue", updatedAt: NOW });
+    const overview = (await runTool(tools.getAreas, {})) as { areas: Record<string, unknown>[] };
+    const byArea = Object.fromEntries(overview.areas.map((area) => [area.area, area]));
+    expect(byArea.oscar).toMatchObject({ status: "blue", statusText: "met OV", huntableNow: false });
+  });
+
   test("not configured: every area allowed", async () => {
     await Area.create({ name: "Alpha", status: "green", updatedAt: NOW });
     const overview = (await runTool(tools.getAreas, {})) as { ownArea: null; huntableConfigured: boolean; areas: { area: string; huntableNow: boolean; allowed: boolean }[] };

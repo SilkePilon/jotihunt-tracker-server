@@ -36,6 +36,15 @@ describe("builders", () => {
   test("other changes are not urgent", () => {
     expect(buildFoxStatusNotification({ area: "Bravo", from: "green", to: "red" })).toMatchObject({ urgent: false, title: "Bravo is nu rood", body: "Was groen." });
   });
+  test("to blue: travelling by OV, not urgent; from blue reads met OV", () => {
+    expect(buildFoxStatusNotification({ area: "oscar", from: "red", to: "blue" })).toMatchObject({
+      urgent: false,
+      title: "OV: Oscar reist met OV — niet hunten",
+      body: "Was rood.",
+      data: { area: "oscar", status: "blue", previousStatus: "red" },
+    });
+    expect(buildFoxStatusNotification({ area: "Oscar", from: "blue", to: "red" })).toMatchObject({ title: "Oscar is nu rood", body: "Was met OV." });
+  });
   test("article types", () => {
     expect(buildArticleNotification({ id: 1, title: "Hint 3", type: "hint" })).toMatchObject({ type: "hint", title: "Nieuwe hint", body: "Hint 3" });
     expect(buildArticleNotification({ id: 2, title: "Foto", type: "assignment", endTime: new Date("2026-10-17T21:30:00Z") })).toMatchObject({
