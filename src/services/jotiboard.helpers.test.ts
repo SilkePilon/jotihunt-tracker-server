@@ -35,21 +35,36 @@ describe("pinImports", () => {
 });
 
 describe("hint solves", () => {
-  test("parse + only completed, per known area, answer 'x y'", () => {
+  test("old entries: one x/y for their foxAreas, answer 'x y'", () => {
     const solves = parseHintSolves({
       "10": { messageId: 10, foxAreas: ["Alpha", "Bravo"], x: 123456, y: 456789, completed: true, enteredBy: "uid" },
-      "11": { messageId: 11, foxAreas: ["Alpha"], x: 1234, y: 456789, completed: false },
       "12": { foxAreas: ["Alpha"], x: 123456, y: 456789, completed: true },
     });
-    expect(solves).toHaveLength(3);
     expect(hintSolveImports(solves)).toEqual([
       { messageId: 10, area: "alpha", answer: "123456 456789" },
       { messageId: 10, area: "bravo", answer: "123456 456789" },
       { messageId: 12, area: "alpha", answer: "123456 456789" },
     ]);
   });
-  test("messageId falls back to the key", () => {
+  test("areaCoords: each area its own x/y, also when not all areas are filled in (completed false)", () => {
+    const solves = parseHintSolves({
+      "20": {
+        messageId: 20,
+        foxAreas: ["Alpha", "Bravo", "Charlie"],
+        x: 123456,
+        y: 456789,
+        areaCoords: { Alpha: { x: 123456, y: 456789 }, Bravo: { x: 1876, y: 4632 }, Charlie: { x: 18765, y: 0 } },
+        completed: false,
+      },
+    });
+    expect(hintSolveImports(solves)).toEqual([
+      { messageId: 20, area: "alpha", answer: "123456 456789" },
+      { messageId: 20, area: "bravo", answer: "187600 463200" },
+    ]);
+  });
+  test("messageId falls back to the key; entries without coordinates are skipped", () => {
     expect(parseHintSolves({ "7": { foxAreas: ["Alpha"], x: 1, y: 2, completed: false } })[0].messageId).toBe(7);
+    expect(parseHintSolves({ "8": { foxAreas: ["Alpha"], x: "", y: "" } })).toEqual([]);
   });
 });
 

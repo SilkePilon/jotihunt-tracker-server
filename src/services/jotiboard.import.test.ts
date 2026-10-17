@@ -13,7 +13,7 @@ afterAll(disconnectTestDb);
 
 const T = Date.parse("2026-10-17T14:20:00Z");
 const pin = (overrides: Partial<JotiboardPin> = {}): JotiboardPin => ({ id: "p1", foxAreas: ["Bravo"], lat: 52.29, lon: 5.61, time: T, type: "other", ...overrides });
-const solve = (overrides: Partial<JotiboardHintSolve> = {}): JotiboardHintSolve => ({ messageId: 10, foxAreas: ["Alpha"], x: 155000, y: 463000, completed: true, ...overrides });
+const solve = (x = 155000, y = 463000): JotiboardHintSolve => ({ messageId: 10, coords: [{ area: "Alpha", x, y }] });
 const point = (lng: number, lat: number) => ({ type: "Point" as const, coordinates: [lng, lat] });
 const cell = (area = "alpha") =>
   HintCell.create({ articleId: 10, area, publishAt: new Date("2026-10-17T14:00:00Z"), slotTime: new Date("2026-10-17T14:00:00Z") });
@@ -155,6 +155,23 @@ describe("hint solves", () => {
     expect((await HintCell.findOne().lean())?.status).toBe(HintCellStatus.Open);
     expect(await JotiboardImport.findOne().lean()).toMatchObject({ result: "skipped", reason: "duplicate" });
   });
+
+  test("an answer corrected on Jotiboard moves the imported answer and marker", async () => {
+    await cell();
+    await importer.importHintSolves([solve()]);
+    await importer.importHintSolves([solve(156000, 464000)]);
+    expect(await HintCell.findOne().lean()).toMatchObject({ status: HintCellStatus.Solved, answer: "156000 464000" });
+    expect(await Marker.countDocuments({ type: MarkerType.Hint })).toBe(1);
+    expect(await JotiboardImport.findOne().lean()).toMatchObject({ result: "imported", answer: "156000 464000" });
+  });
+
+  test("a correction leaves an answer we changed or cleared alone", async () => {
+    await cell();
+    await importer.importHintSolves([solve()]);
+    await solveCell(10, "alpha", "Kerk");
+    await importer.importHintSolves([solve(156000, 464000)]);
+    expect((await HintCell.findOne().lean())?.answer).toBe("Kerk");
+  });
 });
 
 describe("purge", () => {
@@ -164,7 +181,7 @@ describe("purge", () => {
     await cell("bravo");
     await solveCell(10, "bravo", "Molen");
     await importer.importPins([pin()]);
-    await importer.importHintSolves([solve({ foxAreas: ["Alpha", "Bravo"] })]);
+    await importer.importHintSolves([{ messageId: 10, coords: [{ area: "Alpha", x: 155000, y: 463000 }, { area: "Bravo", x: 155000, y: 463000 }] }]);
 
     expect(await importer.purge()).toEqual({ markers: 1, hints: 1 });
     expect((await Marker.find().lean()).map((marker) => String(marker._id))).toEqual([String(ours._id)]);

@@ -44,13 +44,10 @@ export interface JotiboardPin {
   type: "hint" | "hunt" | "other";
 }
 
-/** A hint solution entered on Jotiboard (`hintSolves/<messageId>`); x/y are RD */
+/** A hint solution entered on Jotiboard (`hintSolves/<messageId>`): RD x/y per area, as typed (4 to 6 digits) */
 export interface JotiboardHintSolve {
   messageId: number;
-  foxAreas: string[];
-  x: number;
-  y: number;
-  completed: boolean;
+  coords: { area: string; x: number; y: number }[];
 }
 
 const PIN_TYPES = ["hint", "hunt", "other"] as const;
@@ -71,12 +68,20 @@ export function parsePins(raw: unknown): JotiboardPin[] {
   });
 }
 
-/** The `hintSolves` node → solves (completed or not); entries without coordinates are skipped. */
+/**
+ * The `hintSolves` node → solves. Jotiboard keeps one x/y per area in `areaCoords` (older entries: one top-level x/y for
+ * their `foxAreas`); areas left empty are 0 or missing. Entries without any coordinate are skipped.
+ */
 export function parseHintSolves(raw: unknown): JotiboardHintSolve[] {
   return entries(raw).flatMap(([key, value]) => {
     const messageId = isNumber(value.messageId) ? value.messageId : Number(key);
-    if (!Number.isInteger(messageId) || !isNumber(value.x) || !isNumber(value.y)) return [];
-    return [{ messageId, foxAreas: areaList(value.foxAreas), x: value.x, y: value.y, completed: value.completed === true }];
+    if (!Number.isInteger(messageId)) return [];
+    const areaCoords = entries(value.areaCoords);
+    const coords = areaCoords.length
+      ? areaCoords.map(([area, xy]) => ({ area, x: xy.x, y: xy.y }))
+      : areaList(value.foxAreas).map((area) => ({ area, x: value.x, y: value.y }));
+    const valid = coords.filter((coord): coord is JotiboardHintSolve["coords"][number] => isNumber(coord.x) && isNumber(coord.y));
+    return valid.length ? [{ messageId, coords: valid }] : [];
   });
 }
 
@@ -113,13 +118,24 @@ export interface HintSolveImport {
   answer: string;
 }
 
+/** A Jotiboard RD number as 6 digits: like Jotiboard's map, 4 or 5 typed digits are padded with zeros (1234 → 123400) */
+function rdDigits(value: number): string | null {
+  const digits = String(value);
+  return /^\d{4,6}$/.test(digits) ? digits.padEnd(6, "0") : null;
+}
+
+/** Every area with a full x and y (Jotiboard's `completed` needs all areas filled in, so it is not used) */
 export function hintSolveImports(solves: JotiboardHintSolve[]): HintSolveImport[] {
-  return solves
-    .filter((solve) => solve.completed)
-    .flatMap((solve) => {
-      const areas = [...new Set(solve.foxAreas.map(knownAreaName).filter((area): area is AreaName => area !== null))];
-      return areas.map((area) => ({ messageId: solve.messageId, area, answer: `${solve.x} ${solve.y}` }));
+  return solves.flatMap((solve) => {
+    const seen = new Set<AreaName>();
+    return solve.coords.flatMap(({ area: name, x, y }) => {
+      const area = knownAreaName(name);
+      const [xs, ys] = [rdDigits(x), rdDigits(y)];
+      if (!area || seen.has(area) || !xs || !ys) return [];
+      seen.add(area);
+      return [{ messageId: solve.messageId, area, answer: `${xs} ${ys}` }];
     });
+  });
 }
 
 export const DUPLICATE_WINDOW_MS = 15 * 60_000;

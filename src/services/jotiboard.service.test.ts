@@ -80,7 +80,7 @@ describe("poll", () => {
 
   test("reads both nodes and hands them to the importer, solves first", async () => {
     client.data.manualLocations = { p1: { foxAreas: ["Bravo"], lat: 52, lon: 5, time: 1, type: "other" } };
-    client.data.hintSolves = { "10": { messageId: 10, foxAreas: ["Alpha"], x: 155000, y: 463000, completed: true } };
+    client.data.hintSolves = { "10": { messageId: 10, foxAreas: ["Alpha"], areaCoords: { Alpha: { x: 155000, y: 463000 } }, completed: false } };
     await service.pollOnce();
     expect(importer.pinSnapshots).toEqual([[{ id: "p1", foxAreas: ["Bravo"], lat: 52, lon: 5, time: 1, type: "other" }]]);
     expect(importer.solveSnapshots[0]).toHaveLength(1);

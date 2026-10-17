@@ -74,10 +74,20 @@ async function importHintSolves(solves: JotiboardHintSolve[]): Promise<void> {
   for (const solve of hintSolveImports(solves)) {
     const externalId = String(solve.messageId);
     const existing = byKey.get(importKey(externalId, solve.area));
-    if (existing && existing.reason !== "no-cell") continue;
     const filter = { kind: "hintSolve" as const, externalId, area: solve.area };
     const save = (fields: Record<string, unknown>) =>
       JotiboardImport.updateOne(filter, fields.reason ? { $set: { ...filter, ...fields } } : { $set: { ...filter, ...fields }, $unset: { reason: 1 } }, { upsert: true });
+
+    if (existing?.result === "imported") {
+      // Corrected on Jotiboard: follow it while the cell still holds the answer we imported (not one of ours, not cleared)
+      if (existing.answer === solve.answer || !existing.cellId) continue;
+      const imported = await HintCell.exists({ _id: existing.cellId, status: HintCellStatus.Solved, answer: existing.answer });
+      if (!imported) continue;
+      await solveCell(solve.messageId, solve.area, solve.answer);
+      await save({ result: "imported", cellId: existing.cellId, answer: solve.answer });
+      continue;
+    }
+    if (existing && existing.reason !== "no-cell") continue;
 
     const cell = await HintCell.findOne({ articleId: solve.messageId, area: solve.area }, { status: 1 }).lean();
     if (!cell) {
