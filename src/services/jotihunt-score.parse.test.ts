@@ -19,8 +19,15 @@ describe("scoreValue", () => {
 });
 
 describe("parseScorePage", () => {
-  test("the real dashboard before any points: empty values are 0, Hints ? is null", () => {
+  test("the real dashboard (17 Oct, morning): 2 points for assignments, Hints ?", () => {
     expect(parseScorePage(fixture("dashboard-points.html"))).toEqual({
+      total: 2,
+      parts: { hunts: 0, counterHunts: 0, assignments: 2, photoAssignments: 0, hints: null, penalty: 0 },
+    });
+  });
+
+  test("the real dashboard before any points: empty values are 0, Hints ? is null", () => {
+    expect(parseScorePage(fixture("dashboard-points-empty.html"))).toEqual({
       total: 0,
       parts: { hunts: 0, counterHunts: 0, assignments: 0, photoAssignments: 0, hints: null, penalty: 0 },
     });
