@@ -7,6 +7,7 @@ import { isDuplicateKeyError } from "../utils/mongo";
 import { sendCachedJson } from "../services/response-cache";
 import { takeOverImportedHintMarker } from "../services/hint-board.service";
 import { forgetDeletedMarker } from "../services/jotiboard.import";
+import { dismissHuntLocation, HUNT_MARKER_SOURCE } from "../services/hunt-sync.service";
 
 /** Polled by every hunter: one shared body for a moment (cleared by every marker write) */
 export async function getMarkers(_req: Request, res: Response) {
@@ -54,5 +55,7 @@ export async function deleteMarker(req: Request, res: Response) {
   await HintCell.updateMany({ markerId: marker._id }, { $unset: { markerId: 1 } });
   // A deleted Jotiboard marker was wrong: the next sync must not import its pin again
   if (marker.source === "jotiboard") await forgetDeletedMarker(marker._id);
+  // A deleted hunt marker had a wrong location: the hunt sync must not put it back
+  if (marker.source === HUNT_MARKER_SOURCE && marker.externalId) await dismissHuntLocation(marker.externalId);
   return res.status(200).json(marker);
 }

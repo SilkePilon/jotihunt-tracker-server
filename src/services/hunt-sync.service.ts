@@ -1,4 +1,5 @@
 import { Hunt } from "../models/hunt.model";
+import { HuntSyncEvent } from "../models/hunt-sync-event.model";
 import { Marker, MarkerType } from "../models/marker.model";
 import { AppNotification, type AppNotificationDocument } from "../models/notification.model";
 import { currentGeneration, runTracked } from "../demo/demo-mode";
@@ -50,6 +51,15 @@ export async function syncHuntMarkers(): Promise<{ created: number; updated: num
   const gone = markers.filter((marker) => !wanted.has(marker.externalId ?? "")).map((marker) => marker._id);
   if (gone.length > 0) await Marker.deleteMany({ _id: { $in: gone } });
   return { created, updated, deleted: gone.length };
+}
+
+/**
+ * A hunter deleted a synced hunt's marker (its location was wrong): drop the location from the hunt and its log entries
+ * and keep it off, else syncHuntMarkers puts the marker straight back and the estimate fills the location in again.
+ */
+export async function dismissHuntLocation(siteKey: string): Promise<void> {
+  await Hunt.updateOne({ siteKey }, { $set: { location: null, locationDismissed: true } });
+  await HuntSyncEvent.updateMany({ siteKey }, { $set: { location: null } });
 }
 
 /** A synced hunt within this of an app-reported hunt marker of the same fox is that same hunt */

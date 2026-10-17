@@ -4,6 +4,7 @@ import { HuntSyncEvent } from "../models/hunt-sync-event.model";
 import { Marker } from "../models/marker.model";
 import { storeAndSync, storeHunts } from "../crons/jotihunt-scraper.cron";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
+import { dismissHuntLocation, syncHuntMarkers } from "./hunt-sync.service";
 import { estimateHuntLocations, forgetEstimateAttempts, type EstimateSources } from "./hunt-location-estimate.service";
 import type { TrackerTrack } from "./hunt-location-estimate";
 import type { AreaGroup } from "./intel-chat/geo";
@@ -95,6 +96,22 @@ describe("estimateHuntLocations", () => {
     expect(await estimateHuntLocations(at(2), sources)).toBe(0);
     expect(calls).toHaveLength(0);
     expect((await Hunt.findOne().lean())!.location).toMatchObject({ ...reported, estimated: false, source: null });
+  });
+
+  test("a deleted hunt marker stays deleted: no location, no new estimate, no new marker", async () => {
+    await storeHunts([scraped("time:alpha:1")], at(1));
+    const { sources } = fakeSources([fiets()]);
+    await estimateHuntLocations(at(2), sources);
+    await syncHuntMarkers();
+    const marker = await Marker.findOneAndDelete({ source: "jotihunt" }).lean();
+    await dismissHuntLocation(marker!.externalId!);
+    expect((await Hunt.findOne().lean())!.location).toBeNull();
+    expect((await HuntSyncEvent.find().lean()).map((event) => event.location)).toEqual([null]);
+    forgetEstimateAttempts();
+    expect(await estimateHuntLocations(at(4), sources)).toBe(0);
+    await storeHunts([scraped("time:alpha:1")], at(5));
+    expect(await syncHuntMarkers()).toEqual({ created: 0, updated: 0, deleted: 0 });
+    expect(await Marker.countDocuments()).toBe(0);
   });
 
   test("several due hunts: the trackers are asked once, for the window around all of them", async () => {

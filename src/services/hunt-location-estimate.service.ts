@@ -102,7 +102,7 @@ const lastTried = new Map<string, Date>();
  */
 export async function estimateHuntLocations(now = new Date(), sources: EstimateSources = defaultSources): Promise<number> {
   const since = new Date(now.getTime() - LOOKBACK_MS);
-  const hunts = await Hunt.find({ location: null, $or: [{ huntTime: { $gte: since } }, { huntTime: null, firstSeenAt: { $gte: since } }] })
+  const hunts = await Hunt.find({ location: null, locationDismissed: { $ne: true }, $or: [{ huntTime: { $gte: since } }, { huntTime: null, firstSeenAt: { $gte: since } }] })
     .select("_id area huntTime firstSeenAt")
     .lean();
   for (const [id, at] of lastTried) if (now.getTime() - at.getTime() > LOOKBACK_MS) lastTried.delete(id);

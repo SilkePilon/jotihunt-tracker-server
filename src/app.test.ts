@@ -269,6 +269,16 @@ describe("markers", () => {
     expect(await Marker.countDocuments()).toBe(0);
   });
 
+  test("DELETE /markers/:id: a deleted hunt marker drops the hunt's location", async () => {
+    const { Marker, MarkerType } = await import("./models/marker.model");
+    const { Hunt } = await import("./models/hunt.model");
+    await Hunt.create({ siteKey: "code:X", area: "charlie", status: "Correct", points: 6, updatedAt: new Date(), location: { lat: 52.28, lng: 5.59, accuracy: 150, estimated: true, source: "Auto" } });
+    const marker = await Marker.create({ area: "charlie", time: new Date(), type: MarkerType.Hunt, location: { type: "Point", coordinates: [5.59, 52.28] }, source: "jotihunt", externalId: "code:X" });
+    const res = await request(`/markers/${marker._id}`, { method: "DELETE", token: tokenFor(await createUser()) });
+    expect(res.status).toBe(200);
+    expect(await Hunt.findOne({ siteKey: "code:X" }).lean()).toMatchObject({ location: null, locationDismissed: true });
+  });
+
   test("POST /markers: a hint marker of ours on that hour still answers 409", async () => {
     const { Marker, MarkerType } = await import("./models/marker.model");
     await Marker.create({ area: "alpha", time: new Date("2026-10-17T14:00:00.000Z"), type: MarkerType.Hint, location: { type: "Point", coordinates: [5.6, 52.3] } });

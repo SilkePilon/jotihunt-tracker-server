@@ -69,6 +69,12 @@ const HuntSchema = new mongoose.Schema({
     required: false,
     default: null,
   },
+  /** A hunter deleted the hunt's marker (a wrong location): no location, and the estimate leaves it alone */
+  locationDismissed: {
+    type: Boolean,
+    required: false,
+    default: false,
+  },
   /** When our sync first saw it */
   firstSeenAt: {
     type: Date,
