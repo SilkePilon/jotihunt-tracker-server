@@ -10,6 +10,7 @@ import retrieveJotihuntArticles from "./jotihunt-articles.cron";
 import retrieveJotihuntLogos from "./jotihunt-logos.cron";
 import scrapeJotihuntWebsite from "./jotihunt-scraper.cron";
 import syncJotihuntScore from "./jotihunt-score.cron";
+import syncJotihuntAssignments from "./jotihunt-assignments.cron";
 import recomputePredictions from "./prediction.cron";
 import notify from "./notifier.cron";
 
@@ -29,6 +30,8 @@ export function scheduleCrons() {
     cron.schedule("0 * * * * *", reportCronErrors("jotihunt-scraper", async () => (jotihuntLogin() ? scrapeJotihuntWebsite() : undefined)), { name: "jotihunt-scraper", noOverlap: true });
     // Our provisional score from the dashboard, on the same session
     cron.schedule("20 */2 * * * *", reportCronErrors("jotihunt-score", async () => (jotihuntLogin() ? syncJotihuntScore() : undefined)), { name: "jotihunt-score", noOverlap: true });
+    // What we handed in per assignment (photo, judgement): up to 5 pages per run
+    cron.schedule("40 */5 * * * *", reportCronErrors("jotihunt-assignments", async () => (jotihuntLogin() ? syncJotihuntAssignments() : undefined)), { name: "jotihunt-assignments", noOverlap: true });
     if (!jotihuntLogin()) logger.warn("No Jotihunt website login (Beheer → Algemeen or JOTIHUNT_WEB_USERNAME/PASSWORD): the website scraper waits");
   } else {
     logger.warn("JOTIHUNT_WEB_URL is not set, skipping website scraper cron job");
