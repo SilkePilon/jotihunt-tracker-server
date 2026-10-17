@@ -8,6 +8,7 @@ import { diffHunts, isInitialImport, lastOutcomeOf, type Outcome } from "../serv
 import { HUNT_MARKER_SOURCE } from "../services/hunt-sync.service";
 import { Marker } from "../models/marker.model";
 import { notifyHuntEvents, syncHuntMarkers } from "../services/hunt-sync.service";
+import { estimateHuntLocations } from "../services/hunt-location-estimate.service";
 import { deadline } from "../services/http-limits";
 import { classifyStatus, rekeyTimeHunts, type ScrapedHunt } from "../services/jotihunt-hunts.parse";
 
@@ -176,6 +177,24 @@ async function rekeyMovedHunts(scraped: ScrapedHunt[]): Promise<void> {
   }
 }
 
+/**
+ * Everything after a scrape: store the hunts, estimate locations for recent hunts without one (from our trackers),
+ * then make the hunt markers match and tell everyone what changed. `estimate` is replaceable for tests.
+ */
+export async function storeAndSync(scraped: ScrapedHunt[], options: { estimate?: (now: Date) => Promise<number> } = {}): Promise<StoreResult> {
+  const estimate = options.estimate ?? ((now: Date) => estimateHuntLocations(now));
+  await keepStoredDates(scraped).catch((error) => logger.warn("(CRON) Could not look up stored hunt dates:", error));
+  const result = await storeHunts(scraped);
+  if (!result.deleted) logger.warn(`(CRON) Kept every stored hunt: the page showed ${scraped.length} hunt(s), far fewer than stored, or no readable times`);
+  markSyncSuccess(new Date());
+  // jotihunt.nl shows no location: estimate it before the markers are made
+  await estimate(new Date()).catch((error) => logger.error("(CRON) Error estimating hunt locations:", error));
+  // Hunt markers feed the map, cooldown and prediction; then tell everyone what changed
+  await syncHuntMarkers().catch((error) => logger.error("(CRON) Error syncing hunt markers:", error));
+  await notifyHuntEvents(result).catch((error) => logger.error("(CRON) Error sending hunt notifications:", error));
+  return result;
+}
+
 export default async function scrapeJotihuntWebsite() {
   if (skipInDemoMode("jotihunt-scraper", (message) => logger.debug(message))) {
     // No need to keep the website session while demo mode is on
@@ -212,13 +231,7 @@ export default async function scrapeJotihuntWebsite() {
   try {
     await runTracked(
       async () => {
-        await keepStoredDates(scraped).catch((error) => logger.warn("(CRON) Could not look up stored hunt dates:", error));
-        const result = await storeHunts(scraped);
-        if (!result.deleted) logger.warn(`(CRON) Kept every stored hunt: the page showed ${scraped.length} hunt(s), far fewer than stored, or no readable times`);
-        markSyncSuccess(new Date());
-        // Hunt markers feed the map, cooldown and prediction; then tell everyone what changed
-        await syncHuntMarkers().catch((error) => logger.error("(CRON) Error syncing hunt markers:", error));
-        await notifyHuntEvents(result).catch((error) => logger.error("(CRON) Error sending hunt notifications:", error));
+        await storeAndSync(scraped);
       },
       { generation },
     );
