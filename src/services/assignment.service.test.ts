@@ -87,7 +87,7 @@ describe("notes, list, members", () => {
   test("listAssignments includes what jotihunt.nl showed; status set by jotihunt.nl has statusBy null", async () => {
     await makeArticle();
     const checkedAt = new Date("2026-10-17T13:00:00Z");
-    const site = { submitted: true, imageUrl: "https://cdn.jotihunt.net/a.jpg", rating: null, judgement: "Nog niet beoordeeld", judged: false, points: null, checkedAt };
+    const site = { submitted: true, imageUrl: "https://cdn.jotihunt.net/a.jpg", answerText: null, rating: null, judgement: "Nog niet beoordeeld", judged: false, points: null, checkedAt };
     await Assignment.create({ articleId: 7, status: AssignmentStatus.Submitted, statusBy: null, statusAt: checkedAt, site });
     await Assignment.create({ articleId: 8 });
     const [checked, unchecked] = JSON.parse(JSON.stringify(await listAssignments())) as Record<string, unknown>[];

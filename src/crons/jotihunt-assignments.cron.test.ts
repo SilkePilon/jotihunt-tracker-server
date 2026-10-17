@@ -16,8 +16,8 @@ const now = new Date("2026-10-17T12:00:00Z");
 const minutesAgo = (minutes: number) => new Date(now.getTime() - minutes * 60_000);
 
 const article = (id: number, publishAt: Date, type = "assignment") => Article.create({ id, title: `Opdracht ${id}`, type, publishAt, content: "<p>Doe iets</p>" });
-const handedIn = { submitted: true, imageUrl: "https://cdn.jotihunt.net/a.jpg", rating: 4, judgement: "Nog niet beoordeeld", judged: false, points: null };
-const notHandedIn = { submitted: false, imageUrl: null, rating: null, judgement: null, judged: false, points: null };
+const handedIn = { submitted: true, imageUrl: "https://cdn.jotihunt.net/a.jpg", answerText: null, rating: 4, judgement: "Nog niet beoordeeld", judged: false, points: null };
+const notHandedIn = { submitted: false, imageUrl: null, answerText: null, rating: null, judgement: null, judged: false, points: null };
 
 beforeAll(connectTestDb);
 beforeEach(async () => {

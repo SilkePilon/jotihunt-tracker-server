@@ -14,6 +14,8 @@ const SiteSubmissionSchema = new mongoose.Schema(
     submitted: { type: Boolean, required: true, default: false },
     /** The handed-in photo */
     imageUrl: { type: String, default: null },
+    /** A handed-in text answer */
+    answerText: { type: String, default: null },
     /** Our own star rating of the assignment, 1–5 */
     rating: { type: Number, default: null },
     /** The judgement as the site shows it, e.g. "Nog niet beoordeeld" */

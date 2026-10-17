@@ -131,7 +131,7 @@ export interface AssignmentInfo {
   endTime: string | null;
   maxPoints: number | null;
   /** What our page on jotihunt.nl showed when last checked (handed-in photo, our rating, judgement); null until checked */
-  site: { submitted: boolean; imageUrl: string | null; rating: number | null; judgement: string | null; judged: boolean; points: number | null; checkedAt: string } | null;
+  site: { submitted: boolean; imageUrl: string | null; answerText: string | null; rating: number | null; judgement: string | null; judged: boolean; points: number | null; checkedAt: string } | null;
 }
 
 /** Our bookkeeping of an assignment: status, owner and notes with display names (open and empty before the first write) */
@@ -153,6 +153,7 @@ export async function assignmentInfo(articleId: number): Promise<AssignmentInfo>
       ? {
           submitted: assignment.site.submitted,
           imageUrl: assignment.site.imageUrl ?? null,
+          answerText: assignment.site.answerText ?? null,
           rating: assignment.site.rating ?? null,
           judgement: assignment.site.judgement ?? null,
           judged: assignment.site.judged,

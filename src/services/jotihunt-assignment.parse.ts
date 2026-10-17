@@ -5,8 +5,9 @@
  * - not handed in: an upload form (`action=".../article/assignment/{id}"`);
  * - handed in: `<h2>Je hebt deze opdracht reeds ingestuurd</h2>`, `<p class="font-bold">Ingestuurd:</p>`, the photo as
  *   `<img src="https://cdn.jotihunt.net/...">`, optionally `Jullie waardering: ★★★★ (4 / 5)` (our own star rating of the
- *   assignment), and a footer `<p class="font-bold">Nog niet beoordeeld</p>`. The wording once judged is not known
- *   yet: the footer text is kept as-is and a number of points is read from it when there is one.
+ *   assignment), and a footer `<p class="font-bold">Nog niet beoordeeld</p>` (or only a "Verwijderen" link);
+ * - a text answer instead of a photo: a plain `<p>Murkalotl</p>` after "Ingestuurd:";
+ * - judged: the footer reads "Beoordeeld (8 punten) <comment>"; the points are read from it.
  */
 import { htmlToText } from "./html-text";
 
@@ -16,6 +17,8 @@ export interface SiteSubmission {
   submitted: boolean;
   /** The handed-in photo (http(s) only) */
   imageUrl: string | null;
+  /** A handed-in text answer (e.g. "Murkalotl"), shown as a plain paragraph under "Ingestuurd:" */
+  answerText: string | null;
   /** Our own star rating of the assignment, 1–5 */
   rating: number | null;
   /** The footer text as the site shows it, e.g. "Nog niet beoordeeld" */
@@ -64,6 +67,19 @@ function submittedImage(card: string): string | null {
   return null;
 }
 
+/** Plain paragraphs after the "Ingestuurd:" label that are no rating line: the handed-in text answer, or null */
+function answerTextOf(card: string): string | null {
+  const label = SUBMITTED_LABEL.exec(card);
+  if (!label) return null;
+  // Up to the footer (the bordered row with the judgement or the delete link)
+  const body = card.slice(label.index + label[0].length).split(/<div\b[^>]*\bborder-t\b/i)[0];
+  const lines = [...body.matchAll(/<p\b([^>]*)>([\s\S]*?)<\/p>/gi)]
+    .filter((match) => !/\bfont-bold\b/i.test(match[1]))
+    .map((match) => textOf(match[2]))
+    .filter((text) => text !== "" && !/^jullie\s+waardering\b/i.test(text));
+  return lines.length ? lines.join("\n") : null;
+}
+
 /** The judgement: the last bold paragraph of the card that is not the "Ingestuurd:" label */
 function judgementOf(card: string): string | null {
   const bold = [...card.matchAll(/<p\b[^>]*\bclass=["'][^"']*\bfont-bold\b[^"']*["'][^>]*>([\s\S]*?)<\/p>/gi)].map((match) => textOf(match[1])).filter((text) => text !== "" && !/^ingestuurd:?$/i.test(text));
@@ -79,15 +95,16 @@ export function pointsOf(judgement: string | null): number | null {
 
 export function parseAssignmentPage(html: string): SiteSubmission {
   const card = submitCard(html);
-  if (card === null) return { found: false, submitted: SUBMITTED_HEADING.test(html), imageUrl: null, rating: null, judgement: null, judged: false, points: null };
+  if (card === null) return { found: false, submitted: SUBMITTED_HEADING.test(html), imageUrl: null, answerText: null, rating: null, judgement: null, judged: false, points: null };
   const submitted = SUBMITTED_HEADING.test(card) || SUBMITTED_LABEL.test(card);
-  if (!submitted) return { found: true, submitted: false, imageUrl: null, rating: null, judgement: null, judged: false, points: null };
+  if (!submitted) return { found: true, submitted: false, imageUrl: null, answerText: null, rating: null, judgement: null, judged: false, points: null };
   const rating = /\((\d)\s*\/\s*5\)/.exec(textOf(card))?.[1];
   const judgement = judgementOf(card);
   return {
     found: true,
     submitted: true,
     imageUrl: submittedImage(card),
+    answerText: answerTextOf(card),
     rating: rating ? Number(rating) : null,
     judgement,
     judged: judgement !== null && !NOT_JUDGED.test(judgement),

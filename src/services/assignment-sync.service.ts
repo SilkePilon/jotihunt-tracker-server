@@ -46,7 +46,7 @@ export async function markSiteAttempt(articleId: number, now = new Date()): Prom
  * Returns whether the status changed.
  */
 export async function storeSubmission(articleId: number, page: Omit<SiteSubmission, "found">, now = new Date()): Promise<boolean> {
-  const site = { submitted: page.submitted, imageUrl: page.imageUrl, rating: page.rating, judgement: page.judgement, judged: page.judged, points: page.points, checkedAt: now };
+  const site = { submitted: page.submitted, imageUrl: page.imageUrl, answerText: page.answerText, rating: page.rating, judgement: page.judgement, judged: page.judged, points: page.points, checkedAt: now };
   try {
     await Assignment.updateOne({ articleId }, { $set: { site }, $setOnInsert: { articleId } }, { upsert: true });
   } catch (error) {

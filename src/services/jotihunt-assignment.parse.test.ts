@@ -7,7 +7,7 @@ const fixture = (name: string) => readFileSync(join(import.meta.dir, "__fixtures
 
 describe("parseAssignmentPage", () => {
   test("not handed in (the real upload form)", () => {
-    expect(parseAssignmentPage(fixture("assignment-open.html"))).toEqual({ found: true, submitted: false, imageUrl: null, rating: null, judgement: null, judged: false, points: null });
+    expect(parseAssignmentPage(fixture("assignment-open.html"))).toEqual({ found: true, submitted: false, imageUrl: null, answerText: null, rating: null, judgement: null, judged: false, points: null });
   });
 
   test("handed in, not judged, no rating (real)", () => {
@@ -15,6 +15,7 @@ describe("parseAssignmentPage", () => {
       found: true,
       submitted: true,
       imageUrl: "https://cdn.jotihunt.net/jotihunt2026/media/1000000094/conversions/Clan-Portrait-Groep-large.jpg",
+      answerText: null,
       rating: null,
       judgement: "Nog niet beoordeeld",
       judged: false,
@@ -27,6 +28,7 @@ describe("parseAssignmentPage", () => {
       found: true,
       submitted: true,
       imageUrl: "https://cdn.jotihunt.net/jotihunt2026/media/1000000054/conversions/Wandje-van-tichelaar-Groep-large.jpg",
+      answerText: null,
       rating: 4,
       judgement: "Nog niet beoordeeld",
       judged: false,
@@ -36,6 +38,32 @@ describe("parseAssignmentPage", () => {
 
   test("judged (synthetic footer): judgement as shown, points read from it", () => {
     expect(parseAssignmentPage(fixture("assignment-judged-synthetic.html"))).toMatchObject({ submitted: true, rating: 4, judgement: "Beoordeeld: 25 punten", judged: true, points: 25 });
+  });
+
+  test("judged (real): judgement with the comment, points read from it", () => {
+    expect(parseAssignmentPage(fixture("assignment-judged-real.html"))).toEqual({
+      found: true,
+      submitted: true,
+      imageUrl: "https://cdn.jotihunt.net/jotihunt2026/media/1000000345/conversions/A-shieldmaiden-oh-what-Alexander-large.jpg",
+      answerText: null,
+      rating: null,
+      judgement: "Beoordeeld (8 punten) Zo mooi, gaat er gewoon verslagen bij liggen",
+      judged: true,
+      points: 8,
+    });
+  });
+
+  test("a text answer (real), not judged yet: only a delete link in the footer", () => {
+    expect(parseAssignmentPage(fixture("assignment-text-answer-real.html"))).toEqual({
+      found: true,
+      submitted: true,
+      imageUrl: null,
+      answerText: "Murkalotl",
+      rating: null,
+      judgement: null,
+      judged: false,
+      points: null,
+    });
   });
 
   test("only http(s) images count as the photo", () => {
