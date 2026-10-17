@@ -5,7 +5,7 @@ import mongoose from "mongoose";
 import { Article } from "../models/article.model";
 import { Assignment, AssignmentStatus } from "../models/assignment.model";
 import { User } from "../models/user.model";
-import { assignmentsToCheck, storeSubmission } from "../services/assignment-sync.service";
+import { assignmentsToCheck, markSiteAttempt, storeSubmission } from "../services/assignment-sync.service";
 import { initAppConfig, resetAppConfig } from "../settings/app-config";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import syncJotihuntAssignments from "./jotihunt-assignments.cron";
@@ -42,11 +42,12 @@ describe("assignmentsToCheck", () => {
     expect(await assignmentsToCheck(now, 1)).toEqual([3]);
   });
 
-  test("never checked first, then the longest ago", async () => {
-    for (const id of [1, 2, 3]) await article(id, minutesAgo(100 - id));
+  test("never tried first, then the longest ago; a failed try counts", async () => {
+    for (const id of [1, 2, 3, 4]) await article(id, minutesAgo(100 - id));
     await storeSubmission(3, notHandedIn, minutesAgo(5));
     await storeSubmission(2, notHandedIn, minutesAgo(10));
-    expect(await assignmentsToCheck(now)).toEqual([1, 2, 3]);
+    await markSiteAttempt(4, minutesAgo(1));
+    expect(await assignmentsToCheck(now)).toEqual([1, 2, 3, 4]);
   });
 });
 
@@ -114,15 +115,20 @@ describe("assignments cron", () => {
     });
     expect(paths).toEqual(["/bericht/7", "/bericht/6", "/bericht/5", "/bericht/4", "/bericht/3"]);
     const stored = new Map((await Assignment.find().lean()).map((entry) => [entry.articleId, entry]));
-    expect([...stored.keys()].sort()).toEqual([4, 6, 7]);
+    // Every tried page has a document with its try time; only readable ones have site data
+    expect([...stored.keys()].sort()).toEqual([3, 4, 5, 6, 7]);
+    expect([3, 5].map((id) => [stored.get(id)!.site, stored.get(id)!.siteAttemptAt])).toEqual([
+      [null, now],
+      [null, now],
+    ]);
     expect(stored.get(7)).toMatchObject({ status: "submitted", statusBy: null, site: { submitted: true, rating: 4, judged: false } });
     expect(stored.get(6)).toMatchObject({ status: "open", site: { submitted: false } });
     expect(stored.get(4)).toMatchObject({ status: "submitted", site: { judged: true, points: 25 } });
 
-    // Judged 4 is never opened again
+    // Untried 2 and 1 first, then the longest ago; judged 4 is never opened again
     paths.length = 0;
-    await syncJotihuntAssignments({ fetch: async (path) => (paths.push(path), { status: 200, html: pages[path] ?? "" }), now: () => now });
-    expect(paths).not.toContain("/bericht/4");
+    await syncJotihuntAssignments({ fetch: async (path) => (paths.push(path), { status: 200, html: pages[path] ?? "" }), now: () => new Date(now.getTime() + 60_000) });
+    expect(paths).toEqual(["/bericht/2", "/bericht/1", "/bericht/7", "/bericht/6", "/bericht/5"]);
   });
 
   test("a failed login ends the run", async () => {

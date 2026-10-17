@@ -1,6 +1,6 @@
 import { logger } from "../logger";
 import { currentGeneration, runTracked, skipInDemoMode } from "../demo/demo-mode";
-import { assignmentsToCheck, storeSubmission } from "../services/assignment-sync.service";
+import { assignmentsToCheck, markSiteAttempt, storeSubmission } from "../services/assignment-sync.service";
 import { deadline } from "../services/http-limits";
 import { parseAssignmentPage } from "../services/jotihunt-assignment.parse";
 import { fetchPage, jotihuntLogin } from "../services/jotihunt-scraper.service";
@@ -30,6 +30,8 @@ export default async function syncJotihuntAssignments(options: Options = {}): Pr
   for (const id of ids) {
     const path = `/bericht/${id}`;
     try {
+      // Before the fetch: a page that fails or has no Insturen card goes to the back of the queue
+      await runTracked(() => markSiteAttempt(id, now()), { generation });
       const { status, html } = await deadline(get(path), PAGE_DEADLINE_MS, `GET ${path} took longer than ${PAGE_DEADLINE_MS / 1000} s`);
       if (status < 200 || status >= 300) throw new Error(`GET ${path} → ${status}`);
       const { found, ...page } = parseAssignmentPage(html);

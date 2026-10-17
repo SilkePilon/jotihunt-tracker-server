@@ -46,6 +46,8 @@ const AssignmentSchema = new mongoose.Schema(
     notes: { type: [NoteSchema], default: [] },
     /** The jotihunt.nl page as last checked (assignment cron); null until then */
     site: { type: SiteSubmissionSchema, default: null },
+    /** When the assignment cron last tried the page (also when it failed): the least recently tried go first */
+    siteAttemptAt: { type: Date, default: null },
   },
   { timestamps: true },
 );

@@ -8,26 +8,36 @@ export const PAGES_PER_RUN = 5;
 
 /**
  * The published assignments whose jotihunt.nl page should be (re)checked, at most `limit`: judged ones never again;
- * never checked first, then the longest ago, newest first among equals (so with many open assignments every page is
- * still checked in turn).
+ * never tried first, then the longest ago (a failed try counts, so failing pages cannot starve the rest), newest first
+ * among equals.
  */
 export async function assignmentsToCheck(now = new Date(), limit = PAGES_PER_RUN): Promise<number[]> {
   const judged = await Assignment.distinct("articleId", { "site.judged": true });
   const articles = await Article.find({ type: "assignment", publishAt: { $lte: now }, id: { ...publicArticlesFilter().id, $nin: judged } }, { _id: 0, id: 1, publishAt: 1 })
     .sort({ publishAt: -1, id: -1 })
     .lean();
-  const checked = new Map(
-    (await Assignment.find({ articleId: { $in: articles.map((article) => article.id) }, site: { $ne: null } }, { _id: 0, articleId: 1, "site.checkedAt": 1 }).lean()).map((assignment) => [
+  const tried = new Map(
+    (await Assignment.find({ articleId: { $in: articles.map((article) => article.id) } }, { _id: 0, articleId: 1, siteAttemptAt: 1, "site.checkedAt": 1 }).lean()).map((assignment) => [
       assignment.articleId,
-      assignment.site?.checkedAt?.getTime() ?? 0,
+      Math.max(assignment.siteAttemptAt?.getTime() ?? -1, assignment.site?.checkedAt?.getTime() ?? -1),
     ]),
   );
-  // A stable sort keeps newest first among equal check times
+  // A stable sort keeps newest first among equal times
   return articles
-    .map((article) => ({ id: article.id, checkedAt: checked.get(article.id) ?? -1 }))
-    .sort((a, b) => a.checkedAt - b.checkedAt)
+    .map((article) => ({ id: article.id, triedAt: tried.get(article.id) ?? -1 }))
+    .sort((a, b) => a.triedAt - b.triedAt)
     .slice(0, limit)
     .map((article) => article.id);
+}
+
+/** Note a try of the page (before it is fetched), creating the bookkeeping document when missing */
+export async function markSiteAttempt(articleId: number, now = new Date()): Promise<void> {
+  try {
+    await Assignment.updateOne({ articleId }, { $set: { siteAttemptAt: now }, $setOnInsert: { articleId } }, { upsert: true });
+  } catch (error) {
+    if (!isDuplicateKeyError(error)) throw error;
+    await Assignment.updateOne({ articleId }, { $set: { siteAttemptAt: now } });
+  }
 }
 
 /**
