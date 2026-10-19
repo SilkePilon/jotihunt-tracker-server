@@ -25,7 +25,9 @@ IMPORT_HEAP = os.environ.get("IMPORT_HEAP", "2g")
 TZ = ZoneInfo("Europe/Amsterdam")
 
 state = {"building": False, "builtAt": None, "report": None, "lastError": None}
-lock = threading.Lock()
+lock = threading.Lock()  # guards starting a rebuild
+state_lock = threading.Lock()  # guards reads/writes of state
+RETRY_DELAYS = [300, 900, 1800, 3600]  # first-build retries, then hourly
 server_proc = None
 
 
@@ -41,7 +43,7 @@ def load_meta():
     try:
         with open(path("meta.json")) as f:
             meta = json.load(f)
-        state["builtAt"], state["report"] = meta.get("builtAt"), meta.get("report")
+        set_state(builtAt=meta.get("builtAt"), report=meta.get("report"))
     except FileNotFoundError:
         pass
 
@@ -64,24 +66,51 @@ def stop_server():
     server_proc = None
 
 
+def set_state(**values):
+    with state_lock:
+        state.update(values)
+
+
+def run_captured(cmd):
+    """Run a command, capture stderr; on failure raise with the last ~1000 chars of it."""
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        tail = (result.stderr or "")[-1000:]
+        log(f"{cmd[0]} failed (exit {result.returncode}): {tail}")
+        raise RuntimeError(f"{cmd[0]} exited {result.returncode}: {tail}")
+    return result
+
+
 def build():
     tmp_pbf, cut_pbf, night_pbf = path("source.osm.pbf.tmp"), path("gelderland.osm.pbf"), path("gelderland-night.osm.pbf")
-    new_graph = path("graph-new")
+    new_graph, graph_cache, graph_old = path("graph-new"), path("graph-cache"), path("graph-old")
     log(f"downloading {SOURCE_URL}")
-    urllib.request.urlretrieve(SOURCE_URL, tmp_pbf)
+    with urllib.request.urlopen(SOURCE_URL, timeout=60) as res, open(tmp_pbf, "wb") as out_file:
+        shutil.copyfileobj(res, out_file)
     os.replace(tmp_pbf, path("source.osm.pbf"))
-    subprocess.run(["osmium", "extract", "-b", BBOX, "-s", "smart", "--overwrite", "-o", cut_pbf, path("source.osm.pbf")], check=True)
-    out = subprocess.run(["python3", "/app/prepare_night.py", cut_pbf, night_pbf, path("report.json")], check=True, capture_output=True, text=True)
+    run_captured(["osmium", "extract", "-b", BBOX, "-s", "smart", "--overwrite", "-o", cut_pbf, path("source.osm.pbf")])
+    out = run_captured(["python3", "/app/prepare_night.py", cut_pbf, night_pbf, path("report.json")])
     report = json.loads(out.stdout.strip().splitlines()[-1])
     shutil.rmtree(new_graph, ignore_errors=True)
     subprocess.run(["java", f"-Xmx{IMPORT_HEAP}", f"-Ddw.graphhopper.graph.location={new_graph}", f"-Ddw.graphhopper.datareader.file={night_pbf}", "-jar", JAR, "import", CONFIG], check=True)
     stop_server()
-    shutil.rmtree(path("graph-cache"), ignore_errors=True)
-    os.replace(new_graph, path("graph-cache"))
+    shutil.rmtree(graph_old, ignore_errors=True)
+    had_old = os.path.isdir(graph_cache)
     built_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    with open(path("meta.json"), "w") as f:
-        json.dump({"builtAt": built_at, "report": report}, f)
-    state["builtAt"], state["report"] = built_at, report
+    try:
+        if had_old:
+            os.rename(graph_cache, graph_old)
+        os.rename(new_graph, graph_cache)
+        with open(path("meta.json.tmp"), "w") as f:
+            json.dump({"builtAt": built_at, "report": report}, f)
+        os.replace(path("meta.json.tmp"), path("meta.json"))
+    except Exception:
+        if had_old and os.path.isdir(graph_old):
+            shutil.rmtree(graph_cache, ignore_errors=True)
+            os.rename(graph_old, graph_cache)
+        raise
+    shutil.rmtree(graph_old, ignore_errors=True)
+    set_state(builtAt=built_at, report=report)
     start_server()
 
 
@@ -89,20 +118,30 @@ def rebuild_async():
     with lock:
         if state["building"]:
             return False
-        state["building"] = True
-        state["lastError"] = None
+        set_state(building=True, lastError=None)
 
     def work():
+        attempt = 0
         try:
-            build()
-            log("rebuild done")
-        except Exception as error:  # noqa: BLE001 - report any failure via /status
-            state["lastError"] = str(error)
-            log(f"rebuild failed: {error}")
-            if server_proc is None and os.path.isdir(path("graph-cache")):
-                start_server()
+            while True:
+                try:
+                    build()
+                    set_state(lastError=None)
+                    log("rebuild done")
+                    return
+                except Exception as error:  # noqa: BLE001 - report any failure via /status
+                    set_state(lastError=str(error)[-1500:])
+                    log(f"rebuild failed: {error}")
+                    if server_proc is None and os.path.isdir(path("graph-cache")):
+                        start_server()
+                    if os.path.isdir(path("graph-cache")):
+                        return  # old graph keeps serving; the next weekly run retries
+                    delay = RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
+                    attempt += 1
+                    log(f"no graph yet, retrying in {delay // 60} min")
+                    time.sleep(delay)
         finally:
-            state["building"] = False
+            set_state(building=False)
 
     threading.Thread(target=work, daemon=True).start()
     return True
@@ -127,7 +166,9 @@ class Admin(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/status":
-            return self._json(200, {**state, "online": graphhopper_online()})
+            with state_lock:
+                snapshot = dict(state)
+            return self._json(200, {**snapshot, "online": graphhopper_online()})
         self._json(404, {"message": "not found"})
 
     def do_POST(self):
@@ -147,6 +188,11 @@ def weekly():
         if now.weekday() == 0 and now.hour == 3 and last != now.date():
             last = now.date()
             rebuild_async()
+        with state_lock:
+            building = state["building"]
+        if not building and (server_proc is None or server_proc.poll() is not None) and os.path.isdir(path("graph-cache")):
+            log("GraphHopper is not running, restarting")
+            start_server()
         time.sleep(60)
 
 
