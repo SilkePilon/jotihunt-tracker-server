@@ -30,6 +30,20 @@ describe("router admin", () => {
     expect(res.body).toMatchObject({ configured: true, online: false, lastError: "Router niet bereikbaar" });
   });
 
+  test("non-ok status answer", async () => {
+    process.env.ROUTER_URL = "http://router.test";
+    process.env.ROUTER_ADMIN_URL = "http://router.test";
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response("boom", { status: 500 })) as unknown as typeof fetch;
+    try {
+      const res = fakeRes();
+      await getRouterStatus({} as never, res as never);
+      expect(res.body).toMatchObject({ configured: true, online: false, lastError: "Router antwoordde 500" });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   test("rebuild 503 when unconfigured or unreachable", async () => {
     delete process.env.ROUTER_ADMIN_URL;
     let res = fakeRes();
