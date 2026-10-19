@@ -64,6 +64,7 @@ describe("refresh", () => {
     const docs = await fastfoodModel(db).find().sort({ osmId: 1 }).lean();
     expect(docs.map((doc) => doc.osmId)).toEqual(["node/1", "node/2", "node/3", "node/5"]);
     expect(docs[0].openingHours).toBe("24/7");
+    expect(docs.every((doc) => doc.updatedAt.getTime() === clock.getTime())).toBe(true);
   });
 
   test("Overpass down keeps the old data", async () => {
@@ -92,6 +93,40 @@ describe("refresh", () => {
     api.elements = ids(8);
     expect(await service.refresh()).toBe(true);
     expect(await fastfoodModel(db).countDocuments()).toBe(8);
+  });
+});
+
+describe("keep-ratio guard on old data", () => {
+  const ids = (count: number) => Array.from({ length: count }, (_, index) => element(index + 1));
+  const DAY = 24 * 60 * 60 * 1000;
+
+  test("is skipped when the stored data is more than 3 days old, with an error log", async () => {
+    const errors: string[] = [];
+    service = new FastfoodService({ connection: db, client: api, logger: { ...silent, error: (message: string) => errors.push(message) }, now: () => clock, minCount: 2 });
+    api.elements = ids(10);
+    expect(await service.refresh()).toBe(true);
+    clock = new Date(clock.getTime() + 4 * DAY);
+    api.elements = ids(5);
+    expect(await service.refresh()).toBe(true);
+    expect(await fastfoodModel(db).countDocuments()).toBe(5);
+    expect(errors).toHaveLength(1);
+  });
+
+  test("still applies when the stored data is a day old", async () => {
+    api.elements = ids(10);
+    expect(await service.refresh()).toBe(true);
+    clock = new Date(clock.getTime() + DAY);
+    api.elements = ids(5);
+    expect(await service.refresh()).toBe(false);
+    expect(await fastfoodModel(db).countDocuments()).toBe(10);
+  });
+
+  test("the ratio is configurable", async () => {
+    service = new FastfoodService({ connection: db, client: api, logger: silent, now: () => clock, minCount: 2, minKeepRatio: 0.5 });
+    api.elements = ids(10);
+    await service.refresh();
+    api.elements = ids(5);
+    expect(await service.refresh()).toBe(true);
   });
 });
 
