@@ -52,6 +52,13 @@ describe("OverpassClient", () => {
     await expect(new OverpassClient(impl, 1000, ["https://a"]).fetchElements()).rejects.toBeInstanceOf(FastfoodUpstreamError);
   });
 
+  test("a runtime remark or out-of-memory remark is a partial result and a failure", async () => {
+    for (const remark of ["runtime remark: Timed out", "Query run out of memory using about 2048 MB of RAM."]) {
+      const { impl } = fakeFetch([Response.json({ elements: [ELEMENT], remark })]);
+      await expect(new OverpassClient(impl, 1000, ["https://a"]).fetchElements()).rejects.toBeInstanceOf(FastfoodUpstreamError);
+    }
+  });
+
   test("a harmless remark still returns the elements", async () => {
     const { impl } = fakeFetch([Response.json({ elements: [ELEMENT], remark: "note: data may be a few minutes old" })]);
     expect(await new OverpassClient(impl, 1000, ["https://a"]).fetchElements()).toEqual([ELEMENT] as never);

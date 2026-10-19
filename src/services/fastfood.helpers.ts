@@ -57,7 +57,8 @@ export function brandOf(tags: Record<string, string>): Brand | undefined {
 function branchOf(tags: Record<string, string>, brand: Brand): string | undefined {
   if (tags.branch?.trim()) return tags.branch.trim();
   let text = tags.description?.trim() ?? "";
-  const prefix = BRAND_NAMES[brand].find((name) => text.toLowerCase().startsWith(name.toLowerCase()));
+  // Only a whole brand name counts: "KFCentrum" keeps its "KFC"
+  const prefix = BRAND_NAMES[brand].find((name) => text.toLowerCase().startsWith(name.toLowerCase()) && !/\p{L}/u.test(text.charAt(name.length)));
   if (prefix) text = text.slice(prefix.length).trim();
   return text && text.length <= MAX_BRANCH_LENGTH ? text : undefined;
 }
@@ -103,7 +104,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * The times `openingHours` is open in the `days` days from `from` (in the server's time zone, Europe/Amsterdam).
- * An interval past midnight is one interval; the last one is cut at the end of the window. Undefined when the hours
+ * An interval past midnight is one interval, and so are back-to-back intervals (the library splits where the comment
+ * changes, e.g. "Restaurant" until 21:00 then "McDrive"); the last one is cut at the end of the window. Undefined when the hours
  * are missing, can't be parsed, or are only "unknown"; an empty list when closed the whole window.
  */
 export function openIntervals(openingHours: string | undefined, from: Date, days = 8): OpenInterval[] | undefined {
@@ -115,7 +117,15 @@ export function openIntervals(openingHours: string | undefined, from: Date, days
   } catch {
     return undefined;
   }
+  // Unknown stretches mixed with known ones (e.g. "PH unknown") are dropped, so they read as closed
   const known = intervals.filter(([, , unknown]) => !unknown);
   if (intervals.length && !known.length) return undefined;
-  return known.map(([start, end]) => ({ start, end }));
+  const merged: OpenInterval[] = [];
+  for (const [start, end] of known) {
+    const previous = merged.at(-1);
+    if (previous && start.getTime() <= previous.end.getTime()) {
+      if (end.getTime() > previous.end.getTime()) previous.end = end;
+    } else merged.push({ start, end });
+  }
+  return merged;
 }

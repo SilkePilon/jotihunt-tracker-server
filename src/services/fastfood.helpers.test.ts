@@ -82,6 +82,12 @@ describe("toRestaurant", () => {
     expect(toRestaurant({ ...ARNHEM, tags: { ...ARNHEM.tags, branch: "Centrum" } }, NOW)!.branch).toBe("Centrum");
     expect(toRestaurant({ ...ARNHEM, tags: { ...ARNHEM.tags, description: "McDonald's" } }, NOW)!.branch).toBeUndefined();
   });
+  test("a brand name only counts as prefix when a non-letter follows", () => {
+    const kfc = (description: string) => toRestaurant({ ...ARNHEM, tags: { "brand:wikidata": "Q524757", description } }, NOW)!.branch;
+    expect(kfc("KFCentrum")).toBe("KFCentrum");
+    expect(kfc("KFC Utrecht Centraal")).toBe("Utrecht Centraal");
+    expect(kfc("KFC-Utrecht")).toBe("-Utrecht");
+  });
   test("a description longer than 60 characters is not a branch", () => {
     expect(toRestaurant({ ...ARNHEM, tags: { ...ARNHEM.tags, description: "x".repeat(61) } }, NOW)!.branch).toBeUndefined();
   });
@@ -122,6 +128,15 @@ describe("openIntervals", () => {
     expect(openIntervals(undefined, SATURDAY)).toBeUndefined();
     expect(openIntervals("blah", SATURDAY)).toBeUndefined();
     expect(openIntervals("Mo-Su 10:00-22:00 unknown", SATURDAY, 2)).toBeUndefined();
+  });
+  test("back-to-back intervals with different comments are one interval", () => {
+    const mcdrive = '10:00-21:00 open "Restaurant" || Mo-Th 10:00-24:00; Fr,Sa 10:00-01:00; Su 10:00-24:00 open "McDrive"';
+    expect(iso(openIntervals(mcdrive, new Date("2026-10-19T00:00:00+02:00"), 1))).toEqual([["2026-10-19T08:00:00.000Z", "2026-10-19T22:00:00.000Z"]]);
+  });
+  test("an interval ending at 24:00 and one starting at 00:00 the next day are one interval", () => {
+    expect(iso(openIntervals('Mo 18:00-24:00 open "a"; Tu 00:00-02:00 open "b"', new Date("2026-10-19T00:00:00+02:00"), 2))).toEqual([
+      ["2026-10-19T16:00:00.000Z", "2026-10-20T00:00:00.000Z"],
+    ]);
   });
   test("comments don't matter", () => {
     expect(openIntervals('Mo-Su 07:00-23:00 open "drive"', SATURDAY, 1)).toHaveLength(1);
