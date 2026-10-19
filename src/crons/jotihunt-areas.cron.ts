@@ -1,6 +1,7 @@
 import { logger } from "../logger";
 import { currentGeneration, runTracked, skipInDemoMode } from "../demo/demo-mode";
 import { Area } from "../models/area.model";
+import { AreaStatusEvent } from "../models/area-status-event.model";
 import { AREA_STATUSES, AREA_TITLES, AREAS, areaTitle, knownAreaName } from "../constants/areas";
 import { getAreas, JotihuntPausedError } from "../services/jotihunt.service";
 import { ApiArea } from "../types/api";
@@ -41,6 +42,11 @@ export function parseAreasAnswer(apiAreas: ApiArea[]): { areas: AreaUpdate[]; ig
  * disappearing); only names that are not a known area (left behind by a broken answer) are removed.
  */
 export async function storeAreas(areas: AreaUpdate[]) {
+  const previous = new Map((await Area.find({ name: { $in: areas.map((a) => a.name) } }).select("name status").lean()).map((a) => [a.name, a.status]));
+  const changes = areas
+    .filter((area) => previous.get(area.name) !== area.status)
+    .map((area) => ({ area: area.name, status: area.status, at: area.updatedAt ?? new Date() }));
+  if (changes.length) await AreaStatusEvent.insertMany(changes);
   await Area.bulkWrite(
     areas.map(({ updatedAt, ...area }) => ({
       updateOne: {
