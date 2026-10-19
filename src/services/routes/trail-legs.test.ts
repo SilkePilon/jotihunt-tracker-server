@@ -78,4 +78,23 @@ describe("classifyLegs", () => {
     const [l] = classifyLegs([leg(t("10:00"), t("10:05"), null)], []);
     expect(l.mode).toBe("walk");
   });
+  describe("long red period", () => {
+    const events = [{ status: "green", at: t("09:00", "2026-10-16") }, { status: "red", at: t("20:00", "2026-10-16") }, { status: "green", at: t("10:00", "2026-10-19") }];
+
+    test("swap window in the middle of a multi-day red is not red", () => {
+      const [l] = classifyLegs([leg(t("22:50", "2026-10-17"), t("23:10", "2026-10-17"), 10)], events);
+      expect([l.mode, l.reason]).toEqual(["walk", "walk"]);
+    });
+
+    test("daytime leg in the middle of a multi-day red is still red", () => {
+      const [l] = classifyLegs([leg(t("14:00", "2026-10-17"), t("15:00", "2026-10-17"), 40)], events);
+      expect([l.mode, l.reason]).toEqual(["car", "status-red"]);
+    });
+  });
+
+  test("red overlap shorter than a minute is ignored", () => {
+    const short = [{ status: "green", at: t("09:00") }, { status: "red", at: t("14:00") }, { status: "green", at: new Date(t("14:00").getTime() + 30_000) }];
+    const [l] = classifyLegs([leg(t("13:50"), t("14:10"), 10)], short);
+    expect([l.mode, l.reason]).toEqual(["walk", "walk"]);
+  });
 });

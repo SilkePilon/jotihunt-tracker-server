@@ -24,9 +24,12 @@ function overlap(a: Interval, b: Interval): Interval | null {
   return to > from ? { from: new Date(from), to: new Date(to) } : null;
 }
 
-/** Parts of `interval` outside the swap windows at the start of the halves it touches. */
+const DAY_MS = 24 * 3600 * 1000;
+
+/** Parts of `interval` outside every swap window it touches. */
 function withoutSwaps(interval: Interval): Interval[] {
-  const windows = [swapWindow(interval.from), swapWindow(interval.to)];
+  const windows: { start: Date; end: Date }[] = [];
+  for (let w = swapWindow(interval.from); w.start < interval.to; w = swapWindow(new Date(w.end.getTime() + DAY_MS))) windows.push(w);
   let parts: Interval[] = [interval];
   for (const w of windows) {
     parts = parts.flatMap((part) => {
@@ -42,9 +45,12 @@ function withoutSwaps(interval: Interval): Interval[] {
 
 function longestOverlap(leg: Interval, intervals: Interval[]): Interval | null {
   let best: Interval | null = null;
+  let bestMs = MIN_OVERLAP_MS - 1;
   for (const interval of intervals) {
     const o = overlap(leg, interval);
-    if (o && o.to.getTime() - o.from.getTime() >= MIN_OVERLAP_MS && (!best || o.to.getTime() - o.from.getTime() > best.to.getTime() - best.from.getTime())) best = o;
+    if (!o) continue;
+    const ms = o.to.getTime() - o.from.getTime();
+    if (ms > bestMs) { best = o; bestMs = ms; }
   }
   return best;
 }
