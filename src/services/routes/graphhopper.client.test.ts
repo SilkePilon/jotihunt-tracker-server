@@ -52,4 +52,14 @@ describe("createGraphHopperRouter", () => {
     const unset = createGraphHopperRouter(undefined);
     await expect(unset.route({ profile: "foot", from: [0, 0], to: [1, 1], night: false, nightAreas: [] })).rejects.toMatchObject({ kind: "permanent" });
   });
+
+  test("busy answers (408/429) and 200 without points are temporary", async () => {
+    const req = { profile: "foot" as const, from: [0, 0] as [number, number], to: [1, 1] as [number, number], night: false, nightAreas: [] };
+    for (const status of [408, 429]) {
+      const busy = createGraphHopperRouter("http://gh:8989", { post: async () => ({ status, json: { message: "busy" } }) });
+      await expect(busy.route(req)).rejects.toMatchObject({ kind: "temporary" });
+    }
+    const noPoints = createGraphHopperRouter("http://gh:8989", { post: async () => ({ status: 200, json: { paths: [{ distance: 1, time: 1000 }] } }) });
+    await expect(noPoints.route(req)).rejects.toMatchObject({ kind: "temporary" });
+  });
 });

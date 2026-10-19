@@ -54,4 +54,18 @@ describe("router admin", () => {
     await rebuildRouter({} as never, res as never);
     expect(res.statusCode).toBe(503);
   });
+
+  test("rebuild passes a 409 (already building) through", async () => {
+    process.env.ROUTER_ADMIN_URL = "http://router.test";
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({ started: false }), { status: 409 })) as unknown as typeof fetch;
+    try {
+      const res = fakeRes();
+      await rebuildRouter({} as never, res as never);
+      expect(res.statusCode).toBe(409);
+      expect(res.body).toEqual({ message: "Kaartdata wordt al vernieuwd." });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
 });

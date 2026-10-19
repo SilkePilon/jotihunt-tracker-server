@@ -20,6 +20,8 @@ export async function rebuildRouter(_req: Request, res: Response) {
   if (!base) return res.status(503).json({ message: "Router is niet ingesteld." });
   try {
     const answer = await fetch(`${base}/rebuild`, { method: "POST", signal: AbortSignal.timeout(5000) });
+    // 409: a rebuild is already running; passed through so the client can say so
+    if (answer.status === 409) return res.status(409).json({ message: "Kaartdata wordt al vernieuwd." });
     return res.status(answer.status).json(await answer.json().catch(() => ({})));
   } catch {
     return res.status(503).json({ message: "Router niet bereikbaar." });

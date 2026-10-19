@@ -51,4 +51,13 @@ describe("night areas setting", () => {
     expect(await check({ enabled: true, areas: [{ id: "a", name: "X", kind: "open", polygon: { type: "Polygon", coordinates: [[[0, 0], [1, 1]]] } }] })).toBe(false);
     expect(await check({ enabled: "yes", areas: [] })).toBe(false);
   });
+
+  test("a self-intersecting ring is rejected with its own message", async () => {
+    const bowTie = { type: "Polygon", coordinates: [[[5.8, 52], [5.81, 52.01], [5.81, 52], [5.8, 52.01], [5.8, 52]]] };
+    const req = { body: { enabled: true, areas: [{ id: "a", name: "X", kind: "open", polygon: bowTie }] } } as never;
+    for (const v of nightAreasValidation) await v.run(req);
+    expect(validationResult(req).array().map((e) => e.msg)).toEqual(["Gebied mag zichzelf niet kruisen."]);
+    const square4 = { type: "Polygon", coordinates: [[[5.8, 52], [5.81, 52], [5.81, 52.01], [5.8, 52.01], [5.8, 52]]] };
+    expect(await check({ enabled: true, areas: [{ id: "a", name: "X", kind: "open", polygon: square4 }] })).toBe(true);
+  });
 });

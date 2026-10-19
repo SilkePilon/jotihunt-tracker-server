@@ -54,9 +54,11 @@ export function createGraphHopperRouter(baseUrl: string | undefined, deps: { pos
         throw new RoutingUnavailableError(`Router unreachable: ${error instanceof Error ? error.message : String(error)}`, { kind: "temporary" });
       }
       const json = (res.json ?? {}) as GhResponse;
-      if (res.status >= 400 && res.status < 500) throw new RoutingUnavailableError(json.message ?? `Router answered ${res.status}`, { kind: "request" });
-      if (res.status !== 200 || !json.paths?.[0]) throw new RoutingUnavailableError(json.message ?? `Router answered ${res.status}`, { kind: "temporary" });
-      const path = json.paths[0];
+      // 408/429 are the router being busy, not a bad request: retry later
+      if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) throw new RoutingUnavailableError(json.message ?? `Router answered ${res.status}`, { kind: "request" });
+      const path = json.paths?.[0];
+      if (res.status !== 200 || !path) throw new RoutingUnavailableError(json.message ?? `Router answered ${res.status}`, { kind: "temporary" });
+      if (!Array.isArray(path.points?.coordinates)) throw new RoutingUnavailableError("Router answered without route points", { kind: "temporary" });
       return { coordinates: path.points.coordinates, distanceM: path.distance, durationS: Math.round(path.time / 1000) };
     },
   };
