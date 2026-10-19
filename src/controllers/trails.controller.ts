@@ -3,7 +3,9 @@ import { Marker } from "../models/marker.model";
 import { trailsService } from "../services/routes/instance";
 
 export async function getTrails(_req: Request, res: Response) {
-  return res.status(200).json(await trailsService.trails());
+  // Serialised once per memo, like the cached list endpoints
+  const body = await trailsService.trailsJson();
+  return res.status(200).set("Content-Type", "application/json; charset=utf-8").send(body);
 }
 
 export async function setLegMode(req: Request, res: Response) {

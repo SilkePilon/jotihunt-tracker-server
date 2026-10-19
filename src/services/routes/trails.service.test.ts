@@ -215,4 +215,49 @@ describe("trails service", () => {
     await service.trails();
     expect(calls).toHaveLength(3); // TTL passed: retried
   });
+
+  test("router not configured: trails off, no routing", async () => {
+    await Marker.create([
+      { area: "alpha", time: t("10:00"), location: point(5.9, 52.0), type: MarkerType.Hint },
+      { area: "alpha", time: t("11:00"), location: point(5.95, 52.0), type: MarkerType.Hint },
+    ]);
+    const { router, calls } = fakeRouter(30);
+    const service = createTrailsService({ router, now: () => t("12:00"), configured: () => false });
+    expect(await service.trails()).toEqual({ enabled: false, trails: { type: "FeatureCollection", features: [] } });
+    expect(calls).toHaveLength(0);
+    expect(service.routerCooldownUntil()).toBe(0);
+  });
+
+  test("serialises once per memo and recomputes after a demo switch", async () => {
+    await Marker.create([
+      { area: "alpha", time: t("10:00"), location: point(5.9, 52.0), type: MarkerType.Hint },
+      { area: "alpha", time: t("11:00"), location: point(5.95, 52.0), type: MarkerType.Hint },
+    ]);
+    let dbGen = 1;
+    const service = createTrailsService({ router: fakeRouter(30).router, now: () => t("12:00"), dbGeneration: () => dbGen });
+    const first = await service.trailsJson();
+    expect(await service.trailsJson()).toBe(first); // same string instance, not re-serialised
+    expect(JSON.parse(first).trails.features).toHaveLength(1);
+    await Marker.create({ area: "alpha", time: t("11:30"), location: point(5.97, 52.0), type: MarkerType.Hint });
+    expect(await service.trailsJson()).toBe(first); // still memoized
+    dbGen = 2;
+    const switched = await service.trailsJson();
+    expect(switched).not.toBe(first);
+    expect(JSON.parse(switched).trails.features).toHaveLength(2);
+  });
+
+  test("resolved routes are reused from memory without querying Mongo", async () => {
+    await Marker.create([
+      { area: "alpha", time: t("10:00"), location: point(5.9, 52.0), type: MarkerType.Hint },
+      { area: "alpha", time: t("11:00"), location: point(5.95, 52.0), type: MarkerType.Hint },
+    ]);
+    const { router, calls } = fakeRouter(30);
+    const service = createTrailsService({ router, now: () => t("12:00") });
+    await service.trails();
+    await RouteLeg.deleteMany({}); // gone from Mongo: only the in-process copy can serve it
+    service.invalidate();
+    const { trails } = await service.trails();
+    expect(calls).toHaveLength(1);
+    expect(trails.features[0].properties.fallback).toBe(false);
+  });
 });

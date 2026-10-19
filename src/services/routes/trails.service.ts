@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import distance from "@turf/distance";
+import { currentGeneration } from "../../demo/demo-mode";
 import { AreaStatusEvent } from "../../models/area-status-event.model";
 import { Marker } from "../../models/marker.model";
 import { RouteLeg } from "../../models/route-leg.model";
@@ -25,6 +26,8 @@ const UNROUTABLE_RETRY_MS = 10 * 60_000;
 const CACHE_DAYS = 30;
 const MAX_STRAIGHT_KM = 60;
 const CONCURRENCY = 4;
+/** Resolved routes kept in memory so Mongo is only asked for misses. */
+const RESOLVED_CAP = 5_000;
 
 type Coord = [number, number];
 interface CachedRoute extends RouteResult { nightFallback: boolean }
@@ -43,12 +46,44 @@ function uniqueJobs(jobs: Job[]): Job[] {
   return [...new Map(jobs.map((job) => [job.key, job])).values()];
 }
 
-export function createTrailsService(deps: { router: Router; now?: () => Date; maxNewRoutesPerCall?: number }) {
+/** Small LRU of resolved routes by route key. */
+function createRouteLru(cap: number) {
+  const map = new Map<string, CachedRoute>();
+  return {
+    get(key: string) {
+      const hit = map.get(key);
+      if (hit) { map.delete(key); map.set(key, hit); }
+      return hit;
+    },
+    set(key: string, route: CachedRoute) {
+      map.delete(key);
+      map.set(key, route);
+      if (map.size > cap) map.delete(map.keys().next().value!);
+    },
+  };
+}
+
+interface Memo { at: number; stamp: string; value: TrailsResponse; body: string }
+
+export function createTrailsService(deps: {
+  router: Router;
+  now?: () => Date;
+  maxNewRoutesPerCall?: number;
+  /** False when no router is configured (no ROUTER_URL): trails are then off and the client keeps its straight lines. */
+  configured?: () => boolean;
+  /** Database generation (changes on a demo switch). */
+  dbGeneration?: () => number;
+}) {
   const now = deps.now ?? (() => new Date());
   const maxNew = deps.maxNewRoutesPerCall ?? 12;
-  let memo: { at: number; value: TrailsResponse } | null = null;
-  let inflight: { generation: number; promise: Promise<TrailsResponse> } | null = null;
+  const configured = deps.configured ?? (() => true);
+  const dbGeneration = deps.dbGeneration ?? currentGeneration;
+  let memo: Memo | null = null;
+  let inflight: { stamp: string; promise: Promise<Memo> } | null = null;
   let generation = 0;
+  /** Changes on invalidate and on a demo switch: a memo or computation of another stamp is never served. */
+  const stamp = () => `${generation}:${dbGeneration()}`;
+  const resolved = createRouteLru(RESOLVED_CAP);
   let cooldownUntil = 0;
   /** Legs the router said have no route: key -> time after which we try again. */
   const unroutable = new Map<string, number>();
@@ -100,6 +135,7 @@ export function createTrailsService(deps: { router: Router; now?: () => Date; ma
           continue;
         }
         cache.set(job.key, route);
+        resolved.set(job.key, route);
         try {
           await RouteLeg.updateOne(
             { key: job.key },
@@ -116,7 +152,7 @@ export function createTrailsService(deps: { router: Router; now?: () => Date; ma
 
   async function compute(): Promise<TrailsResponse> {
     const setting = getRoutesSetting();
-    if (!setting.enabled) return { enabled: false, trails: emptyCollection() };
+    if (!setting.enabled || !configured()) return { enabled: false, trails: emptyCollection() };
     const areasHash = nightAreasHash();
     const run: Run = { budget: maxNew, stopped: false, nightAreas: setting.areas };
 
@@ -149,10 +185,18 @@ export function createTrailsService(deps: { router: Router; now?: () => Date; ma
     const walkJobs = allLegs.map(walkJob);
     const cache = new Map<string, CachedRoute>();
     const loadCached = async (keys: string[]) => {
-      const wanted = [...new Set(keys)].filter((key) => !cache.has(key));
+      const wanted: string[] = [];
+      for (const key of new Set(keys)) {
+        if (cache.has(key)) continue;
+        const hit = resolved.get(key);
+        if (hit) cache.set(key, hit);
+        else wanted.push(key);
+      }
       if (!wanted.length) return;
       for (const doc of await RouteLeg.find({ key: { $in: wanted } }).lean()) {
-        cache.set(doc.key, { coordinates: doc.coordinates as unknown as Coord[], distanceM: doc.distanceM, durationS: doc.durationS, nightFallback: doc.nightFallback ?? false });
+        const route = { coordinates: doc.coordinates as unknown as Coord[], distanceM: doc.distanceM, durationS: doc.durationS, nightFallback: doc.nightFallback ?? false };
+        cache.set(doc.key, route);
+        resolved.set(doc.key, route);
       }
     };
     await loadCached(walkJobs.map((j) => j.key));
@@ -191,17 +235,27 @@ export function createTrailsService(deps: { router: Router; now?: () => Date; ma
     return { enabled: true, trails: { type: "FeatureCollection", features } };
   }
 
+  /** The trails and their JSON, serialised once per memo (every poll within MEMO_MS gets the same string). */
+  async function current(): Promise<Memo> {
+    const started = stamp();
+    if (memo && memo.stamp === started && now().getTime() - memo.at < MEMO_MS) return memo;
+    // Concurrent callers share one computation; a result is only memoized if nothing invalidated it meanwhile
+    if (inflight && inflight.stamp === started) return inflight.promise;
+    const promise = compute()
+      .then((value): Memo => ({ at: now().getTime(), stamp: started, value, body: JSON.stringify(value) }))
+      .finally(() => { if (inflight?.promise === promise) inflight = null; });
+    inflight = { stamp: started, promise };
+    const result = await promise;
+    if (stamp() === started) memo = result;
+    return result;
+  }
+
   return {
     async trails(): Promise<TrailsResponse> {
-      if (memo && now().getTime() - memo.at < MEMO_MS) return memo.value;
-      // Concurrent callers share one computation; a result is only memoized if nothing invalidated it meanwhile
-      if (inflight && inflight.generation === generation) return inflight.promise;
-      const started = generation;
-      const promise = compute().finally(() => { if (inflight?.promise === promise) inflight = null; });
-      inflight = { generation: started, promise };
-      const value = await promise;
-      if (generation === started) memo = { at: now().getTime(), value };
-      return value;
+      return (await current()).value;
+    },
+    async trailsJson(): Promise<string> {
+      return (await current()).body;
     },
     invalidate,
     routerCooldownUntil: () => cooldownUntil,
