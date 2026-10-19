@@ -1,3 +1,4 @@
+import distance from "@turf/distance";
 import { amsterdamHalf, legIsNight, swapWindow } from "./sun";
 
 export type LegMode = "walk" | "car" | "extra";
@@ -8,6 +9,9 @@ export interface ClassifiedLeg extends LegInput { mode: LegMode; reason: LegReas
 
 /** Walking must take more than this many times the elapsed time before a leg counts as "too fast to walk". */
 export const SPEED_RATIO = 1.5;
+/** Short or quick legs (GPS/hint jitter, markers with the same time) are never "too fast to walk". */
+export const MIN_FAST_ELAPSED_S = 600;
+export const MIN_FAST_DISTANCE_KM = 3;
 const MIN_OVERLAP_MS = 60_000;
 
 interface Interval { from: Date; to: Date }
@@ -72,7 +76,15 @@ export function legNight(leg: Pick<LegInput, "from" | "to" | "fromCoord" | "toCo
 }
 
 const elapsedS = (leg: LegInput) => Math.max(1, (leg.to.getTime() - leg.from.getTime()) / 1000);
-const speedRatio = (leg: LegInput) => (leg.walkDurationS ?? 0) / elapsedS(leg);
+/** How much longer walking takes than the time the fox actually had. */
+const excessS = (leg: LegInput) => (leg.walkDurationS ?? 0) - elapsedS(leg);
+function tooFast(leg: LegInput): boolean {
+  if (leg.walkDurationS === null) return false;
+  const elapsed = (leg.to.getTime() - leg.from.getTime()) / 1000;
+  if (elapsed < MIN_FAST_ELAPSED_S) return false;
+  if (distance(leg.fromCoord, leg.toCoord, { units: "kilometers" }) < MIN_FAST_DISTANCE_KM) return false;
+  return leg.walkDurationS > SPEED_RATIO * elapsed;
+}
 
 export function classifyLegs(legs: LegInput[], events: StatusEvent[], now: Date = new Date()): ClassifiedLeg[] {
   const intervals = statusIntervals(events, now);
@@ -82,15 +94,17 @@ export function classifyLegs(legs: LegInput[], events: StatusEvent[], now: Date 
   const out: ClassifiedLeg[] = legs.map((leg) => {
     const base = { ...leg, night: legNight(leg), manual: false };
     if (leg.override) return { ...base, mode: leg.override, reason: "manual", manual: true };
+    // Across the swap a new team starts near the old end point: always a walking leg
+    if (amsterdamHalf(leg.from) !== amsterdamHalf(leg.to)) return { ...base, mode: "walk", reason: "walk" };
     const span = { from: leg.from, to: leg.to };
     const redHit = longestOverlap(span, red);
     if (redHit) return { ...base, mode: "car", reason: "status-red", redFrom: redHit.from, redTo: redHit.to };
     if (longestOverlap(span, orange)) return { ...base, mode: "extra", reason: "status-orange" };
-    if (leg.walkDurationS !== null && speedRatio(leg) > SPEED_RATIO) return { ...base, mode: "car", reason: "too-fast" };
+    if (tooFast(leg)) return { ...base, mode: "car", reason: "too-fast" };
     return { ...base, mode: "walk", reason: "walk" };
   });
 
-  // At most one big move per half: manual car > longest red > fastest "too fast"
+  // At most one big move per half: manual car > longest red > "too fast" with the most excess time
   const byHalf = new Map<string, ClassifiedLeg[]>();
   for (const leg of out) {
     if (leg.mode !== "car") continue;
@@ -104,7 +118,7 @@ export function classifyLegs(legs: LegInput[], events: StatusEvent[], now: Date 
     const keep =
       candidates.find((l) => l.manual) ??
       [...candidates].filter((l) => l.reason === "status-red").sort((a, b) => redLength(b) - redLength(a))[0] ??
-      [...candidates].sort((a, b) => speedRatio(b) - speedRatio(a))[0];
+      [...candidates].sort((a, b) => excessS(b) - excessS(a))[0];
     for (const leg of candidates) {
       if (leg === keep || leg.manual) continue;
       leg.mode = "walk";

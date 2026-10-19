@@ -114,6 +114,41 @@ describe("classifyLegs", () => {
     });
   });
 
+  test("markers with the same time are never too fast", () => {
+    const [l] = classifyLegs([leg(t("10:00"), t("10:00"), 40)], []);
+    expect([l.mode, l.reason]).toEqual(["walk", "walk"]);
+  });
+
+  test("hint jitter (5 min, short hop) loses to a real long move in the same half", () => {
+    const near: [number, number] = [5.915, 51.986]; // ~0.3 km from A
+    const far: [number, number] = [6.1, 52.05]; // ~15 km from A
+    const legs = [
+      leg(t("10:00"), t("10:05"), 4, { toCoord: near }), // huge ratio, but tiny and quick
+      leg(t("11:00"), t("12:00"), 180, { toCoord: far }),
+    ];
+    expect(classifyLegs(legs, []).map((l) => [l.mode, l.reason])).toEqual([["walk", "walk"], ["car", "too-fast"]]);
+  });
+
+  test("short distance never counts as too fast, even when slow to walk", () => {
+    const near: [number, number] = [5.93, 51.99]; // ~1.4 km
+    const [l] = classifyLegs([leg(t("10:00"), t("10:15"), 60, { toCoord: near })], []);
+    expect(l.mode).toBe("walk");
+  });
+
+  test("too-fast ranking uses excess time, not the ratio", () => {
+    // ratio 3 but 20 min excess vs ratio 2 but 60 min excess
+    const legs = [leg(t("10:00"), t("10:10"), 30), leg(t("12:00"), t("13:00"), 120)];
+    expect(classifyLegs(legs, []).map((l) => l.mode)).toEqual(["walk", "car"]);
+  });
+
+  test("a leg crossing the swap is a walking leg, even when red or too fast", () => {
+    const events = [{ status: "green", at: t("09:00") }, { status: "red", at: t("21:00") }, { status: "green", at: t("23:30", "2026-10-18") }];
+    const [l] = classifyLegs([leg(t("21:30"), t("23:45"), 600)], events);
+    expect([l.mode, l.reason]).toEqual(["walk", "walk"]);
+    const [m] = classifyLegs([leg(t("21:30"), t("23:45"), 600, { override: "car" })], events);
+    expect([m.mode, m.reason, m.manual]).toEqual(["car", "manual", true]);
+  });
+
   test("red overlap shorter than a minute is ignored", () => {
     const short = [{ status: "green", at: t("09:00") }, { status: "red", at: t("14:00") }, { status: "green", at: new Date(t("14:00").getTime() + 30_000) }];
     const [l] = classifyLegs([leg(t("13:50"), t("14:10"), 10)], short);
