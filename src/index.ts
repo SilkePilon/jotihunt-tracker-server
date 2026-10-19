@@ -28,6 +28,8 @@ import { life360ConfigFromEnv } from "./services/life360.helpers";
 import { Life360Service, setLife360Service } from "./services/life360.service";
 import { BagWfsClient } from "./services/buildings.client";
 import { BuildingsService, setBuildingsService } from "./services/buildings.service";
+import { OverpassClient } from "./services/fastfood.client";
+import { FastfoodService, setFastfoodService } from "./services/fastfood.service";
 import { migrateArticleTextHashes } from "./services/article-summary.service";
 import { migrateHintSplitKeys } from "./services/hint-split.service";
 import { errorText } from "./utils/error-text";
@@ -169,6 +171,11 @@ jotiboard.start().catch((error) => logger.error("Could not start the Jotiboard s
 // 3D buildings: z15 vector tiles from 3DBAG, cached in the real database on first view
 const buildings = new BuildingsService({ connection: getDemoStateStore().connection, client: new BagWfsClient(), logger: serviceLogger });
 setBuildingsService(buildings);
+
+// Fastfood layers: McDonald's, KFC and Burger King from OpenStreetMap, refreshed daily in the real database
+const fastfood = new FastfoodService({ connection: getDemoStateStore().connection, client: new OverpassClient(), logger: serviceLogger });
+setFastfoodService(fastfood);
+fastfood.start();
 
 // Index maintenance of the real database runs in initDemoMode (and again whenever demo mode is switched off)
 
