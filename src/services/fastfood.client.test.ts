@@ -44,4 +44,16 @@ describe("OverpassClient", () => {
     const { impl } = fakeFetch([Response.json({ remark: "runtime error" })]);
     await expect(new OverpassClient(impl, 1000, ["https://a"]).fetchElements()).rejects.toBeInstanceOf(FastfoodUpstreamError);
   });
+
+  test("an answer with an error remark is a partial result and a failure", async () => {
+    const { impl } = fakeFetch([
+      Response.json({ elements: [ELEMENT], remark: 'runtime error: Query timed out in "query" at line 3 after 91 seconds.' }),
+    ]);
+    await expect(new OverpassClient(impl, 1000, ["https://a"]).fetchElements()).rejects.toBeInstanceOf(FastfoodUpstreamError);
+  });
+
+  test("a harmless remark still returns the elements", async () => {
+    const { impl } = fakeFetch([Response.json({ elements: [ELEMENT], remark: "note: data may be a few minutes old" })]);
+    expect(await new OverpassClient(impl, 1000, ["https://a"]).fetchElements()).toEqual([ELEMENT] as never);
+  });
 });

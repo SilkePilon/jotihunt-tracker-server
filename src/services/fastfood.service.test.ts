@@ -56,13 +56,13 @@ describe("refresh", () => {
   });
 
   test("a second refresh updates and drops restaurants that are gone", async () => {
-    api.elements = [element(1), element(2), element(4)];
+    api.elements = [element(1), element(2), element(3), element(4), element(5)];
     await service.refresh();
-    api.elements = [element(1, "24/7"), element(2)];
+    api.elements = [element(1, "24/7"), element(2), element(3), element(5)];
     clock = new Date(clock.getTime() + 1000);
     await service.refresh();
     const docs = await fastfoodModel(db).find().sort({ osmId: 1 }).lean();
-    expect(docs.map((doc) => doc.osmId)).toEqual(["node/1", "node/2"]);
+    expect(docs.map((doc) => doc.osmId)).toEqual(["node/1", "node/2", "node/3", "node/5"]);
     expect(docs[0].openingHours).toBe("24/7");
   });
 
@@ -80,6 +80,18 @@ describe("refresh", () => {
     api.elements = [element(1)];
     expect(await service.refresh()).toBe(false);
     expect(await fastfoodModel(db).countDocuments()).toBe(2);
+  });
+
+  test("fewer than MIN_KEEP_RATIO of the stored restaurants is a failure", async () => {
+    const ids = (count: number) => Array.from({ length: count }, (_, index) => element(index + 1));
+    api.elements = ids(10);
+    expect(await service.refresh()).toBe(true);
+    api.elements = ids(7);
+    expect(await service.refresh()).toBe(false);
+    expect(await fastfoodModel(db).countDocuments()).toBe(10);
+    api.elements = ids(8);
+    expect(await service.refresh()).toBe(true);
+    expect(await fastfoodModel(db).countDocuments()).toBe(8);
   });
 });
 

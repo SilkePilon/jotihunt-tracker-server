@@ -8,6 +8,8 @@ import { serviceSlot } from "../utils/service-slot";
 
 /** A refresh with fewer restaurants than this is a truncated or broken answer: keep the old data */
 export const MIN_RESTAURANTS = 100;
+/** A refresh with fewer than this share of the stored restaurants is a partial answer: keep the old data */
+export const MIN_KEEP_RATIO = 0.8;
 export const REFRESH_AFTER_MS = 24 * 60 * 60 * 1000;
 const CHECK_EVERY_MS = 60 * 60 * 1000;
 /** The list's intervals start at "now"; recomputing them every 10 minutes is plenty for an open/closed status */
@@ -88,6 +90,11 @@ export class FastfoodService {
     }
     if (restaurants.length < this.minCount) {
       this.options.logger.warn(`Fastfood refresh got only ${restaurants.length} restaurants, keeping the old data`);
+      return false;
+    }
+    const stored = await this.model.countDocuments();
+    if (restaurants.length < stored * MIN_KEEP_RATIO) {
+      this.options.logger.warn(`Fastfood refresh got only ${restaurants.length} restaurants (had ${stored}), keeping the old data`);
       return false;
     }
     await this.model.bulkWrite(restaurants.map((restaurant) => ({ replaceOne: { filter: { osmId: restaurant.osmId }, replacement: restaurant, upsert: true } })));

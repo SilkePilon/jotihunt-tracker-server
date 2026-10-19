@@ -43,8 +43,10 @@ export class OverpassClient implements FastfoodApi {
       await response.body?.cancel();
       throw new Error(`answered ${response.status}`);
     }
-    const body = (await response.json()) as { elements?: unknown };
+    const body = (await response.json()) as { elements?: unknown; remark?: unknown };
     if (!Array.isArray(body.elements)) throw new Error("answered no elements");
+    // Under load Overpass answers 200 with a partial result and a remark like "runtime error: Query timed out ..."
+    if (typeof body.remark === "string" && /error/i.test(body.remark)) throw new Error(`answered a partial result (${body.remark})`);
     return body.elements as OverpassElement[];
   }
 }
