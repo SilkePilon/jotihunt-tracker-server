@@ -6,6 +6,7 @@ import { INVITE_EXPIRY_KEYS, INVITE_MAX_USES } from "../auth/invites";
 import * as buildingsController from "../controllers/buildings.controller";
 import * as jotiboardController from "../controllers/jotiboard.controller";
 import * as life360Controller from "../controllers/life360.controller";
+import * as routerAdminController from "../controllers/router-admin.controller";
 import * as notificationsController from "../controllers/notifications.controller";
 import * as telegramController from "../controllers/telegram.controller";
 import * as trackerController from "../controllers/tracker.controller";
@@ -123,6 +124,10 @@ router.post(
   buildingsController.prefetch,
 );
 router.delete("/buildings", buildingsController.clear);
+
+// Routed fox trails: status and rebuild of the router (GraphHopper)
+router.get("/router", routerAdminController.getRouterStatus);
+router.post("/router/rebuild", routerAdminController.rebuildRouter);
 router.delete("/users/:id", validate(deleteValidator), adminController.deleteUser);
 router.put("/users/:id", validate(updateValidator), adminController.updateUser);
 router.put(

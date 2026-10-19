@@ -36,6 +36,8 @@ const MarkerSchema = new mongoose.Schema({
   externalId: {
     type: String,
   },
+  /** Manual trail mode of the leg that ends at this marker (unset = automatic) */
+  legMode: { type: String, enum: ["walk", "car"], required: false },
 });
 
 MarkerSchema.index({ area: 1, time: 1 }, { unique: true, partialFilterExpression: { type: "hint" } });

@@ -1,0 +1,157 @@
+import { describe, expect, test } from "bun:test";
+import { classifyLegs, statusIntervals, swapWindowsBetween, type LegInput, type StatusEvent } from "./trail-legs";
+
+const t = (hhmm: string, day = "2026-10-17") => new Date(`${day}T${hhmm}:00+02:00`);
+const A: [number, number] = [5.911, 51.985];
+const B: [number, number] = [5.95, 52.0];
+let n = 0;
+const leg = (from: Date, to: Date, walkMin: number | null, extra: Partial<LegInput> = {}): LegInput => ({
+  fromId: `m${n}`, toId: `m${++n}`, from, to, fromCoord: A, toCoord: B, walkDurationS: walkMin === null ? null : walkMin * 60, ...extra,
+});
+
+describe("statusIntervals", () => {
+  test("each event lasts until the next", () => {
+    const events: StatusEvent[] = [{ status: "green", at: t("09:00") }, { status: "red", at: t("14:00") }, { status: "green", at: t("14:40") }];
+    expect(statusIntervals(events, t("16:00")).map((i) => [i.status, i.from.toISOString(), i.to.toISOString()])).toEqual([
+      ["green", t("09:00").toISOString(), t("14:00").toISOString()],
+      ["red", t("14:00").toISOString(), t("14:40").toISOString()],
+      ["green", t("14:40").toISOString(), t("16:00").toISOString()],
+    ]);
+  });
+});
+
+describe("classifyLegs", () => {
+  test("plain walking leg", () => {
+    const [l] = classifyLegs([leg(t("10:00"), t("11:00"), 40)], []);
+    expect([l.mode, l.reason, l.night, l.manual]).toEqual(["walk", "walk", false, false]);
+  });
+
+  test("red overlap is the big move", () => {
+    const events = [{ status: "green", at: t("09:00") }, { status: "red", at: t("14:05") }, { status: "green", at: t("14:35") }];
+    const [l] = classifyLegs([leg(t("14:00"), t("14:40"), 30)], events);
+    expect([l.mode, l.reason]).toEqual(["car", "status-red"]);
+    expect(l.redFrom?.toISOString()).toBe(t("14:05").toISOString());
+  });
+
+  test("swap red is not a big move", () => {
+    const events = [{ status: "green", at: t("20:00") }, { status: "red", at: t("22:45") }, { status: "green", at: t("23:15") }];
+    const [l] = classifyLegs([leg(t("22:30"), t("23:30"), 50)], events);
+    expect(l.mode).toBe("walk");
+  });
+
+  test("orange is an extra move", () => {
+    const events = [{ status: "green", at: t("09:00") }, { status: "orange", at: t("15:10") }, { status: "green", at: t("15:30") }];
+    const [l] = classifyLegs([leg(t("15:00"), t("15:45"), 30)], events);
+    expect([l.mode, l.reason]).toEqual(["extra", "status-orange"]);
+  });
+
+  test("too fast to walk, only the worst per half", () => {
+    const legs = [leg(t("10:00"), t("10:30"), 60), leg(t("11:00"), t("11:30"), 150), leg(t("12:00"), t("13:00"), 50)];
+    const out = classifyLegs(legs, []);
+    expect(out.map((l) => [l.mode, l.reason])).toEqual([["walk", "walk"], ["car", "too-fast"], ["walk", "walk"]]);
+  });
+
+  test("one per half: the second half gets its own", () => {
+    const legs = [leg(t("10:00"), t("10:30"), 120), leg(t("10:00", "2026-10-18"), t("10:30", "2026-10-18"), 120)];
+    expect(classifyLegs(legs, []).map((l) => l.mode)).toEqual(["car", "car"]);
+  });
+
+  test("red beats too-fast in the same half", () => {
+    const events = [{ status: "green", at: t("09:00") }, { status: "red", at: t("15:00") }, { status: "green", at: t("15:20") }];
+    const legs = [leg(t("10:00"), t("10:30"), 200), leg(t("14:50"), t("15:30"), 30)];
+    expect(classifyLegs(legs, events).map((l) => [l.mode, l.reason])).toEqual([["walk", "walk"], ["car", "status-red"]]);
+  });
+
+  test("manual override wins and takes the half's big move", () => {
+    const legs = [leg(t("10:00"), t("10:30"), 200), leg(t("12:00"), t("13:00"), 10, { override: "car" }), leg(t("14:00"), t("14:20"), 10, { override: "walk" })];
+    expect(classifyLegs(legs, []).map((l) => [l.mode, l.reason, l.manual])).toEqual([
+      ["walk", "walk", false], ["car", "manual", true], ["walk", "manual", true],
+    ]);
+  });
+
+  test("night flag", () => {
+    const [l] = classifyLegs([leg(t("20:00"), t("21:00"), 40)], []);
+    expect(l.night).toBe(true);
+  });
+
+  test("unknown walking duration never triggers the speed check", () => {
+    const [l] = classifyLegs([leg(t("10:00"), t("10:05"), null)], []);
+    expect(l.mode).toBe("walk");
+  });
+
+  describe("long red period", () => {
+    const events = [{ status: "green", at: t("09:00", "2026-10-16") }, { status: "red", at: t("20:00", "2026-10-16") }, { status: "green", at: t("10:00", "2026-10-19") }];
+
+    test("swap window in the middle of a multi-day red is not red", () => {
+      const [l] = classifyLegs([leg(t("22:50", "2026-10-17"), t("23:10", "2026-10-17"), 10)], events);
+      expect([l.mode, l.reason]).toEqual(["walk", "walk"]);
+    });
+
+    test("daytime leg in the middle of a multi-day red is still red", () => {
+      const [l] = classifyLegs([leg(t("14:00", "2026-10-17"), t("15:00", "2026-10-17"), 40)], events);
+      expect([l.mode, l.reason]).toEqual(["car", "status-red"]);
+    });
+
+    test("autumn DST day (25 h): leg inside the swap window is not red and terminates", () => {
+      const ev = [{ status: "green", at: new Date("2026-10-24T09:00:00+02:00") }, { status: "red", at: new Date("2026-10-24T20:00:00+02:00") }, { status: "green", at: new Date("2026-10-26T10:00:00+01:00") }];
+      const [l] = classifyLegs([leg(new Date("2026-10-25T22:50:00+01:00"), new Date("2026-10-25T23:10:00+01:00"), 10)], ev);
+      expect([l.mode, l.reason]).toEqual(["walk", "walk"]);
+    });
+
+    test("spring DST day (23 h): leg inside the swap window is not red", () => {
+      const ev = [{ status: "green", at: new Date("2027-03-27T09:00:00+01:00") }, { status: "red", at: new Date("2027-03-27T20:00:00+01:00") }, { status: "green", at: new Date("2027-03-29T10:00:00+02:00") }];
+      const [l] = classifyLegs([leg(new Date("2027-03-28T22:50:00+02:00"), new Date("2027-03-28T23:10:00+02:00"), 10)], ev);
+      expect([l.mode, l.reason]).toEqual(["walk", "walk"]);
+    });
+  });
+
+  describe("swapWindowsBetween", () => {
+    test("steps by half across the autumn change with strictly increasing starts", () => {
+      const ws = swapWindowsBetween(new Date("2026-10-24T12:00:00+02:00"), new Date("2026-10-27T12:00:00+01:00"));
+      expect(ws.length).toBeGreaterThanOrEqual(4);
+      for (let i = 1; i < ws.length; i++) expect(ws[i].start.getTime()).toBeGreaterThan(ws[i - 1].start.getTime());
+      expect(ws.every((w) => w.start < new Date("2026-10-27T12:00:00+01:00"))).toBe(true);
+    });
+  });
+
+  test("markers with the same time are never too fast", () => {
+    const [l] = classifyLegs([leg(t("10:00"), t("10:00"), 40)], []);
+    expect([l.mode, l.reason]).toEqual(["walk", "walk"]);
+  });
+
+  test("hint jitter (5 min, short hop) loses to a real long move in the same half", () => {
+    const near: [number, number] = [5.915, 51.986]; // ~0.3 km from A
+    const far: [number, number] = [6.1, 52.05]; // ~15 km from A
+    const legs = [
+      leg(t("10:00"), t("10:05"), 4, { toCoord: near }), // huge ratio, but tiny and quick
+      leg(t("11:00"), t("12:00"), 180, { toCoord: far }),
+    ];
+    expect(classifyLegs(legs, []).map((l) => [l.mode, l.reason])).toEqual([["walk", "walk"], ["car", "too-fast"]]);
+  });
+
+  test("short distance never counts as too fast, even when slow to walk", () => {
+    const near: [number, number] = [5.93, 51.99]; // ~1.4 km
+    const [l] = classifyLegs([leg(t("10:00"), t("10:15"), 60, { toCoord: near })], []);
+    expect(l.mode).toBe("walk");
+  });
+
+  test("too-fast ranking uses excess time, not the ratio", () => {
+    // ratio 3 but 20 min excess vs ratio 2 but 60 min excess
+    const legs = [leg(t("10:00"), t("10:10"), 30), leg(t("12:00"), t("13:00"), 120)];
+    expect(classifyLegs(legs, []).map((l) => l.mode)).toEqual(["walk", "car"]);
+  });
+
+  test("a leg crossing the swap is a walking leg, even when red or too fast", () => {
+    const events = [{ status: "green", at: t("09:00") }, { status: "red", at: t("21:00") }, { status: "green", at: t("23:30", "2026-10-18") }];
+    const [l] = classifyLegs([leg(t("21:30"), t("23:45"), 600)], events);
+    expect([l.mode, l.reason]).toEqual(["walk", "walk"]);
+    const [m] = classifyLegs([leg(t("21:30"), t("23:45"), 600, { override: "car" })], events);
+    expect([m.mode, m.reason, m.manual]).toEqual(["car", "manual", true]);
+  });
+
+  test("red overlap shorter than a minute is ignored", () => {
+    const short = [{ status: "green", at: t("09:00") }, { status: "red", at: t("14:00") }, { status: "green", at: new Date(t("14:00").getTime() + 30_000) }];
+    const [l] = classifyLegs([leg(t("13:50"), t("14:10"), 10)], short);
+    expect([l.mode, l.reason]).toEqual(["walk", "walk"]);
+  });
+});

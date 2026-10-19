@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import type { NextFunction, Request, Response } from "express";
 import mongoose from "mongoose";
@@ -19,6 +19,13 @@ import {
 } from "./database-switch";
 import express from "express";
 import { activeWorkCount, currentGeneration, isDemoMode, runTracked, skipInDemoMode } from "./demo-mode";
+
+/**
+ * Switching on builds a fresh demo database with the indexes of every model registered in this process (~0.15 s per
+ * model on the test Mongo; ~5 s in a full run, where every model is imported), so bun's 5 s default is too tight.
+ */
+const SWITCH_TIMEOUT_MS = 30_000;
+setDefaultTimeout(SWITCH_TIMEOUT_MS);
 
 describe("demo database name", () => {
   test("appends -demo to the database name", () => {
@@ -106,12 +113,12 @@ describe("switching between the real and the demo database", () => {
     await dropTestDatabases();
     await initDemoMode(realUri, { drainTimeoutMs: 1_000, abandonedRequestMs: 300, logger: testLogger });
     expect(mongoose.connection.name).toBe(realName);
-  });
+  }, SWITCH_TIMEOUT_MS);
 
   afterAll(async () => {
     await closeDemoMode();
     await dropTestDatabases();
-  });
+  }, SWITCH_TIMEOUT_MS);
 
   test("real data survives an on/off cycle, users are copied and demo data is gone after off", async () => {
     const user = await User.create({ name: "HQ", admin: true });

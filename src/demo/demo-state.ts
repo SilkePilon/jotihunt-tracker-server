@@ -1,4 +1,5 @@
 import mongoose, { type Connection, type Model } from "mongoose";
+import type { NightArea } from "../services/routes/graphhopper.client";
 
 /** Persisted demo mode switch; one document (key "demo") in the `settings` collection of the REAL database. */
 export interface DemoStateDoc {
@@ -64,6 +65,28 @@ const HuntableAreasSettingSchema = new mongoose.Schema<HuntableAreasSettingDoc>(
 
 const HUNTABLE_AREAS_KEY = "huntable-areas";
 
+/** Routed trails: on/off + admin night areas; one document (key "night-areas") in the same `settings` collection. */
+export interface NightAreasSettingDoc {
+  key: string;
+  enabled: boolean;
+  areas: NightArea[];
+  updatedAt?: Date | null;
+  updatedBy?: string | null;
+}
+
+const NightAreasSettingSchema = new mongoose.Schema<NightAreasSettingDoc>(
+  {
+    key: { type: String, required: true, unique: true },
+    enabled: { type: Boolean, required: true, default: true },
+    areas: { type: [mongoose.Schema.Types.Mixed] as unknown as NightArea[], required: true, default: [] },
+    updatedAt: { type: Date, default: null },
+    updatedBy: { type: String, default: null },
+  },
+  { collection: "settings", versionKey: false },
+);
+
+const NIGHT_AREAS_KEY = "night-areas";
+
 
 /**
  * Store for the DemoState document on a dedicated connection to the real database, so it stays reachable whichever
@@ -77,6 +100,8 @@ export interface DemoStateStore {
   writePrediction(setting: Omit<PredictionSettingDoc, "key">): Promise<void>;
   readHuntableAreas(): Promise<HuntableAreasSettingDoc | null>;
   writeHuntableAreas(setting: Omit<HuntableAreasSettingDoc, "key">): Promise<void>;
+  readNightAreas(): Promise<NightAreasSettingDoc | null>;
+  writeNightAreas(setting: Omit<NightAreasSettingDoc, "key">): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -85,6 +110,7 @@ export async function openDemoStateStore(realUri: string, options: mongoose.Conn
   const DemoState: Model<DemoStateDoc> = connection.model<DemoStateDoc>("DemoState", DemoStateSchema);
   const PredictionSetting: Model<PredictionSettingDoc> = connection.model<PredictionSettingDoc>("PredictionSetting", PredictionSettingSchema);
   const HuntableAreasSetting: Model<HuntableAreasSettingDoc> = connection.model<HuntableAreasSettingDoc>("HuntableAreasSetting", HuntableAreasSettingSchema);
+  const NightAreasSetting: Model<NightAreasSettingDoc> = connection.model<NightAreasSettingDoc>("NightAreasSetting", NightAreasSettingSchema);
   return {
     connection,
     async read() {
@@ -104,6 +130,12 @@ export async function openDemoStateStore(realUri: string, options: mongoose.Conn
     },
     async writeHuntableAreas(setting) {
       await HuntableAreasSetting.updateOne({ key: HUNTABLE_AREAS_KEY }, { $set: { ...setting, key: HUNTABLE_AREAS_KEY } }, { upsert: true });
+    },
+    async readNightAreas() {
+      return NightAreasSetting.findOne({ key: NIGHT_AREAS_KEY }).lean<NightAreasSettingDoc>();
+    },
+    async writeNightAreas(setting) {
+      await NightAreasSetting.updateOne({ key: NIGHT_AREAS_KEY }, { $set: { ...setting, key: NIGHT_AREAS_KEY } }, { upsert: true });
     },
     async close() {
       await connection.close();

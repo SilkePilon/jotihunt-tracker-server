@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { Area } from "../models/area.model";
+import { AreaStatusEvent } from "../models/area-status-event.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { parseAreasAnswer, storeAreas } from "./jotihunt-areas.cron";
 
@@ -84,5 +85,18 @@ describe("storeAreas", () => {
   test("the area name is unique", async () => {
     await Area.create({ name: "Alpha", status: "red", updatedAt: new Date() });
     await expect(Area.create({ name: "Alpha", status: "green", updatedAt: new Date() })).rejects.toMatchObject({ code: 11000 });
+  });
+});
+
+describe("status history", () => {
+  test("records only changes", async () => {
+    await storeAreas([{ name: "Alpha", status: "green", updatedAt: new Date("2026-10-17T10:00:00Z") }]);
+    await storeAreas([{ name: "Alpha", status: "green", updatedAt: new Date("2026-10-17T10:00:00Z") }]);
+    await storeAreas([{ name: "Alpha", status: "red", updatedAt: new Date("2026-10-17T12:00:00Z") }]);
+    const events = await AreaStatusEvent.find({ area: "Alpha" }).sort({ at: 1 }).lean();
+    expect(events.map((e) => [e.status, e.at.toISOString()])).toEqual([
+      ["green", "2026-10-17T10:00:00.000Z"],
+      ["red", "2026-10-17T12:00:00.000Z"],
+    ]);
   });
 });
