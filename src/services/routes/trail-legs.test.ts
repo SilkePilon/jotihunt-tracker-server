@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classifyLegs, statusIntervals, type LegInput, type StatusEvent } from "./trail-legs";
+import { classifyLegs, statusIntervals, swapWindowsBetween, type LegInput, type StatusEvent } from "./trail-legs";
 
 const t = (hhmm: string, day = "2026-10-17") => new Date(`${day}T${hhmm}:00+02:00`);
 const A: [number, number] = [5.911, 51.985];
@@ -78,6 +78,7 @@ describe("classifyLegs", () => {
     const [l] = classifyLegs([leg(t("10:00"), t("10:05"), null)], []);
     expect(l.mode).toBe("walk");
   });
+
   describe("long red period", () => {
     const events = [{ status: "green", at: t("09:00", "2026-10-16") }, { status: "red", at: t("20:00", "2026-10-16") }, { status: "green", at: t("10:00", "2026-10-19") }];
 
@@ -89,6 +90,27 @@ describe("classifyLegs", () => {
     test("daytime leg in the middle of a multi-day red is still red", () => {
       const [l] = classifyLegs([leg(t("14:00", "2026-10-17"), t("15:00", "2026-10-17"), 40)], events);
       expect([l.mode, l.reason]).toEqual(["car", "status-red"]);
+    });
+
+    test("autumn DST day (25 h): leg inside the swap window is not red and terminates", () => {
+      const ev = [{ status: "green", at: new Date("2026-10-24T09:00:00+02:00") }, { status: "red", at: new Date("2026-10-24T20:00:00+02:00") }, { status: "green", at: new Date("2026-10-26T10:00:00+01:00") }];
+      const [l] = classifyLegs([leg(new Date("2026-10-25T22:50:00+01:00"), new Date("2026-10-25T23:10:00+01:00"), 10)], ev);
+      expect([l.mode, l.reason]).toEqual(["walk", "walk"]);
+    });
+
+    test("spring DST day (23 h): leg inside the swap window is not red", () => {
+      const ev = [{ status: "green", at: new Date("2027-03-27T09:00:00+01:00") }, { status: "red", at: new Date("2027-03-27T20:00:00+01:00") }, { status: "green", at: new Date("2027-03-29T10:00:00+02:00") }];
+      const [l] = classifyLegs([leg(new Date("2027-03-28T22:50:00+02:00"), new Date("2027-03-28T23:10:00+02:00"), 10)], ev);
+      expect([l.mode, l.reason]).toEqual(["walk", "walk"]);
+    });
+  });
+
+  describe("swapWindowsBetween", () => {
+    test("steps by half across the autumn change with strictly increasing starts", () => {
+      const ws = swapWindowsBetween(new Date("2026-10-24T12:00:00+02:00"), new Date("2026-10-27T12:00:00+01:00"));
+      expect(ws.length).toBeGreaterThanOrEqual(4);
+      for (let i = 1; i < ws.length; i++) expect(ws[i].start.getTime()).toBeGreaterThan(ws[i - 1].start.getTime());
+      expect(ws.every((w) => w.start < new Date("2026-10-27T12:00:00+01:00"))).toBe(true);
     });
   });
 

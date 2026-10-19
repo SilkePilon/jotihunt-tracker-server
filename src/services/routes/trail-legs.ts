@@ -24,12 +24,22 @@ function overlap(a: Interval, b: Interval): Interval | null {
   return to > from ? { from: new Date(from), to: new Date(to) } : null;
 }
 
-const DAY_MS = 24 * 3600 * 1000;
+/** Swap windows starting before `to`, beginning with the one of the half containing `from`. Stepping 36 h from a window start always lands in the next half, even on 23 h / 25 h DST days. */
+export function swapWindowsBetween(from: Date, to: Date): { start: Date; end: Date }[] {
+  const windows: { start: Date; end: Date }[] = [];
+  let w = swapWindow(from);
+  while (w.start < to) {
+    windows.push(w);
+    const next = swapWindow(new Date(w.start.getTime() + 36 * 3600_000));
+    if (next.start.getTime() <= w.start.getTime()) break;
+    w = next;
+  }
+  return windows;
+}
 
 /** Parts of `interval` outside every swap window it touches. */
 function withoutSwaps(interval: Interval): Interval[] {
-  const windows: { start: Date; end: Date }[] = [];
-  for (let w = swapWindow(interval.from); w.start < interval.to; w = swapWindow(new Date(w.end.getTime() + DAY_MS))) windows.push(w);
+  const windows = swapWindowsBetween(interval.from, interval.to);
   let parts: Interval[] = [interval];
   for (const w of windows) {
     parts = parts.flatMap((part) => {
