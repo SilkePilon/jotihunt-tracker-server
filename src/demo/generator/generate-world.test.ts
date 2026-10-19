@@ -75,7 +75,8 @@ beforeAll(async () => {
   });
   installDemoWorld();
   await initDemoMode(realUri);
-});
+  // initDemoMode builds the indexes of every registered model in the freshly dropped database (~5 s in a full run)
+}, 30_000);
 
 afterAll(async () => {
   await closeDemoMode();
@@ -86,7 +87,7 @@ afterAll(async () => {
   if (previousUploads === undefined) delete process.env.UPLOADS_DIR;
   else process.env.UPLOADS_DIR = previousUploads;
   await rm(uploads, { recursive: true, force: true });
-});
+}, 30_000);
 
 describe("demo world generator (full run)", () => {
   test("switching on fills the demo database; switching off leaves the real one untouched", async () => {
