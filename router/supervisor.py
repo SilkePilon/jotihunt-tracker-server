@@ -92,7 +92,7 @@ def build():
     out = run_captured(["python3", "/app/prepare_night.py", cut_pbf, night_pbf, path("report.json")])
     report = json.loads(out.stdout.strip().splitlines()[-1])
     shutil.rmtree(new_graph, ignore_errors=True)
-    subprocess.run(["java", f"-Xmx{IMPORT_HEAP}", f"-Ddw.graphhopper.graph.location={new_graph}", f"-Ddw.graphhopper.datareader.file={night_pbf}", "-jar", JAR, "import", CONFIG], check=True)
+    run_captured(["java", f"-Xmx{IMPORT_HEAP}", f"-Ddw.graphhopper.graph.location={new_graph}", f"-Ddw.graphhopper.datareader.file={night_pbf}", "-jar", JAR, "import", CONFIG])
     stop_server()
     shutil.rmtree(graph_old, ignore_errors=True)
     had_old = os.path.isdir(graph_cache)
@@ -181,18 +181,27 @@ class Admin(BaseHTTPRequestHandler):
         pass
 
 
+def weekly_tick(last):
+    """One weekly/watchdog check; returns the date of the last weekly rebuild."""
+    now = datetime.datetime.now(TZ)
+    if now.weekday() == 0 and now.hour == 3 and last != now.date():
+        last = now.date()
+        rebuild_async()
+    with state_lock:
+        building = state["building"]
+    if not building and (server_proc is None or server_proc.poll() is not None) and os.path.isdir(path("graph-cache")):
+        log("GraphHopper is not running, restarting")
+        start_server()
+    return last
+
+
 def weekly():
     last = None
     while True:
-        now = datetime.datetime.now(TZ)
-        if now.weekday() == 0 and now.hour == 3 and last != now.date():
-            last = now.date()
-            rebuild_async()
-        with state_lock:
-            building = state["building"]
-        if not building and (server_proc is None or server_proc.poll() is not None) and os.path.isdir(path("graph-cache")):
-            log("GraphHopper is not running, restarting")
-            start_server()
+        try:
+            last = weekly_tick(last)
+        except Exception as error:  # noqa: BLE001 - the watchdog thread must never die
+            log(f"weekly/watchdog check failed: {error}")
         time.sleep(60)
 
 

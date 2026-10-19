@@ -34,6 +34,12 @@ class TagRules(unittest.TestCase):
         out = rewrite_night({"highway": "track", "access:conditional": "no @ (sunset-sunrise)"})
         self.assertEqual(out, {"highway": "track", NIGHT_TAG: NIGHT_VALUE})
 
+    def test_rewrite_keeps_access_closed_for_vehicles(self):
+        out = rewrite_night({"highway": "track", "access": "no", "access:conditional": "permissive @ (sunrise-sunset)"})
+        self.assertEqual(out, {"highway": "track", "access": "no", "foot": "permissive", NIGHT_TAG: NIGHT_VALUE})
+        out = rewrite_night({"highway": "path", "access": "private", "foot": "no", "foot:conditional": "yes @ (sunrise-sunset)"})
+        self.assertEqual(out, {"highway": "path", "access": "private", "foot": "permissive", NIGHT_TAG: NIGHT_VALUE})
+
     def test_fallback_candidate(self):
         self.assertTrue(is_fallback_candidate({"highway": "path"}))
         self.assertTrue(is_fallback_candidate({"highway": "track", "tracktype": "grade3"}))

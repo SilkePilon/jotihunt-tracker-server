@@ -43,10 +43,10 @@ def is_night_closed(tags: dict) -> bool:
 
 def rewrite_night(tags: dict) -> dict:
     out = {k: v for k, v in tags.items() if k not in CONDITIONAL_KEYS and k != "opening_hours"}
-    for key in ("foot", "access"):
-        if out.get(key) in CLOSED_BASE:
-            out.pop(key)
-            out["foot"] = "permissive"
+    # Open by day for walkers only: GraphHopper's foot parser reads foot before access, so foot=permissive is
+    # enough. access=no/private stays, so cars and bikes are still kept out.
+    if out.get("foot") in CLOSED_BASE or (out.get("access") in CLOSED_BASE and "foot" not in out):
+        out["foot"] = "permissive"
     out[NIGHT_TAG] = NIGHT_VALUE
     return out
 
@@ -72,8 +72,8 @@ class ReserveCollector(osmium.SimpleHandler):
             return
         try:
             self.polygons.append(shapely_wkb.loads(self.factory.create_multipolygon(a), hex=True))
-        except RuntimeError:
-            pass  # broken multipolygon
+        except Exception:  # noqa: BLE001 - one broken reserve must not fail the whole rebuild
+            pass
 
 
 class Rewriter(osmium.SimpleHandler):
