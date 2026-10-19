@@ -97,6 +97,20 @@ describe("refreshIfStale", () => {
   });
 });
 
+describe("start", () => {
+  test("a failing background check is logged, not left unhandled", async () => {
+    const errors: string[] = [];
+    const logged = new FastfoodService({ connection: db, client: api, logger: { ...silent, error: (message: string) => errors.push(message) } });
+    logged.refreshIfStale = () => Promise.reject(new Error("mongo down"));
+    logged.start();
+    logged.stop();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("Fastfood refresh check failed");
+    expect(errors[0]).toContain("mongo down");
+  });
+});
+
 describe("list", () => {
   test("adds intervals from now; unknown hours have none", async () => {
     api.elements = [element(1, "Mo-Su 10:00-01:00"), element(2)];

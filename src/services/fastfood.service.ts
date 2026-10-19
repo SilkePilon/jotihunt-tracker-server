@@ -47,9 +47,14 @@ export class FastfoodService {
 
   /** Refresh now when the data is missing or a day old, then check again every hour. */
   start() {
-    void this.refreshIfStale();
-    this.timer = setInterval(() => void this.refreshIfStale(), CHECK_EVERY_MS);
+    this.checkInBackground();
+    this.timer = setInterval(() => this.checkInBackground(), CHECK_EVERY_MS);
     this.timer.unref?.();
+  }
+
+  /** A failed check (e.g. Mongo down) is logged, never left as an unhandled rejection. */
+  private checkInBackground() {
+    void this.refreshIfStale().catch((error) => this.options.logger.error(`Fastfood refresh check failed: ${errorText(error)}`));
   }
 
   stop() {
