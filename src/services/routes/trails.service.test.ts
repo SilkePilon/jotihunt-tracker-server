@@ -187,4 +187,32 @@ describe("trails service", () => {
     const { trails } = await service.trails();
     expect(trails.features).toHaveLength(2);
   });
+  test("an unroutable leg does not starve the others and is not retried within the TTL", async () => {
+    await Marker.create([
+      { area: "alpha", time: t("10:00"), location: point(5.9, 52.0), type: MarkerType.Hint },
+      { area: "alpha", time: t("11:00"), location: point(5.95, 52.0), type: MarkerType.Hint },
+      { area: "alpha", time: t("12:00"), location: point(6.0, 52.0), type: MarkerType.Hint },
+    ]);
+    const calls: RouteRequest[] = [];
+    const router: Router = {
+      async route(request) {
+        calls.push(request);
+        if (request.from[0] === 5.9) throw new RoutingUnavailableError("Connection between locations not found", { kind: "request" });
+        return { coordinates: [request.from, request.to], distanceM: 1000, durationS: 600 };
+      },
+    };
+    let clock = t("13:00").getTime();
+    const service = createTrailsService({ router, now: () => new Date(clock), maxNewRoutesPerCall: 1 });
+    const first = await service.trails();
+    expect(first.trails.features.map((f) => f.properties.fallback)).toEqual([true, true]);
+    expect(calls).toHaveLength(1);
+    service.invalidate();
+    const second = await service.trails();
+    expect(second.trails.features.map((f) => f.properties.fallback)).toEqual([true, false]);
+    expect(calls).toHaveLength(2); // the failing leg was not retried
+    clock += 11 * 60_000;
+    service.invalidate();
+    await service.trails();
+    expect(calls).toHaveLength(3); // TTL passed: retried
+  });
 });

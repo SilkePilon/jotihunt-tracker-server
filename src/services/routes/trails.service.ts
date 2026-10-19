@@ -3,6 +3,7 @@ import distance from "@turf/distance";
 import { AreaStatusEvent } from "../../models/area-status-event.model";
 import { Marker } from "../../models/marker.model";
 import { RouteLeg } from "../../models/route-leg.model";
+import { logger } from "../../logger";
 import { getRoutesSetting, nightAreasHash, onRoutesSettingChange } from "../../settings/night-areas-setting";
 import { RoutingUnavailableError } from "../prediction/routing";
 import type { NightArea, RouteResult, Router } from "./graphhopper.client";
@@ -20,6 +21,7 @@ export interface TrailsResponse { enabled: boolean; trails: GeoJSON.FeatureColle
 
 const MEMO_MS = 5_000;
 const COOLDOWN_MS = 60_000;
+const UNROUTABLE_RETRY_MS = 10 * 60_000;
 const CACHE_DAYS = 30;
 const MAX_STRAIGHT_KM = 60;
 const CONCURRENCY = 4;
@@ -48,6 +50,8 @@ export function createTrailsService(deps: { router: Router; now?: () => Date; ma
   let inflight: { generation: number; promise: Promise<TrailsResponse> } | null = null;
   let generation = 0;
   let cooldownUntil = 0;
+  /** Legs the router said have no route: key -> time after which we try again. */
+  const unroutable = new Map<string, number>();
 
   const invalidate = () => { memo = null; generation++; };
   onRoutesSettingChange(invalidate);
@@ -70,7 +74,10 @@ export function createTrailsService(deps: { router: Router; now?: () => Date; ma
   async function routeJobs(jobs: Job[], cache: Map<string, CachedRoute>, run: Run) {
     if (now().getTime() < cooldownUntil) run.stopped = true;
     if (run.stopped) return;
-    const queue = uniqueJobs(jobs).filter((job) => !cache.has(job.key) && !tooFar(job.from, job.to)).slice(0, Math.max(0, run.budget));
+    const nowMs = now().getTime();
+    for (const [key, retryAfter] of unroutable) if (retryAfter <= nowMs) unroutable.delete(key);
+    // Skip known-unroutable legs before slicing the budget so they cannot starve the rest
+    const queue = uniqueJobs(jobs).filter((job) => !cache.has(job.key) && !unroutable.has(job.key) && !tooFar(job.from, job.to)).slice(0, Math.max(0, run.budget));
     run.budget -= queue.length;
     const worker = async () => {
       while (!run.stopped && queue.length) {
@@ -79,7 +86,15 @@ export function createTrailsService(deps: { router: Router; now?: () => Date; ma
         try {
           route = await routeOne(job, run.nightAreas);
         } catch (error) {
-          if (error instanceof RoutingUnavailableError && error.kind === "request") continue; // no route: stays straight
+          if (error instanceof RoutingUnavailableError && error.kind === "request") {
+            unroutable.set(job.key, now().getTime() + UNROUTABLE_RETRY_MS); // no route: stays straight
+            continue;
+          }
+          if (!run.stopped) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (error instanceof RoutingUnavailableError) logger.warn(`Router unavailable, pausing routing for ${COOLDOWN_MS / 1000}s: ${message}`);
+            else logger.error(`Unexpected router error, pausing routing for ${COOLDOWN_MS / 1000}s: ${message}`);
+          }
           run.stopped = true;
           cooldownUntil = now().getTime() + COOLDOWN_MS;
           continue;
@@ -132,12 +147,15 @@ export function createTrailsService(deps: { router: Router; now?: () => Date; ma
 
     // Walking routes for every leg first (the speed check needs their duration)
     const walkJobs = allLegs.map(walkJob);
-    const keys = [...new Set([...walkJobs, ...allLegs.map(carJob)].map((j) => j.key))];
-    const cache = new Map<string, CachedRoute>(
-      (await RouteLeg.find({ key: { $in: keys } }).lean()).map((doc) => [
-        doc.key, { coordinates: doc.coordinates as unknown as Coord[], distanceM: doc.distanceM, durationS: doc.durationS, nightFallback: doc.nightFallback ?? false },
-      ]),
-    );
+    const cache = new Map<string, CachedRoute>();
+    const loadCached = async (keys: string[]) => {
+      const wanted = [...new Set(keys)].filter((key) => !cache.has(key));
+      if (!wanted.length) return;
+      for (const doc of await RouteLeg.find({ key: { $in: wanted } }).lean()) {
+        cache.set(doc.key, { coordinates: doc.coordinates as unknown as Coord[], distanceM: doc.distanceM, durationS: doc.durationS, nightFallback: doc.nightFallback ?? false });
+      }
+    };
+    await loadCached(walkJobs.map((j) => j.key));
     await routeJobs(walkJobs, cache, run);
 
     const carNeeded: Job[] = [];
@@ -148,6 +166,7 @@ export function createTrailsService(deps: { router: Router; now?: () => Date; ma
       for (const leg of classified) if (leg.mode !== "walk") carNeeded.push(carJob(leg));
       return { area, classified };
     });
+    await loadCached(carNeeded.map((j) => j.key));
     await routeJobs(carNeeded, cache, run);
 
     const features: TrailsResponse["trails"]["features"] = [];
