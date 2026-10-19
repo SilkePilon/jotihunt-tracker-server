@@ -46,6 +46,9 @@ export function scheduleCrons() {
   if (!process.env.ORS_API_KEY) {
     logger.warn("ORS_API_KEY not set, fox prediction uses straight-line walking times");
   }
+  if (!process.env.ROUTER_URL) {
+    logger.warn("ROUTER_URL not set, fox trails are drawn as straight lines");
+  }
 
   // Summaries of news and assignments (Gemini): one per run, also for demo articles
   cron.schedule("5,25,45 * * * * *", reportCronErrors("article-summaries", summarizeArticles), { name: "article-summaries", noOverlap: true });
