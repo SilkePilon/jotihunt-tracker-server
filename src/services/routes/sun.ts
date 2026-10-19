@@ -46,7 +46,7 @@ export function amsterdamHalf(time: Date): string {
   return amsterdamDate(new Date(time.getTime() + HOUR_MS));
 }
 
-/** The 22:45-23:15 swap window that ends the half of `time` (all teams red, not a big move). */
+/** The 22:45-23:15 swap window that starts the half of `time` (all teams red, not a big move). */
 export function swapWindow(time: Date): { start: Date; end: Date } {
   const half = amsterdamHalf(time);
   const previousDay = amsterdamDate(new Date(amsterdamMoment(half, 12, 0).getTime() - 24 * HOUR_MS));
