@@ -16,6 +16,7 @@ import {
   readControlCollection,
   releaseSwitchWork,
   showEdition,
+  shownEdition,
   SwitchBusyError,
   updateEditionHuntTimes,
 } from "./database-switch";
@@ -109,6 +110,18 @@ describe("initEditions", () => {
     expect(registry).toMatchObject({ liveYear: 2027, shownYear: 2026 });
     expect(mongoose.connection.name).toBe(name);
     expect(isArchiveShown()).toBe(true);
+  });
+
+  test("shownEdition: null before init, then the shown edition (a copy)", async () => {
+    expect(shownEdition()).toBeNull();
+    await initEditions(uri);
+    await createEdition();
+    expect(shownEdition()?.year).toBe(2027);
+    await showEdition(2026);
+    const shown = shownEdition()!;
+    expect(shown).toMatchObject({ year: 2026, dbName: name });
+    shown.huntStart = "mutated";
+    expect(shownEdition()?.huntStart).toBeNull();
   });
 
   test("getRegistry returns a copy", async () => {

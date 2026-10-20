@@ -217,7 +217,7 @@ export const dropsSession = (error: unknown) => error instanceof Error && /login
 
 export default async function scrapeJotihuntWebsite() {
   if (skipWhenArchive("jotihunt-scraper", (message) => logger.debug(message))) {
-    // No need to keep the website session while demo mode is on
+    // No need to keep the website session while an archive is shown
     await closeScraper();
     return;
   }
@@ -261,7 +261,7 @@ export default async function scrapeJotihuntWebsite() {
     markSyncFailure(error, new Date());
     logger.error("(CRON) Error storing hunts in database:", error);
   } finally {
-    // A demo switch skips the store: never leave the card spinning
+    // An edition switch skips the store: never leave the card spinning
     markSyncSettled();
   }
 }

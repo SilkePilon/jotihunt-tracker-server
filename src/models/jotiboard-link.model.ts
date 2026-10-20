@@ -1,8 +1,8 @@
 import mongoose, { type Connection, type Model } from "mongoose";
 
 /**
- * The linked Jotiboard account (one document, key "jotiboard") in the REAL database, like the Life360 link: it stays while
- * demo mode swaps the default connection. Only the Firebase refresh token is kept, AES-256-GCM encrypted with
+ * The linked Jotiboard account (one document, key "jotiboard") in the control database, like the Life360 link: it stays while
+ * an edition switch swaps the default connection. Only the Firebase refresh token is kept, AES-256-GCM encrypted with
  * JOTIBOARD_SESSION_KEY; the password is never stored. The ciphertext is never logged or returned by the API.
  */
 export interface JotiboardLinkDoc {
@@ -40,7 +40,7 @@ const JotiboardLinkSchema = new mongoose.Schema<JotiboardLinkDoc>(
   { collection: "jotiboardlinks", versionKey: false },
 );
 
-/** The model on `connection` (the demo state store's connection to the real database; the test connection in tests). */
+/** The model on `connection` (the control store's connection to the control database; the test connection in tests). */
 export function jotiboardLinkModel(connection: Connection): Model<JotiboardLinkDoc> {
   return (connection.models.JotiboardLink as Model<JotiboardLinkDoc> | undefined) ?? connection.model<JotiboardLinkDoc>("JotiboardLink", JotiboardLinkSchema);
 }

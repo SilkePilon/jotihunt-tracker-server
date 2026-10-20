@@ -55,7 +55,7 @@ export class EditionSwitchedError extends Error {
   }
 }
 
-/** Throw a EditionSwitchedError when the database was switched since `captured`; call right before writing. */
+/** Throw an EditionSwitchedError when the database was switched since `captured`; call right before writing. */
 export function assertGeneration(captured: number) {
   if (captured !== generation) throw new EditionSwitchedError();
 }

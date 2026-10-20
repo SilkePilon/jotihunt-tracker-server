@@ -189,11 +189,11 @@ describe("sync toggle, unlink, purge, restart", () => {
     expect((await jotiboardLinkModel(realDb).findOne().lean())?.syncEnabled).toBe(false);
   });
 
-  test("purge is refused in demo mode", async () => {
+  test("purge is refused while an archive is shown", async () => {
     importer.current = { pins: 5, hints: 2 };
     setArchiveFlag(true);
     try {
-      await expect(service.purge()).rejects.toMatchObject({ status: 409, message: "Data verwijderen kan niet in demomodus." });
+      await expect(service.purge()).rejects.toMatchObject({ status: 409, message: "Data verwijderen kan niet in het archief." });
     } finally {
       setArchiveFlag(false);
     }

@@ -13,7 +13,7 @@ import { serviceSlot } from "../utils/service-slot";
 export interface JotiboardServiceOptions {
   /** null: feature off (no JOTIBOARD_SESSION_KEY), the routes still answer */
   config: JotiboardConfig | null;
-  /** Connection to the REAL database (the demo state store's), so the link survives demo mode */
+  /** Connection to the control database (the control store's), so the link survives edition switches */
   connection: Connection;
   client: JotiboardApi;
   logger: ServiceLogger;
@@ -43,7 +43,7 @@ const BUSY = "Even geduld, Jotiboard is nog bezig.";
 const UNREACHABLE_LINK = "Jotiboard is nu niet bereikbaar, probeer het later opnieuw.";
 const UNREACHABLE_SYNC = "Jotiboard niet bereikbaar, probeert opnieuw";
 const SYNC_FAILED = "Synchroniseren mislukt, probeert opnieuw";
-const PURGE_IN_DEMO = "Data verwijderen kan niet in demomodus.";
+const PURGE_IN_ARCHIVE = "Data verwijderen kan niet in het archief.";
 const LOGIN_ERRORS: Record<JotiboardLoginError["code"], [number, string]> = {
   invalid: [400, "Ongeldige gebruikersnaam of wachtwoord"],
   tooMany: [429, "Te veel pogingen, probeer het later opnieuw"],
@@ -63,8 +63,8 @@ interface ActiveLink {
 /**
  * Jotiboard → tracker sync: an admin links the Jotiboard account once (only the refresh token is kept, encrypted). While
  * "Automatisch synchroniseren" is on, every 20 s the server reads `manualLocations` and `hintSolves` and the importer
- * writes them into our markers / hint cells. One poller per server process (single replica). Polls are skipped in demo
- * mode (the imports belong to the real game).
+ * writes them into our markers / hint cells. One poller per server process (single replica). Polls are skipped while
+ * an archive is shown (the imports belong to the live edition).
  */
 export class JotiboardService {
   private readonly links: Model<JotiboardLinkDoc>;
@@ -214,8 +214,8 @@ export class JotiboardService {
   /** "Data verwijderen": turn sync off (else the next poll imports everything again), wait for a running poll, purge. */
   async purge(): Promise<{ removed: { markers: number; hints: number }; status: JotiboardStatus }> {
     this.requireConfig();
-    // The imports to remove live in the real database, not in the demo one the default connection serves now
-    if (isArchiveShown()) throw new ServiceError(409, PURGE_IN_DEMO);
+    // The imports to remove live in the live edition, not in the archive the default connection serves now
+    if (isArchiveShown()) throw new ServiceError(409, PURGE_IN_ARCHIVE);
     return this.exclusive(async () => {
       if (this.active) {
         await this.links.updateOne({ key: JOTIBOARD_LINK_KEY }, { $set: { syncEnabled: false } });
@@ -253,8 +253,8 @@ export class JotiboardService {
       this.schedule(interval);
       return;
     }
-    // The imports must land in the database this poll started in (demo mode may come on while Jotiboard is read)
-    const demoGeneration = currentGeneration();
+    // The imports must land in the database this poll started in (an edition switch may happen while Jotiboard is read)
+    const startGeneration = currentGeneration();
     const generation = this.generation;
     const started = this.now();
     try {
@@ -269,7 +269,7 @@ export class JotiboardService {
           await this.importer.importPins(parsePins(pinsRaw));
           return true;
         },
-        { generation: demoGeneration },
+        { generation: startGeneration },
       );
       if (generation !== this.generation) return;
       if (ran) {

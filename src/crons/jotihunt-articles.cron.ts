@@ -52,7 +52,7 @@ export default async function retrieveJotihuntArticles() {
     else if (!(error instanceof Error && error.name === "JotihuntApiError")) logger.error("(CRON) Error retrieving articles:", error);
     return;
   }
-  // Store only into the database the run started on (skipped when a demo switch happened meanwhile)
+  // Store only into the database the run started on (skipped when an edition switch happened meanwhile)
   const result = await runTracked(() => syncArticles(apiArticles), { generation });
   if (!result) return;
 

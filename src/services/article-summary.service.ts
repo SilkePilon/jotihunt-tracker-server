@@ -218,7 +218,7 @@ export const SUMMARY_MAX_PAUSE_MS = GEMINI_JOB_MAX_PAUSE_MS;
 
 /**
  * Background job: summarise what is pending, one article per run by default (summaries are not urgent and share the
- * API key with the other AI jobs). Pause, give-up and demo-switch rules: see createGeminiJob.
+ * API key with the other AI jobs). Pause, give-up and edition-switch rules: see createGeminiJob.
  */
 export function createSummaryJob({
   summarizer,

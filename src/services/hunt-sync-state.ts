@@ -34,7 +34,7 @@ export function markSyncFailure(error: unknown, _at = new Date()): void {
   lastError = syncErrorText(error);
 }
 
-/** The run ended without success or failure (e.g. skipped by a demo switch) */
+/** The run ended without success or failure (e.g. skipped by an edition switch) */
 export function markSyncSettled(): void {
   running = false;
 }

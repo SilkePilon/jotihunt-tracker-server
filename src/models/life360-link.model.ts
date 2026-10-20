@@ -1,8 +1,8 @@
 import mongoose, { type Connection, type Model } from "mongoose";
 
 /**
- * The linked Life360 account (one document, key "life360") in the REAL database, like the Telegram link: it stays while
- * demo mode swaps the default connection. The access token is AES-256-GCM encrypted with LIFE360_SESSION_KEY; the
+ * The linked Life360 account (one document, key "life360") in the control database, like the Telegram link: it stays while
+ * an edition switch swaps the default connection. The access token is AES-256-GCM encrypted with LIFE360_SESSION_KEY; the
  * ciphertext is never logged or returned by the API. Members are never stored (memory only).
  */
 export interface Life360LinkDoc {
@@ -39,7 +39,7 @@ const Life360LinkSchema = new mongoose.Schema<Life360LinkDoc>(
   { collection: "life360links", versionKey: false },
 );
 
-/** The model on `connection` (the demo state store's connection to the real database; the test connection in tests). */
+/** The model on `connection` (the control store's connection to the control database; the test connection in tests). */
 export function life360LinkModel(connection: Connection): Model<Life360LinkDoc> {
   return (connection.models.Life360Link as Model<Life360LinkDoc> | undefined) ?? connection.model<Life360LinkDoc>("Life360Link", Life360LinkSchema);
 }

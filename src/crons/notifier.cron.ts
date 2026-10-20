@@ -2,7 +2,7 @@ import { logger } from "../logger";
 import { currentGeneration, runTracked } from "../editions/work-tracking";
 import { runNotifier } from "../services/notifier.service";
 
-/** Detect fox status changes, new articles and nearing hunt deadlines; runs on the active database (demo too). */
+/** Detect fox status changes, new articles and nearing hunt deadlines; runs on the shown edition's database. */
 export default async function notify() {
   const generation = currentGeneration();
   try {

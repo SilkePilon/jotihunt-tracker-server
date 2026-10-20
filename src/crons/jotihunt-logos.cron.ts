@@ -25,7 +25,7 @@ export default async function retrieveJotihuntLogos() {
       headers: { "User-Agent": USER_AGENT },
     });
     const logos = parseTeamLogos(data);
-    // Store only into the database the run started on (skipped when a demo switch happened meanwhile)
+    // Store only into the database the run started on (skipped when an edition switch happened meanwhile)
     const updated = await runTracked(
       async () => {
         const teams = await Team.find({}, { name: 1, logoUrl: 1 }).lean();

@@ -92,7 +92,7 @@ export default async function retrieveJotihuntAreas() {
   if (otherIgnored > 0) logger.warn(`(CRON) Ignored ${otherIgnored} unknown or invalid entries in the /areas answer`);
   logger.debug(`(CRON) Found ${parsed.areas.length} areas`);
 
-  // Store only into the database the run started on (skipped when a demo switch happened meanwhile)
+  // Store only into the database the run started on (skipped when an edition switch happened meanwhile)
   await runTracked(
     () =>
       storeAreas(parsed.areas).catch((error) => {

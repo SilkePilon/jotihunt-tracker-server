@@ -66,6 +66,13 @@ export function getRegistry(): EditionsDoc {
   return { ...current, editions: current.editions.map((edition) => ({ ...edition })) };
 }
 
+/** The shown edition (a copy), or null before initEditions (tests and scripts on a plain connection). */
+export function shownEdition(): Edition | null {
+  if (!registry) return null;
+  const edition = editionOf(registry, registry.shownYear);
+  return edition ? { ...edition } : null;
+}
+
 /** The store on the dedicated connection to the control database (also holds the other `settings` documents). */
 export function getControlStore(): ControlStore {
   return requireInit().store;

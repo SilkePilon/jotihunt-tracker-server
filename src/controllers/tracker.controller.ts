@@ -1,6 +1,7 @@
 import * as traccarService from "../services/traccar.service";
 import { Request, Response } from "express";
 import { logger } from "../logger";
+import { isArchiveShown } from "../editions/work-tracking";
 import { describeTraccarError } from "../services/traccar-http";
 import { type Vehicle, withVehicle } from "../services/tracker-onboarding.helpers";
 import { onboarding, vehicleGroups } from "../services/tracker-onboarding.instance";
@@ -15,6 +16,8 @@ function traccarFailed(res: Response) {
 }
 
 async function getDevices(_req: Request, res: Response) {
+  // Archive: no live trackers (they belong to the live edition)
+  if (isArchiveShown()) return res.json([]);
   if (!traccarService.isTraccarConfigured) return traccarUnavailable(res);
   try {
     const [devices, groups] = await Promise.all([traccarService.getDevices(), traccarService.getGroups()]);
@@ -27,6 +30,8 @@ async function getDevices(_req: Request, res: Response) {
 }
 
 async function getPositions(_req: Request, res: Response) {
+  // Archive: no live trackers (they belong to the live edition)
+  if (isArchiveShown()) return res.json([]);
   if (!traccarService.isTraccarConfigured) return traccarUnavailable(res);
   try {
     const positions = await traccarService.getPositions();

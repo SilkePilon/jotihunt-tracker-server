@@ -125,7 +125,7 @@ export async function huntSyncStatus(now = new Date()): Promise<HuntSyncStatusVi
     else counts.pending++;
     points += Number.isFinite(hunt.points) ? hunt.points : 0;
   }
-  // Demo mode never scrapes: show a healthy, just-finished sync
+  // An archive is never scraped: show a healthy, just-finished sync
   const state = isArchiveShown() ? { configured: true, running: false, lastSuccessAt: new Date(now.getTime() - 12_000).toISOString(), lastAttemptAt: new Date(now.getTime() - 12_000).toISOString(), lastError: null } : syncStateView();
   return { ...state, counts, points };
 }

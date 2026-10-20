@@ -6,7 +6,7 @@ import { currentGeneration } from "../editions/work-tracking";
  * Tiny in-memory cache of the JSON bodies of the polled list endpoints. Every hunter polls the same lists every few
  * seconds; within the TTL they all get the same serialised body instead of one query + build + stringify each.
  * Writes to a collection invalidate its entry (see the model middleware); entries are keyed by the database generation
- * and name, so a demo switch never serves the other database's data.
+ * and name, so an edition switch never serves the other database's data.
  */
 export type CachedList = "markers" | "articles" | "hunts";
 

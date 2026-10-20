@@ -29,7 +29,7 @@ export interface BuildingsStatus {
 }
 
 export interface BuildingsServiceOptions {
-  /** Connection to the REAL database (the demo state store's), so the cache survives demo mode */
+  /** Connection to the control database (the control store's), so the cache survives edition switches */
   connection: Connection;
   client: BuildingsApi;
   logger: ServiceLogger;

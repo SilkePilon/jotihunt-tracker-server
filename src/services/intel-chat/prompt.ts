@@ -11,8 +11,8 @@ export function dutchDateTime(date: Date): string {
 }
 
 /** The Jotihunt rules the assistant needs, distilled from docs/02-game-rules.md and docs/04-hints-and-puzzles.md */
-export const GAME_RULES = `## Het spel in het kort
-- Jotihunt 2026: za 17 okt 10:00 tot zo 18 okt 12:00, in Gelderland. Thema: BRAVE (Pixar) en Schotland. HQ Jotihunt: Stikkerstraat 10, Arnhem (RD 188362 440722).
+const GAME_RULES_BODY = `## Het spel in het kort
+- {{EDITION}} HQ Jotihunt: Stikkerstraat 10, Arnhem (RD 188362 440722).
 - Negen vossenteams (deelgebieden): Alpha, Bravo, Charlie, Delta, Echo, Foxtrot, Golf, Hotel en Oscar. Vossen lopen te voet (ongeveer 4-5 km/u) langs de scoutinggroepen van hun deelgebied; Oscar reist waarschijnlijk met het OV.
 - Status van een vos: groen = actief (huntbaar), oranje = onderweg (nog huntbaar), rood = inactief (niet huntbaar). Rond 23:00 wisselen de teams (22:45-23:15 inactief).
 - Hunt: fysiek contact met de vossen en scan de QR-code van de vos; jotihunt.nl registreert de hunt zelf (tijd, locatie met nauwkeurigheid, status "Wacht op bevestiging", later goedgekeurd of afgekeurd met punten). Onze app neemt die hunts elke minuut over van jotihunt.nl; niemand meldt ze met de hand. Daarna 1 uur dezelfde vos niet hunten. Ons eigen (hoofd)vossenteam: 6 punten, andere toegestane vossen: 3, niet toegestane vossen: 0.
@@ -21,6 +21,20 @@ export const GAME_RULES = `## Het spel in het kort
 - Een hintcoördinaat is waar de vossen wáren op het meldmoment (het hele uur), niet waar ze nu zijn.
 - Opdrachten: max. punten en een deadline, één inzending (foto, tekst of YouTube-link). Het groepslogo of de vlag moet zichtbaar zijn; foto's liggend, JPG of PNG, max 2 MB, niet digitaal bewerkt tenzij toegestaan.
 - Bekende puzzeltypes: Caesar/ROT, Morse, Braille en Elia, binair, 7-segment, weerstandskleurcode, KIX-code, Hexahue, Color Tokki, KennyCode, anagrammen, filippines, getallen in woorden (ook in andere of verzonnen talen, bv. Schots-Gaelisch aon, dhà, trì, ceithir, còig, sia, seachd, ochd, naoi, neoni), Ogham, Tengwar, stapeltellen (cijfersom tot 1 cijfer), trivia waarbij elk antwoord een cijfer geeft, afstand + richting vanaf HQ Jotihunt (coördinatenprojectie), kruispeiling, postcodes en adressen die lijnen of cijfers op de kaart tekenen, wachtwoorden voor .docx/.zip die uit de puzzel zelf komen (nooit brute-forcen).`;
+
+/** The edition the prompt talks about (the shown one); null before the editions are initialised (tests, scripts) */
+export interface PromptEdition {
+  year: number;
+  huntStart: string | null;
+  huntEnd: string | null;
+}
+
+/** First line of the rules: the shown edition's dates (the 2026 theme only for 2026). */
+export function gameRules(edition: PromptEdition | null): string {
+  const when = edition?.huntStart && edition.huntEnd ? `${dutchDateTime(new Date(edition.huntStart))} tot ${dutchDateTime(new Date(edition.huntEnd))}` : "datum nog niet bekend";
+  const theme = edition?.year === 2026 ? " Thema: BRAVE (Pixar) en Schotland." : "";
+  return GAME_RULES_BODY.replace("{{EDITION}}", `Jotihunt${edition ? ` ${edition.year}` : ""}: ${when}, in Gelderland.${theme}`);
+}
 
 function itemSection(item: ItemView, attachedImages: string[]): string {
   const lines = [`Soort: ${KIND_LABEL[item.kind]}`, `Titel: ${item.title}`, `Id: ${item.articleId}`, `Gepubliceerd: ${dutchDateTime(new Date(item.publishAt))}`];
@@ -46,13 +60,13 @@ function itemSection(item: ItemView, attachedImages: string[]): string {
 }
 
 /** The Dutch system prompt of one chat turn */
-export function buildSystemPrompt({ item, now, web, attachedImages }: { item: ItemView; now: Date; web: boolean; attachedImages: string[] }): string {
+export function buildSystemPrompt({ item, now, web, attachedImages, edition }: { item: ItemView; now: Date; web: boolean; attachedImages: string[]; edition: PromptEdition | null }): string {
   const webRule = web
     ? "- Internet staat aan: gebruik webSearch voor feiten die je niet zeker weet en noem je bronnen kort."
     : '- Internet staat uit. Moet je iets opzoeken, zeg dan dat de gebruiker "Web" kan aanzetten.';
   return `Je bent de puzzel- en kaartassistent van het hoofdkwartier (HQ) van een scoutinggroep tijdens de Jotihunt. Je helpt een teamlid met het item dat nu open staat in het Intel-venster.
 
-${GAME_RULES}
+${gameRules(edition)}
 
 ## Nu
 ${dutchDateTime(now)}

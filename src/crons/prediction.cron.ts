@@ -10,7 +10,7 @@ async function recompute() {
   for (const failure of failed) logger.error(`(CRON) Fox prediction for ${failure.area} failed:`, failure.error);
 }
 
-/** Tracked, so a demo switch waits for it (and it is skipped while a switch runs). */
+/** Tracked, so an edition switch waits for it (and it is skipped while a switch runs). */
 export default async function recomputePredictions() {
   if (!isPredictionEnabled()) return; // switched off by an admin: no Gemini or ORS calls
   await runTracked(recompute);

@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 /**
  * What the Jotiboard sync did with one Jotiboard item × area (a pin or a hint solve): imported (with the marker / cell it
  * wrote) or skipped (with the reason). Items with a record are not processed again, except `no-cell` (the hint article may
- * still arrive). `deleted`: a hunter deleted the imported marker, so the pin stays away (also through a purge). Lives next to the markers in the default connection, so demo mode has its own.
+ * still arrive). `deleted`: a hunter deleted the imported marker, so the pin stays away (also through a purge). Lives next to the markers in the default connection, so every edition has its own.
  */
 const JotiboardImportSchema = new mongoose.Schema({
   kind: { type: String, enum: ["pin", "hintSolve"], required: true },

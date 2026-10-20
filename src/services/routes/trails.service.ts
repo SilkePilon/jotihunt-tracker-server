@@ -71,7 +71,7 @@ export function createTrailsService(deps: {
   maxNewRoutesPerCall?: number;
   /** False when no router is configured (no ROUTER_URL): trails are then off and the client keeps its straight lines. */
   configured?: () => boolean;
-  /** Database generation (changes on a demo switch). */
+  /** Database generation (changes on an edition switch). */
   dbGeneration?: () => number;
 }) {
   const now = deps.now ?? (() => new Date());
@@ -81,7 +81,7 @@ export function createTrailsService(deps: {
   let memo: Memo | null = null;
   let inflight: { stamp: string; promise: Promise<Memo> } | null = null;
   let generation = 0;
-  /** Changes on invalidate and on a demo switch: a memo or computation of another stamp is never served. */
+  /** Changes on invalidate and on an edition switch: a memo or computation of another stamp is never served. */
   const stamp = () => `${generation}:${dbGeneration()}`;
   const resolved = createRouteLru(RESOLVED_CAP);
   let cooldownUntil = 0;

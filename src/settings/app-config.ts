@@ -70,7 +70,7 @@ interface StoredSecret extends EncryptedSession {
   hint: string;
 }
 
-/** The one `app-config` document in the `settings` collection of the real database */
+/** The one `app-config` document in the `settings` collection of the control database */
 interface AppConfigDoc {
   key: "app-config";
   general?: Omit<GeneralSettings, "vehicleGroups"> & { vehicleGroups?: Partial<Record<VehicleKey, number>> };

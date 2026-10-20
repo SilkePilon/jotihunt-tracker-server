@@ -8,7 +8,7 @@ import { createHintSplitJob, createHintSplitter } from "../services/hint-split.s
 // Built once (the job keeps its backoff); the model is read per article, so a key or model set in Beheer applies at once
 const job = createHintSplitJob({
   splitter: { split: (article, areas) => createHintSplitter({ model: requireAiModel("split") }).split(article, areas) },
-  // Only into the database the run started on (skipped when a demo switch happened meanwhile)
+  // Only into the database the run started on (skipped when an edition switch happened meanwhile)
   beginRun: () => {
     const generation = currentGeneration();
     return (fn) => runTracked(fn, { generation });

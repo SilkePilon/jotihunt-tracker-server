@@ -23,7 +23,7 @@ import { serviceSlot } from "../utils/service-slot";
 export interface Life360ServiceOptions {
   /** null: feature off (no LIFE360_SESSION_KEY), the routes still answer */
   config: Life360Config | null;
-  /** Connection to the REAL database (the demo state store's), so the link survives demo mode */
+  /** Connection to the control database (the control store's), so the link survives edition switches */
   connection: Connection;
   client: Life360Api;
   logger: ServiceLogger;

@@ -4,7 +4,7 @@ import { initHuntableAreas, type HuntableAreasStore } from "../settings/huntable
 import { initNightAreas, type NightAreasStore } from "../settings/night-areas-setting";
 import { initPredictionSetting, type PredictionSettingStore } from "../settings/prediction-setting";
 
-/** Global AI fox prediction switch; one document (key "prediction") in the `settings` collection. */
+/** AI fox prediction switch; one document (key "prediction") in the `settings` collection. */
 export interface PredictionSettingDoc {
   key: string;
   enabled: boolean;

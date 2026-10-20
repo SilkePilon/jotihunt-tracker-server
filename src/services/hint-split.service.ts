@@ -292,7 +292,7 @@ export const HINT_SPLIT_MAX_PAUSE_MS = GEMINI_JOB_MAX_PAUSE_MS;
 
 /**
  * Background job: let Gemini split pending hint articles (one per run by default) and correct their cells. `areas`
- * (read inside the tracked read) defaults to the areas the cells are made for. Pause, give-up and demo-switch rules:
+ * (read inside the tracked read) defaults to the areas the cells are made for. Pause, give-up and edition-switch rules:
  * see createGeminiJob.
  */
 export function createHintSplitJob({
