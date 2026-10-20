@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { RoutingUnavailableError } from "../prediction/routing";
-import { buildNightCustomModel, createGraphHopperRouter, type NightArea } from "./graphhopper.client";
+import { buildNightCustomModel, createGraphHopperRouter, type GetFn, type NightArea } from "./graphhopper.client";
 
 const square: GeoJSON.Polygon = { type: "Polygon", coordinates: [[[5.8, 52], [5.81, 52], [5.81, 52.01], [5.8, 52.01], [5.8, 52]]] };
 const areas: NightArea[] = [
@@ -61,5 +61,33 @@ describe("createGraphHopperRouter", () => {
     }
     const noPoints = createGraphHopperRouter("http://gh:8989", { post: async () => ({ status: 200, json: { paths: [{ distance: 1, time: 1000 }] } }) });
     await expect(noPoints.route(req)).rejects.toMatchObject({ kind: "temporary" });
+  });
+});
+
+describe("isochrone", () => {
+  const square: GeoJSON.Polygon = { type: "Polygon", coordinates: [[[5.8, 52], [5.81, 52], [5.81, 52.01], [5.8, 52]]] };
+
+  test("asks for one bucket by distance and returns the polygon", async () => {
+    const urls: string[] = [];
+    const router = createGraphHopperRouter("http://gh:8989/", { get: async (url) => (urls.push(url), { status: 200, json: { polygons: [{ type: "Feature", geometry: square, properties: {} }] } }) });
+    expect(await router.isochrone({ profile: "foot_night", point: [5.85, 52.05], distanceM: 3456.7 })).toEqual(square);
+    const url = new URL(urls[0]);
+    expect(url.pathname).toBe("/isochrone");
+    expect(Object.fromEntries(url.searchParams)).toEqual({ point: "52.05,5.85", profile: "foot_night", distance_limit: "3457", buckets: "1" });
+  });
+
+  test("no URL is permanent", async () => {
+    const error = await createGraphHopperRouter(undefined).isochrone({ profile: "foot", point: [5.8, 52], distanceM: 100 }).catch((e) => e);
+    expect(error).toBeInstanceOf(RoutingUnavailableError);
+    expect(error.kind).toBe("permanent");
+  });
+
+  test("4xx is a request error, 5xx, 429 and a missing polygon are temporary, a throw is temporary", async () => {
+    const kindFor = async (get: GetFn) => (await createGraphHopperRouter("http://gh", { get }).isochrone({ profile: "foot", point: [5.8, 52], distanceM: 100 }).catch((e) => e)).kind;
+    expect(await kindFor(async () => ({ status: 400, json: { message: "Point not found" } }))).toBe("request");
+    expect(await kindFor(async () => ({ status: 500, json: null }))).toBe("temporary");
+    expect(await kindFor(async () => ({ status: 429, json: null }))).toBe("temporary");
+    expect(await kindFor(async () => ({ status: 200, json: { polygons: [] } }))).toBe("temporary");
+    expect(await kindFor(async () => { throw new Error("ECONNREFUSED"); })).toBe("temporary");
   });
 });
