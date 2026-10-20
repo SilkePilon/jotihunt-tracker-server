@@ -3,6 +3,7 @@ import type { Types } from "mongoose";
 import { PairingCode } from "../models/pairing-code.model";
 import { User, type UserType } from "../models/user.model";
 import { ServiceError } from "../http/service-error";
+import { updateAccounts } from "../auth/user-store";
 
 /** No 0/O, 1/I: codes are also typed by hand. */
 export const PAIRING_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -56,19 +57,22 @@ export async function redeemPairingCode(input: string, now = new Date()): Promis
  */
 export async function addDevice(user: UserType, name: string, now = new Date()) {
   const device = { id: randomUUID(), name: name.trim().slice(0, 60) || "Android", createdAt: now, lastSeenAt: now };
-  const updated = await User.findOneAndUpdate({ _id: user._id }, { $push: { devices: { $each: [device], $sort: { lastSeenAt: 1 }, $slice: -MAX_DEVICES } } }, { returnDocument: "after" });
+  // Also in the live edition's database while an archive is shown, so the phone stays paired there
+  await updateAccounts({ _id: user._id }, { $push: { devices: { $each: [device], $sort: { lastSeenAt: 1 }, $slice: -MAX_DEVICES } } });
+  const updated = await User.findById(user._id);
   syncDevices(user, updated ? listDevices(updated) : []);
   return { id: device.id, name: device.name };
 }
 
 /** Forget a paired phone, which revokes its device token. False if the user had no device with this id. */
 export async function removeDevice(user: UserType, deviceId: string): Promise<boolean> {
-  const result = await User.updateOne({ _id: user._id }, { $pull: { devices: { id: deviceId } } });
+  // Also in the live edition's database while an archive is shown, so the revoked token stays revoked
+  const removed = await updateAccounts({ _id: user._id, "devices.id": deviceId }, { $pull: { devices: { id: deviceId } } });
   syncDevices(
     user,
     listDevices(user).filter((d) => d.id !== deviceId),
   );
-  return result.modifiedCount > 0;
+  return removed;
 }
 
 /** The user's paired phones, least recently seen first. */

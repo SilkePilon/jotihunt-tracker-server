@@ -11,7 +11,8 @@ export async function migrateEnvSettings(by: string): Promise<{ copied: string[]
 
   const generalPatch: GeneralSettings = {};
   for (const [key, sourced] of Object.entries(view.general) as [keyof typeof view.general, { value: unknown; source: string }][]) {
-    if (key === "vehicleGroups") continue;
+    // Hunt times belong to an edition (registry), not app-config: nothing reads them there any more
+    if (key === "vehicleGroups" || key === "huntStart" || key === "huntEnd") continue;
     if (sourced.source !== "env") continue;
     (generalPatch as Record<string, unknown>)[key] = sourced.value;
     copied.push(key);

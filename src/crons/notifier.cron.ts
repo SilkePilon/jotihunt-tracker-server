@@ -1,9 +1,10 @@
 import { logger } from "../logger";
-import { currentGeneration, runTracked } from "../editions/work-tracking";
+import { currentGeneration, runTracked, skipWhenArchive } from "../editions/work-tracking";
 import { runNotifier } from "../services/notifier.service";
 
 /** Detect fox status changes, new articles and nearing hunt deadlines; runs on the shown edition's database. */
 export default async function notify() {
+  if (skipWhenArchive("notifier", (message) => logger.debug(message))) return;
   const generation = currentGeneration();
   try {
     const created = await runTracked(() => runNotifier({ log: logger }), { generation });

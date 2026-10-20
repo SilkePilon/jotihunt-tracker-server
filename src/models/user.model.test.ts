@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { setTutorialVersion, User } from "./user.model";
+import { setTutorialVersion } from "../auth/user-store";
+import { User } from "./user.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 
 beforeAll(connectTestDb);

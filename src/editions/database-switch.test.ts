@@ -8,6 +8,7 @@ import { body } from "express-validator";
 import { createAccount, updateAccounts } from "../auth/user-store";
 import { deleteUser, updateUser } from "../controllers/admin.controller";
 import { unsubscribe } from "../controllers/notifications.controller";
+import { addDevice, removeDevice } from "../services/pairing.service";
 import { User } from "../models/user.model";
 import { general, initAppConfig, resetAppConfig, setGeneral, setHuntTimesSource } from "../settings/app-config";
 import {
@@ -240,6 +241,19 @@ describe("users master copy (the live edition's database)", () => {
     expect(await runAdmin(unsubscribe, req)).toBe(204);
     expect(await mongoose.connection.collection("pushsubscriptions").countDocuments()).toBe(0);
     expect(await liveConnection()!.collection("pushsubscriptions").countDocuments()).toBe(0);
+  });
+
+  test("removing a paired phone in the archive also revokes it in the live database", async () => {
+    await initEditions(uri);
+    await createEdition();
+    const created = await createAccount({ name: "silke" });
+    const { id } = await addDevice(created, "Pixel");
+    await showEdition(2026);
+    const user = (await User.findById(created._id))!;
+    expect(await removeDevice(user, id)).toBe(true);
+    expect((await liveConnection()!.collection("users").findOne({ _id: created._id }))?.devices).toEqual([]);
+    await showEdition(2027);
+    expect((await User.findById(created._id))?.devices).toHaveLength(0);
   });
 
   test("an admin update in the archive reaches the live database", async () => {

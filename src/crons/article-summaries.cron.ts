@@ -1,5 +1,5 @@
 import { logger } from "../logger";
-import { currentGeneration, runTracked } from "../editions/work-tracking";
+import { currentGeneration, runTracked, skipWhenArchive } from "../editions/work-tracking";
 import { aiAvailable, requireAiModel } from "../services/ai/model";
 import { GeminiError } from "../services/ai/gemini-error";
 import { createArticleSummarizer, createSummaryJob } from "../services/article-summary.service";
@@ -27,6 +27,7 @@ function describe(error: unknown): string {
 
 /** Summarise new or changed news and assignment articles (one per run) */
 export default async function summarizeArticles() {
+  if (skipWhenArchive("article-summaries", (message) => logger.debug(message))) return;
   if (!aiAvailable()) return;
   const { done, failed } = await job.run();
   if (done.length > 0) logger.info(`(CRON) Summarised articles ${done.join(", ")}`);

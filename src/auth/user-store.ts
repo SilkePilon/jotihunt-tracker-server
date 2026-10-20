@@ -86,3 +86,15 @@ export async function deleteAccounts(filter: Record<string, unknown>): Promise<n
 export async function deletePushSubscriptions(filter: Record<string, unknown>): Promise<void> {
   for (const model of modelsOf(PushSubscription as unknown as Model<unknown>, PushSubscription.schema)) await model.deleteMany(filter);
 }
+
+/**
+ * Record that the user has seen the onboarding tour up to `version` (also in the live database while an archive is
+ * shown). Never lowers the stored version.
+ */
+export async function setTutorialVersion(user: UserType, version: number): Promise<number> {
+  // $max in the database, so concurrent requests can never lower the stored version
+  await updateAccounts({ _id: user._id }, { $max: { tutorialVersion: version } });
+  const updated = await User.findById(user._id, { tutorialVersion: 1 }).lean();
+  user.tutorialVersion = updated?.tutorialVersion ?? Math.max(user.tutorialVersion ?? 0, version);
+  return user.tutorialVersion;
+}

@@ -1,5 +1,5 @@
 import { logger } from "../logger";
-import { currentGeneration, runTracked } from "../editions/work-tracking";
+import { currentGeneration, runTracked, skipWhenArchive } from "../editions/work-tracking";
 import { aiAvailable, requireAiModel } from "../services/ai/model";
 import { GeminiError } from "../services/ai/gemini-error";
 import { createHintSplitJob, createHintSplitter } from "../services/hint-split.service";
@@ -27,6 +27,7 @@ function describe(error: unknown): string {
 
 /** Let Gemini correct the per-area split of new or changed hint articles (one per run) */
 export default async function splitHints() {
+  if (skipWhenArchive("hint-split", (message) => logger.debug(message))) return;
   if (!aiAvailable()) return;
   const { done, failed } = await job.run();
   if (done.length > 0) logger.info(`(CRON) Split hint articles ${done.join(", ")}`);
