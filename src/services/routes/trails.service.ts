@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import distance from "@turf/distance";
-import { currentGeneration } from "../../demo/demo-mode";
+import { currentGeneration } from "../../editions/work-tracking";
 import { AreaStatusEvent } from "../../models/area-status-event.model";
 import { Marker } from "../../models/marker.model";
 import { RouteLeg } from "../../models/route-leg.model";

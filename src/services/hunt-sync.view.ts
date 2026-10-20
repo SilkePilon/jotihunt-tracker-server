@@ -1,7 +1,7 @@
 import type { Types } from "mongoose";
 import { Hunt } from "../models/hunt.model";
 import { HuntSyncEvent } from "../models/hunt-sync-event.model";
-import { isDemoMode } from "../demo/demo-mode";
+import { isArchiveShown } from "../editions/work-tracking";
 import { syncStateView } from "./hunt-sync-state";
 import { classifyStatus, type HuntStatusClass } from "./jotihunt-hunts.parse";
 import type { HuntSyncEventType } from "./hunt-sync-diff";
@@ -126,7 +126,7 @@ export async function huntSyncStatus(now = new Date()): Promise<HuntSyncStatusVi
     points += Number.isFinite(hunt.points) ? hunt.points : 0;
   }
   // Demo mode never scrapes: show a healthy, just-finished sync
-  const state = isDemoMode() ? { configured: true, running: false, lastSuccessAt: new Date(now.getTime() - 12_000).toISOString(), lastAttemptAt: new Date(now.getTime() - 12_000).toISOString(), lastError: null } : syncStateView();
+  const state = isArchiveShown() ? { configured: true, running: false, lastSuccessAt: new Date(now.getTime() - 12_000).toISOString(), lastAttemptAt: new Date(now.getTime() - 12_000).toISOString(), lastError: null } : syncStateView();
   return { ...state, counts, points };
 }
 

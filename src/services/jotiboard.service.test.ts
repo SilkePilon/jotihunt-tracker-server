@@ -6,7 +6,7 @@ import { FakeImporter, FakeJotiboardClient, PASSWORD } from "../test/jotiboard-c
 import { JotiboardAuthError, JotiboardLoginError, JotiboardUpstreamError } from "./jotiboard.client";
 import { JotiboardService, POLL_INTERVAL_MS, type JotiboardServiceOptions } from "./jotiboard.service";
 import { decryptSession } from "./session-crypto";
-import { setDemoModeFlag } from "../demo/demo-mode";
+import { setArchiveFlag } from "../editions/work-tracking";
 
 const KEY = randomBytes(32).toString("base64");
 const uri = process.env.MONGO_URI_TEST ?? "mongodb://localhost:27017/jotihunt-test";
@@ -140,7 +140,7 @@ describe("poll", () => {
     client.readGate = new Promise<void>((resolve) => (release = resolve));
     const poll = service.pollOnce();
     while (!client.calls.some((call) => call.startsWith("read"))) await Bun.sleep(1);
-    setDemoModeFlag(true);
+    setArchiveFlag(true);
     try {
       release();
       await poll;
@@ -148,7 +148,7 @@ describe("poll", () => {
       expect(importer.pinSnapshots).toEqual([]);
       expect((await service.status()) as { lastSyncAt: string | null }).toMatchObject({ lastSyncAt: null });
     } finally {
-      setDemoModeFlag(false);
+      setArchiveFlag(false);
       client.readGate = null;
     }
   });
@@ -191,11 +191,11 @@ describe("sync toggle, unlink, purge, restart", () => {
 
   test("purge is refused in demo mode", async () => {
     importer.current = { pins: 5, hints: 2 };
-    setDemoModeFlag(true);
+    setArchiveFlag(true);
     try {
       await expect(service.purge()).rejects.toMatchObject({ status: 409, message: "Data verwijderen kan niet in demomodus." });
     } finally {
-      setDemoModeFlag(false);
+      setArchiveFlag(false);
     }
     expect(importer.purged).toBe(0);
     expect((await jotiboardLinkModel(realDb).findOne().lean())?.syncEnabled).toBe(true);

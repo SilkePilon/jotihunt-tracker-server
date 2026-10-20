@@ -1,5 +1,5 @@
 import { logger } from "../logger";
-import { runTracked } from "../demo/demo-mode";
+import { runTracked } from "../editions/work-tracking";
 import { isPredictionEnabled } from "../settings/prediction-setting";
 import { predictionService } from "../services/prediction/instance";
 

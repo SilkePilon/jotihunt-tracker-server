@@ -6,19 +6,19 @@ import { Area } from "../models/area.model";
 import { User } from "../models/user.model";
 import {
   closeDemoMode,
-  demoConnectOptions,
+  dbConnectOptions,
   demoDbName,
-  demoGate,
-  DemoSwitchBusyError,
+  editionGate,
+  SwitchBusyError,
   getDemoState,
   initDemoMode,
   mongoUriDbName,
-  releaseDemoWork,
+  releaseSwitchWork,
   setDemoWorldGenerator,
   switchDemoMode,
 } from "./database-switch";
 import express from "express";
-import { activeWorkCount, currentGeneration, isDemoMode, runTracked, skipInDemoMode } from "./demo-mode";
+import { activeWorkCount, currentGeneration, isArchiveShown, runTracked, skipWhenArchive } from "./work-tracking";
 
 /**
  * Switching on builds a fresh demo database with the indexes of every model registered in this process (~0.15 s per
@@ -50,20 +50,20 @@ describe("demo database name", () => {
 
 describe("demo connect options", () => {
   test("without credentials only the database name is set", () => {
-    expect(demoConnectOptions("mongodb://mongodb:27017/jotihunt", "jotihunt-demo")).toEqual({ dbName: "jotihunt-demo" });
+    expect(dbConnectOptions("mongodb://mongodb:27017/jotihunt", "jotihunt-demo")).toEqual({ dbName: "jotihunt-demo" });
   });
 
   test("with credentials keeps authenticating against the real database (or admin)", () => {
-    expect(demoConnectOptions("mongodb://u:p@mongodb:27017/jotihunt", "jotihunt-demo")).toEqual({ dbName: "jotihunt-demo", authSource: "jotihunt" });
-    expect(demoConnectOptions("mongodb://u:p@mongodb:27017", "test-demo")).toEqual({ dbName: "test-demo", authSource: "admin" });
+    expect(dbConnectOptions("mongodb://u:p@mongodb:27017/jotihunt", "jotihunt-demo")).toEqual({ dbName: "jotihunt-demo", authSource: "jotihunt" });
+    expect(dbConnectOptions("mongodb://u:p@mongodb:27017", "test-demo")).toEqual({ dbName: "test-demo", authSource: "admin" });
   });
 
   test("an explicit authSource in the URI is left to the driver", () => {
-    expect(demoConnectOptions("mongodb://u:p@a:27017,b:27017/jotihunt?replicaSet=rs0&authSource=admin", "jotihunt-demo")).toEqual({ dbName: "jotihunt-demo" });
+    expect(dbConnectOptions("mongodb://u:p@a:27017,b:27017/jotihunt?replicaSet=rs0&authSource=admin", "jotihunt-demo")).toEqual({ dbName: "jotihunt-demo" });
   });
 
   test("mongodb+srv URIs are left to the driver (authSource from DNS)", () => {
-    expect(demoConnectOptions("mongodb+srv://u:p@cluster.example.net/jotihunt?retryWrites=true", "jotihunt-demo")).toEqual({ dbName: "jotihunt-demo" });
+    expect(dbConnectOptions("mongodb+srv://u:p@cluster.example.net/jotihunt?retryWrites=true", "jotihunt-demo")).toEqual({ dbName: "jotihunt-demo" });
   });
 });
 
@@ -132,7 +132,7 @@ describe("switching between the real and the demo database", () => {
     const on = await switchDemoMode(true, user);
     expect(on.enabled).toBe(true);
     expect(on.startedAt).toEqual(generatedAt!);
-    expect(isDemoMode()).toBe(true);
+    expect(isArchiveShown()).toBe(true);
     expect(mongoose.connection.name).toBe(demoName);
     const copied = await User.findById(user._id).lean();
     expect(copied?.name).toBe("HQ");
@@ -143,7 +143,7 @@ describe("switching between the real and the demo database", () => {
 
     const off = await switchDemoMode(false, user);
     expect(off).toEqual({ enabled: false, enabledAt: null, startedAt: null });
-    expect(isDemoMode()).toBe(false);
+    expect(isArchiveShown()).toBe(false);
     expect(mongoose.connection.name).toBe(realName);
     expect((await Area.find().lean()).map((area) => area.name)).toEqual(["Alpha"]);
     expect(await User.countDocuments()).toBe(1);
@@ -154,11 +154,11 @@ describe("switching between the real and the demo database", () => {
 
   test("the jotihunt.nl cron guard skips runs only in demo mode", async () => {
     const messages: string[] = [];
-    expect(skipInDemoMode("jotihunt-areas", (message) => messages.push(message))).toBe(false);
+    expect(skipWhenArchive("jotihunt-areas", (message) => messages.push(message))).toBe(false);
     setDemoWorldGenerator(async () => {});
     await switchDemoMode(true);
-    expect(skipInDemoMode("jotihunt-areas", (message) => messages.push(message))).toBe(true);
-    expect(messages).toEqual(["(CRON) Skipping jotihunt-areas: demo mode is on"]);
+    expect(skipWhenArchive("jotihunt-areas", (message) => messages.push(message))).toBe(true);
+    expect(messages).toEqual(["(CRON) Skipping jotihunt-areas: archive is shown"]);
     await switchDemoMode(false);
     expect(getDemoState().enabled).toBe(false);
   });
@@ -175,7 +175,7 @@ describe("switching between the real and the demo database", () => {
       passed = true;
     };
     const waiting = fakeRes();
-    demoGate({} as Request, waiting, next);
+    editionGate({} as Request, waiting, next);
     await Bun.sleep(50);
     expect(passed).toBe(false);
 
@@ -183,25 +183,25 @@ describe("switching between the real and the demo database", () => {
     await switched;
     await Bun.sleep(0);
     expect(passed).toBe(true);
-    expect(isDemoMode()).toBe(true);
+    expect(isArchiveShown()).toBe(true);
     (waiting as unknown as EventEmitter).emit("finish");
 
     // A counted request in flight delays the next switch until it finishes
     const res = fakeRes();
-    demoGate({} as Request, res, () => {});
+    editionGate({} as Request, res, () => {});
     let off = false;
     const switchingOff = switchDemoMode(false).then(() => (off = true));
     await Bun.sleep(50);
     expect(off).toBe(false);
     (res as unknown as EventEmitter).emit("finish");
     await switchingOff;
-    expect(isDemoMode()).toBe(false);
+    expect(isArchiveShown()).toBe(false);
   });
 
   test("a request the client aborted still delays a switch until its handler responds", async () => {
     setDemoWorldGenerator(async () => {});
     const res = fakeResWithEnd();
-    demoGate({ method: "POST", originalUrl: "/admin/users" } as Request, res as unknown as Response, () => {});
+    editionGate({ method: "POST", originalUrl: "/admin/users" } as Request, res as unknown as Response, () => {});
     const counted = activeWorkCount();
     res.emit("close"); // client gone, handler still working
     expect(activeWorkCount()).toBe(counted);
@@ -211,7 +211,7 @@ describe("switching between the real and the demo database", () => {
     expect(on).toBe(false);
     res.end(); // the handler responds (into the void)
     await switchingOn;
-    expect(isDemoMode()).toBe(true);
+    expect(isArchiveShown()).toBe(true);
     await switchDemoMode(false);
   });
 
@@ -219,7 +219,7 @@ describe("switching between the real and the demo database", () => {
     setDemoWorldGenerator(async () => {});
     warnings.length = 0;
     const res = fakeResWithEnd();
-    demoGate({ method: "PUT", originalUrl: "/hangs" } as Request, res as unknown as Response, () => {});
+    editionGate({ method: "PUT", originalUrl: "/hangs" } as Request, res as unknown as Response, () => {});
     res.emit("close");
     const started = Date.now();
     await switchDemoMode(true);
@@ -227,7 +227,7 @@ describe("switching between the real and the demo database", () => {
     expect(warnings).toEqual(["PUT /hangs (client gone) still running after 0.3 s; no longer delays a demo switch"]);
     res.end(); // a late response does not count twice
     await switchDemoMode(false);
-    expect(isDemoMode()).toBe(false);
+    expect(isArchiveShown()).toBe(false);
   });
 
   test("an aborted GET or HEAD stops counting right away: reads can't write into the wrong database", async () => {
@@ -236,7 +236,7 @@ describe("switching between the real and the demo database", () => {
     for (const method of ["GET", "HEAD"]) {
       const before = activeWorkCount();
       const res = fakeResWithEnd();
-      demoGate({ method, originalUrl: "/hunt-reports/x/photo" } as Request, res as unknown as Response, () => {});
+      editionGate({ method, originalUrl: "/hunt-reports/x/photo" } as Request, res as unknown as Response, () => {});
       expect(activeWorkCount()).toBe(before + 1);
       res.emit("close"); // client gone, handler (e.g. sendFile) still busy
       expect(activeWorkCount()).toBe(before);
@@ -254,7 +254,7 @@ describe("switching between the real and the demo database", () => {
     let handlerStarted!: () => void;
     const started = new Promise<void>((resolve) => (handlerStarted = resolve));
     const app = express();
-    app.use(demoGate);
+    app.use(editionGate);
     app.post("/slow", async (_req, res) => {
       handlerStarted();
       await handlerDone;
@@ -283,9 +283,9 @@ describe("switching between the real and the demo database", () => {
     let endStream!: () => void;
     const streamEnd = new Promise<void>((resolve) => (endStream = resolve));
     const app = express();
-    app.use(demoGate);
+    app.use(editionGate);
     app.post("/stream", async (_req, res) => {
-      releaseDemoWork(res);
+      releaseSwitchWork(res);
       res.write("first chunk");
       await streamEnd;
       res.end();
@@ -300,7 +300,7 @@ describe("switching between the real and the demo database", () => {
       expect(activeWorkCount()).toBe(before);
       setDemoWorldGenerator(async () => {});
       await switchDemoMode(true);
-      expect(isDemoMode()).toBe(true);
+      expect(isArchiveShown()).toBe(true);
       endStream();
       while (!(await reader.read()).done);
       expect(activeWorkCount()).toBe(before);
@@ -325,11 +325,11 @@ describe("switching between the real and the demo database", () => {
     const switchingOff = switchDemoMode(false).then(() => (off = true));
     await Bun.sleep(100);
     expect(off).toBe(false);
-    expect(isDemoMode()).toBe(true);
+    expect(isArchiveShown()).toBe(true);
     release();
     expect(await job).toBe("done");
     await switchingOff;
-    expect(isDemoMode()).toBe(false);
+    expect(isArchiveShown()).toBe(false);
     expect(await Area.countDocuments({ name: "SlowDemoJob" })).toBe(0);
     expect(await countIn(demoName, "areas")).toBe(0);
   });
@@ -377,10 +377,10 @@ describe("switching between the real and the demo database", () => {
     let release!: () => void;
     const job = runTracked(() => new Promise<void>((resolve) => (release = resolve)));
     const error = await switchDemoMode(true).catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(DemoSwitchBusyError);
-    expect((error as DemoSwitchBusyError).status).toBe(409);
+    expect(error).toBeInstanceOf(SwitchBusyError);
+    expect((error as SwitchBusyError).status).toBe(409);
     expect((error as Error).message).toBe("Er lopen nog taken; probeer het zo opnieuw.");
-    expect(isDemoMode()).toBe(false);
+    expect(isArchiveShown()).toBe(false);
     expect(mongoose.connection.name).toBe(realName);
     expect(getDemoState().enabled).toBe(false);
     // Tracked work runs again once the refused switch is over

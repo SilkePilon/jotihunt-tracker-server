@@ -5,7 +5,7 @@ import { HintCell, HintCellStatus } from "../models/hint-cell.model";
 import { Marker, MarkerType } from "../models/marker.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { ServiceError } from "../http/service-error";
-import { nextGeneration } from "../demo/demo-mode";
+import { nextGeneration } from "../editions/work-tracking";
 import { clearCell, getBoard, getBoardJson, invalidateBoardCache, reopenImportedCell, solveCell } from "./hint-board.service";
 
 const slotTime = new Date("2026-10-17T12:00:00.000Z");

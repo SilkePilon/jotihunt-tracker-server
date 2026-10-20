@@ -5,7 +5,7 @@ import compression from "compression";
 import { logger } from "./logger";
 import { parseTrustProxy } from "./utils/trust-proxy";
 import { clientIpHeader } from "./utils/client-ip-header";
-import { demoGate } from "./demo/database-switch";
+import { editionGate } from "./editions/database-switch";
 import { errorHandler } from "./middleware/error.middleware";
 import authRoute from "./routes/auth.route";
 import invitesRoute from "./routes/invites.route";
@@ -90,7 +90,7 @@ app.use(cors({ maxAge: 86400 }));
 app.use("/demo", demoRoute);
 // Release files are not in the database, so this stays before the demo gate
 app.use("/app", appRoute);
-app.use(demoGate);
+app.use(editionGate);
 app.use("/auth", authRoute);
 app.use("/invites", invitesRoute);
 app.use(configRoute);

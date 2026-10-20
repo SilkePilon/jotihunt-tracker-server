@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { NightAreasSettingDoc } from "../demo/demo-state";
+import type { NightAreasSettingDoc } from "../editions/control-store";
 import type { NightArea } from "../services/routes/graphhopper.client";
 
 export interface NightAreasStore {

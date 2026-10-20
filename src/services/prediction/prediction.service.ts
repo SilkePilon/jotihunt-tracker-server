@@ -1,6 +1,6 @@
 import { AREAS } from "../../constants/areas";
 import { Prediction } from "../../models/prediction.model";
-import { assertGeneration, currentGeneration, DemoSwitchedError, isDemoSwitchInProgress } from "../../demo/demo-mode";
+import { assertGeneration, currentGeneration, EditionSwitchedError, isSwitchInProgress } from "../../editions/work-tracking";
 import { GeminiError } from "../ai/gemini-error";
 import { FAILURE_BACKOFF_MS, GEMINI_PAUSE_MAX_MS, GEMINI_PAUSE_MS, RECOMPUTE_INTERVAL_MS, RETRY_DELAY_MS } from "./constants";
 import { gatherFacts, listAreaNames, loadAreaInputs, signatureOf, type AreaInputs } from "./facts";
@@ -139,7 +139,7 @@ export function createPredictionService(deps: PredictionDeps) {
         why: result.why,
       });
     } catch (error) {
-      if (error instanceof DemoSwitchedError) throw error;
+      if (error instanceof EditionSwitchedError) throw error;
       if (isOverloaded(error)) {
         pausedUntil = now().getTime() + Math.min(GEMINI_PAUSE_MS * 2 ** pauses, GEMINI_PAUSE_MAX_MS);
         pauses++;
@@ -186,7 +186,7 @@ export function createPredictionService(deps: PredictionDeps) {
     // Predictions of names that are not an area (e.g. from a broken /areas answer) are never shown: drop them
     await Prediction.deleteMany({ area: { $nin: AREAS } });
     for (const area of await listAreaNames()) {
-      if (isDemoSwitchInProgress() || generation !== currentGeneration()) break;
+      if (isSwitchInProgress() || generation !== currentGeneration()) break;
       try {
         const done = await serial(async () => {
           const inputs = await loadAreaInputs(area);
@@ -200,7 +200,7 @@ export function createPredictionService(deps: PredictionDeps) {
         });
         if (done) recomputed.push(area);
       } catch (error) {
-        if (error instanceof DemoSwitchedError) break;
+        if (error instanceof EditionSwitchedError) break;
         failed.push({ area, error });
       }
     }

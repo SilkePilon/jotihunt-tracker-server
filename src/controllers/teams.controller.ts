@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import { Team } from "../models/team.model";
 import { logger } from "../logger";
-import { isDemoMode } from "../demo/demo-mode";
+import { isArchiveShown } from "../editions/work-tracking";
 import { syncTeams } from "../services/team-sync.service";
 
 export async function getTeams(_req: Request, res: Response) {
@@ -20,7 +20,7 @@ export async function setTeamArea(req: Request, res: Response) {
 
 export async function reloadTeams(_req: Request, res: Response) {
   // Demo teams are generated from the real ones; reloading would mix real data into the demo database
-  if (isDemoMode()) return res.status(409).json({ message: "Teams herladen kan niet in demomodus." });
+  if (isArchiveShown()) return res.status(409).json({ message: "Teams herladen kan niet in demomodus." });
 
   try {
     const count = await syncTeams();

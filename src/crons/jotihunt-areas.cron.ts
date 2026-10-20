@@ -1,5 +1,5 @@
 import { logger } from "../logger";
-import { currentGeneration, runTracked, skipInDemoMode } from "../demo/demo-mode";
+import { currentGeneration, runTracked, skipWhenArchive } from "../editions/work-tracking";
 import { Area } from "../models/area.model";
 import { AreaStatusEvent } from "../models/area-status-event.model";
 import { AREA_STATUSES, AREA_TITLES, AREAS, areaTitle, knownAreaName } from "../constants/areas";
@@ -63,7 +63,7 @@ export async function storeAreas(areas: AreaUpdate[]) {
 const warnedStatuses = new Set<string>();
 
 export default async function retrieveJotihuntAreas() {
-  if (skipInDemoMode("jotihunt-areas", (message) => logger.debug(message))) return;
+  if (skipWhenArchive("jotihunt-areas", (message) => logger.debug(message))) return;
 
   logger.debug("(CRON) Retrieving Jotihunt areas from API...");
   const generation = currentGeneration();

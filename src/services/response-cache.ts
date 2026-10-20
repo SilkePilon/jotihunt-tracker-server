@@ -1,6 +1,6 @@
 import type { Response } from "express";
 import mongoose from "mongoose";
-import { currentGeneration } from "../demo/demo-mode";
+import { currentGeneration } from "../editions/work-tracking";
 
 /**
  * Tiny in-memory cache of the JSON bodies of the polled list endpoints. Every hunter polls the same lists every few

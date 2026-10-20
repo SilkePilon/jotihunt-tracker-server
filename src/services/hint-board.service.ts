@@ -6,7 +6,7 @@ import { Marker, MarkerType } from "../models/marker.model";
 import { parseRdAnswer } from "./rd-answer";
 import { isDuplicateKeyError } from "../utils/mongo";
 import { ServiceError } from "../http/service-error";
-import { currentGeneration } from "../demo/demo-mode";
+import { currentGeneration } from "../editions/work-tracking";
 
 /** Fields of the old hints page that may still be stored on a cell; never sent, removed on the next solve */
 const LEGACY_FIELDS = ["claimedBy", "claimedAt", "check", "checkedBy", "notes"] as const;

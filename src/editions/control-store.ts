@@ -92,7 +92,7 @@ const NIGHT_AREAS_KEY = "night-areas";
  * Store for the DemoState document on a dedicated connection to the real database, so it stays reachable whichever
  * database the default Mongoose connection currently points to. Not registered in `mongoose.models`.
  */
-export interface DemoStateStore {
+export interface ControlStore {
   connection: Connection;
   read(): Promise<DemoStateDoc | null>;
   write(state: Omit<DemoStateDoc, "key">): Promise<void>;
@@ -105,7 +105,7 @@ export interface DemoStateStore {
   close(): Promise<void>;
 }
 
-export async function openDemoStateStore(realUri: string, options: mongoose.ConnectOptions = {}): Promise<DemoStateStore> {
+export async function openControlStore(realUri: string, options: mongoose.ConnectOptions = {}): Promise<ControlStore> {
   const connection = await mongoose.createConnection(realUri, options).asPromise();
   const DemoState: Model<DemoStateDoc> = connection.model<DemoStateDoc>("DemoState", DemoStateSchema);
   const PredictionSetting: Model<PredictionSettingDoc> = connection.model<PredictionSettingDoc>("PredictionSetting", PredictionSettingSchema);

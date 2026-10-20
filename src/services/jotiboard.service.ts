@@ -1,5 +1,5 @@
 import type { Connection, Model } from "mongoose";
-import { currentGeneration, isDemoMode, runTracked } from "../demo/demo-mode";
+import { currentGeneration, isArchiveShown, runTracked } from "../editions/work-tracking";
 import { ServiceError } from "../http/service-error";
 import { JOTIBOARD_LINK_KEY, jotiboardLinkModel, type JotiboardLinkDoc } from "../models/jotiboard-link.model";
 import { JotiboardAuthError, JotiboardLoginError, JotiboardUpstreamError, type JotiboardApi, type JotiboardSession } from "./jotiboard.client";
@@ -215,7 +215,7 @@ export class JotiboardService {
   async purge(): Promise<{ removed: { markers: number; hints: number }; status: JotiboardStatus }> {
     this.requireConfig();
     // The imports to remove live in the real database, not in the demo one the default connection serves now
-    if (isDemoMode()) throw new ServiceError(409, PURGE_IN_DEMO);
+    if (isArchiveShown()) throw new ServiceError(409, PURGE_IN_DEMO);
     return this.exclusive(async () => {
       if (this.active) {
         await this.links.updateOne({ key: JOTIBOARD_LINK_KEY }, { $set: { syncEnabled: false } });
@@ -249,7 +249,7 @@ export class JotiboardService {
 
   private async runPoll(): Promise<void> {
     const interval = this.options.pollIntervalMs ?? POLL_INTERVAL_MS;
-    if (isDemoMode()) {
+    if (isArchiveShown()) {
       this.schedule(interval);
       return;
     }
@@ -263,7 +263,7 @@ export class JotiboardService {
       if (generation !== this.generation) return;
       const ran = await runTracked(
         async () => {
-          if (isDemoMode()) return false;
+          if (isArchiveShown()) return false;
           // Solves first: a hint solution beats a hint pin for the same hour
           await this.importer.importHintSolves(parseHintSolves(solvesRaw));
           await this.importer.importPins(parsePins(pinsRaw));

@@ -3,7 +3,7 @@ import { Article, publicArticlesFilter } from "../models/article.model";
 import { AppNotification, type AppNotificationDocument } from "../models/notification.model";
 import { NotifierState } from "../models/notifier-state.model";
 import { buildArticleNotification, buildFoxStatusNotification, diffAreaStatus, type NotificationInput } from "./notifier.helpers";
-import { currentGeneration, runTracked } from "../demo/demo-mode";
+import { currentGeneration, runTracked } from "../editions/work-tracking";
 import { deadline } from "./http-limits";
 import { sendToAll } from "./push.service";
 import { isDuplicateKeyError } from "../utils/mongo";

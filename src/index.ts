@@ -12,7 +12,7 @@ import { initHuntableAreas } from "./settings/huntable-areas-setting";
 import { initNightAreas } from "./settings/night-areas-setting";
 import { initAppConfig, onAppConfigChange, settingsKeyOk } from "./settings/app-config";
 import { aiAvailable } from "./services/ai/model";
-import { getDemoStateStore, initDemoMode, onDemoSwitch } from "./demo/database-switch";
+import { getControlStore, initDemoMode, onEditionSwitch } from "./editions/database-switch";
 import { syncVehicleGroups } from "./services/tracker-onboarding.helpers";
 import { vehicleGroups } from "./services/tracker-onboarding.instance";
 import { isTraccarConfigured, usesLegacyTraccarEnv } from "./services/traccar-http";
@@ -83,20 +83,20 @@ await initDemoMode(db, { logger: serviceLogger }).then((state) => {
 });
 
 // Global settings live in the real database (also in demo mode); cached in memory from here on
-await initPredictionSetting(getDemoStateStore());
-await initHuntableAreas(getDemoStateStore());
-await initNightAreas(getDemoStateStore());
+await initPredictionSetting(getControlStore());
+await initHuntableAreas(getControlStore());
+await initNightAreas(getControlStore());
 // Settings moved from env to Beheer (env stays the fallback); secrets need SETTINGS_KEY
-const { undecryptable } = await initAppConfig(getDemoStateStore().connection);
+const { undecryptable } = await initAppConfig(getControlStore().connection);
 // Names only, never values: these fall back to env until saved again with the current SETTINGS_KEY
 for (const name of undecryptable) logger.warn(`Stored secret ${name} can't be decrypted with the current SETTINGS_KEY (missing or rotated): using the env value instead. Save it again in Beheer.`);
 syncVehicleGroups(vehicleGroups);
 if (!settingsKeyOk()) logger.warn("SETTINGS_KEY is missing or not 32 bytes (base64): keys and passwords can't be saved in Beheer. Generate one with: openssl rand -base64 32");
 // Sessions, invites and herstel-links live in the real database, also while demo mode is on
-setAuthConnection(getDemoStateStore().connection);
+setAuthConnection(getControlStore().connection);
 // The passwordless migration runs at every start (idempotent), so the deploy order doesn't matter. Also on the demo
 // database when demo mode was on at boot (its users were copied from the real database before this ran)
-const realConnection = getDemoStateStore().connection;
+const realConnection = getControlStore().connection;
 for (const connection of mongoose.connection.name === realConnection.name ? [realConnection] : [realConnection, mongoose.connection]) {
   await ensurePasswordless(connection)
     .then(({ cleaned, handles }) => logger.info(`Passwordless migration (${connection.name}): removed password data from ${cleaned} users, added WebAuthn handles to ${handles}`))
@@ -114,7 +114,7 @@ const migrateTextHashes = () =>
     })
     .catch((error) => logger.error("Article text hash migration failed", error));
 await migrateTextHashes();
-onDemoSwitch(async () => {
+onEditionSwitch(async () => {
   await migrateTextHashes();
 });
 
@@ -129,14 +129,14 @@ await dropRemovedNotificationTypes()
 // from it now and after every demo switch
 const happyHour = new HappyHourService({ logger: serviceLogger });
 await happyHour.rebuild().catch((error) => logger.error("Could not schedule the happy hour alerts", error));
-onDemoSwitch(() => happyHour.rebuild());
+onEditionSwitch(() => happyHour.rebuild());
 const telegramWarn = (message: string) => logger.warn(message);
 const telegramConfig = telegramConfigFromSettings(process.env, telegramWarn);
 if (!telegramConfig) logger.warn("No Telegram app credentials (Beheer → Koppelingen or TELEGRAM_API_ID/TELEGRAM_API_HASH): tegenhunts are not read from Telegram");
 const telegram = new TelegramService({
   config: telegramConfig,
   sessionKeyOk: isValidSessionKey(process.env.TELEGRAM_SESSION_KEY?.trim() ?? ""),
-  connection: getDemoStateStore().connection,
+  connection: getControlStore().connection,
   gateway: createMtcuteGateway,
   logger: serviceLogger,
   happyHour,
@@ -157,23 +157,23 @@ onAppConfigChange((part) => {
 // database like the Telegram link; polling runs in the background so Life360 never delays the start
 const life360Config = life360ConfigFromEnv(process.env, (message) => logger.warn(message));
 if (!process.env.LIFE360_SESSION_KEY?.trim()) logger.warn("LIFE360_SESSION_KEY not set, the Life360 layer is off");
-const life360 = new Life360Service({ config: life360Config, connection: getDemoStateStore().connection, client: new Life360Client(), logger: serviceLogger });
+const life360 = new Life360Service({ config: life360Config, connection: getControlStore().connection, client: new Life360Client(), logger: serviceLogger });
 setLife360Service(life360);
 life360.start().catch((error) => logger.error("Could not start the Life360 sync", error));
 // Jotiboard: fox pins and hint solutions from jotiboard.nl are imported while an admin has sync on. The link lives in the
 // real database like Life360's; the sync starts in the background
 const jotiboardConfig = jotiboardConfigFromEnv(process.env, (message) => logger.warn(message));
 if (!process.env.JOTIBOARD_SESSION_KEY?.trim()) logger.warn("JOTIBOARD_SESSION_KEY not set, the Jotiboard sync is off");
-const jotiboard = new JotiboardService({ config: jotiboardConfig, connection: getDemoStateStore().connection, client: new JotiboardClient(), logger: serviceLogger });
+const jotiboard = new JotiboardService({ config: jotiboardConfig, connection: getControlStore().connection, client: new JotiboardClient(), logger: serviceLogger });
 setJotiboardService(jotiboard);
 jotiboard.start().catch((error) => logger.error("Could not start the Jotiboard sync", error));
 
 // 3D buildings: z15 vector tiles from 3DBAG, cached in the real database on first view
-const buildings = new BuildingsService({ connection: getDemoStateStore().connection, client: new BagWfsClient(), logger: serviceLogger });
+const buildings = new BuildingsService({ connection: getControlStore().connection, client: new BagWfsClient(), logger: serviceLogger });
 setBuildingsService(buildings);
 
 // Fastfood layers: McDonald's, KFC and Burger King from OpenStreetMap, refreshed daily in the real database
-const fastfood = new FastfoodService({ connection: getDemoStateStore().connection, client: new OverpassClient(), logger: serviceLogger });
+const fastfood = new FastfoodService({ connection: getControlStore().connection, client: new OverpassClient(), logger: serviceLogger });
 setFastfoodService(fastfood);
 fastfood.start();
 

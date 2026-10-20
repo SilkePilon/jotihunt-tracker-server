@@ -1,5 +1,5 @@
 import { logger } from "../logger";
-import { currentGeneration, runTracked, skipInDemoMode } from "../demo/demo-mode";
+import { currentGeneration, runTracked, skipWhenArchive } from "../editions/work-tracking";
 import { Hunt } from "../models/hunt.model";
 import { HuntSyncEvent, type HuntSyncEventDoc } from "../models/hunt-sync-event.model";
 import { closeScraper, jotihuntLogin, scrapeHunts } from "../services/jotihunt-scraper.service";
@@ -216,7 +216,7 @@ export async function storeAndSync(scraped: ScrapedHunt[], options: { estimate?:
 export const dropsSession = (error: unknown) => error instanceof Error && /login failed|\b419\b/i.test(error.message);
 
 export default async function scrapeJotihuntWebsite() {
-  if (skipInDemoMode("jotihunt-scraper", (message) => logger.debug(message))) {
+  if (skipWhenArchive("jotihunt-scraper", (message) => logger.debug(message))) {
     // No need to keep the website session while demo mode is on
     await closeScraper();
     return;

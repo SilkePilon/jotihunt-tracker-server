@@ -1,5 +1,5 @@
 import { AREAS, type AreaName } from "../constants/areas";
-import type { HuntableAreasSettingDoc } from "../demo/demo-state";
+import type { HuntableAreasSettingDoc } from "../editions/control-store";
 
 /** The part of the demo state store this module needs (the `settings` collection of the REAL database). */
 export interface HuntableAreasStore {

@@ -1,14 +1,14 @@
 import type { NextFunction, Request, Response } from "express";
 import mongoose from "mongoose";
 import { redactPath } from "../sentry";
-import { activeWorkCount, beginWork, isDemoMode, nextGeneration, setDemoModeFlag, setDemoSwitchInProgress, waitForIdleWork } from "./demo-mode";
-import { openDemoStateStore, type DemoStateStore } from "./demo-state";
-import { demoConnectOptions, demoDbName, mongoUriDbName } from "./mongo-uri";
+import { activeWorkCount, beginWork, isArchiveShown, nextGeneration, setArchiveFlag, setSwitchInProgress, waitForIdleWork } from "./work-tracking";
+import { openControlStore, type ControlStore } from "./control-store";
+import { dbConnectOptions, demoDbName, mongoUriDbName } from "./mongo-uri";
 import { errorText } from "../utils/error-text";
 import { dropLegacyHuntCodeIndex } from "../models/hunt.model";
 import type { ServiceLogger } from "../utils/service-logger";
 
-export { demoConnectOptions, demoDbName, mongoUriDbName } from "./mongo-uri";
+export { dbConnectOptions, demoDbName, mongoUriDbName } from "./mongo-uri";
 
 /** Fills the (freshly dropped, users already copied) demo database; times relative to `now`. */
 export type DemoWorldGenerator = (now: Date) => Promise<void>;
@@ -23,11 +23,11 @@ export interface DemoState {
 }
 
 /** A switch was refused because requests or background jobs kept running; nothing changed. */
-export class DemoSwitchBusyError extends Error {
+export class SwitchBusyError extends Error {
   readonly status = 409;
   constructor() {
     super("Er lopen nog taken; probeer het zo opnieuw.");
-    this.name = "DemoSwitchBusyError";
+    this.name = "SwitchBusyError";
   }
 }
 
@@ -43,14 +43,14 @@ const DISABLED_STATE: DemoState = Object.freeze({ enabled: false, enabledAt: nul
 const noopLogger: ServiceLogger = { info() {}, warn() {}, error() {} };
 
 let realUri: string | null = null;
-let store: DemoStateStore | null = null;
+let store: ControlStore | null = null;
 let log: ServiceLogger = noopLogger;
 let state: DemoState = DISABLED_STATE;
 let generator: DemoWorldGenerator = async () => {};
 const listeners = new Set<DemoSwitchListener>();
 /** Serialises switches; also what the gate waits for */
 let switching: Promise<unknown> | null = null;
-/** The gate's release of each counted response (see releaseDemoWork) */
+/** The gate's release of each counted response (see releaseSwitchWork) */
 const gateReleases = new WeakMap<object, () => void>();
 
 // --- Public API -------------------------------------------------------------------------------------------------
@@ -61,7 +61,7 @@ export function setDemoWorldGenerator(fn: DemoWorldGenerator) {
 }
 
 /** Register a callback that runs after every switch; returns an unsubscribe function. */
-export function onDemoSwitch(listener: DemoSwitchListener): () => void {
+export function onEditionSwitch(listener: DemoSwitchListener): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
@@ -70,13 +70,13 @@ export function onDemoSwitch(listener: DemoSwitchListener): () => void {
  * Read-only access to a collection of the REAL database (through the DemoState connection), for the demo generator
  * (teams). Never write through this.
  */
-export async function readRealCollection<T = Record<string, unknown>>(collection: string, filter: Record<string, unknown> = {}): Promise<T[]> {
+export async function readControlCollection<T = Record<string, unknown>>(collection: string, filter: Record<string, unknown> = {}): Promise<T[]> {
   const { store: stateStore } = requireInit();
   return (await stateStore.connection.collection(collection).find(filter).toArray()) as T[];
 }
 
 /** The store on the dedicated connection to the real database (also holds the other `settings` documents). */
-export function getDemoStateStore(): DemoStateStore {
+export function getControlStore(): ControlStore {
   return requireInit().store;
 }
 
@@ -98,7 +98,7 @@ export async function initDemoMode(
   abandonedRequestMs = options.abandonedRequestMs ?? ABANDONED_REQUEST_MS;
   realUri = uri;
   demoDbName(uri); // refuse to run with an unusable demo database name
-  store = await openDemoStateStore(uri);
+  store = await openControlStore(uri);
   const saved = await store.read();
   if (saved?.enabled) {
     log.info("Demo mode is on: starting with a fresh demo database");
@@ -123,7 +123,7 @@ export async function initDemoMode(
 
 /**
  * Switch between the real and the demo database. Switching to the current state is a no-op. Rejects with a
- * DemoSwitchBusyError (nothing changed) when requests or tracked jobs keep running for more than 10 s.
+ * SwitchBusyError (nothing changed) when requests or tracked jobs keep running for more than 10 s.
  */
 export function switchDemoMode(enabled: boolean, user?: { _id: unknown } | null): Promise<DemoState> {
   const previous = switching ?? Promise.resolve();
@@ -144,7 +144,7 @@ export function switchDemoMode(enabled: boolean, user?: { _id: unknown } | null)
  * never responds stops counting after a while, so it can't block switching forever; a GET/HEAD stops counting as soon
  * as its client is gone.
  */
-export function demoGate(req: Request, res: Response, next: NextFunction) {
+export function editionGate(req: Request, res: Response, next: NextFunction) {
   const start = () => {
     const finish = beginWork();
     const isRead = req.method === "GET" || req.method === "HEAD";
@@ -181,21 +181,21 @@ export function demoGate(req: Request, res: Response, next: NextFunction) {
     next();
   };
   if (!switching) return start();
-  waitForSwitch().then(start, next);
+  waitForRunningSwitch().then(start, next);
 }
 
 /**
  * A long-lived response (the Intel chat stream) stops delaying a demo switch from here on. Whatever its handler writes
  * later must be counted on its own (beginWork) and check the database generation it started in.
  */
-export function releaseDemoWork(res: Response) {
+export function releaseSwitchWork(res: Response) {
   gateReleases.get(res)?.();
 }
 
 /** Express middleware for the /demo routes themselves: waits for a running switch, not counted by it. */
-export function waitForDemoSwitch(_req: Request, _res: Response, next: NextFunction) {
+export function waitForSwitch(_req: Request, _res: Response, next: NextFunction) {
   if (!switching) return next();
-  waitForSwitch().then(() => next(), next);
+  waitForRunningSwitch().then(() => next(), next);
 }
 
 /** Close the DemoState connection and the default connection; resets the module (tests, shutdown). */
@@ -206,18 +206,18 @@ export async function closeDemoMode() {
   store = null;
   realUri = null;
   state = DISABLED_STATE;
-  setDemoModeFlag(false);
-  setDemoSwitchInProgress(false);
+  setArchiveFlag(false);
+  setSwitchInProgress(false);
   generator = async () => {};
 }
 
 // --- Internals --------------------------------------------------------------------------------------------------
 
-async function waitForSwitch() {
+async function waitForRunningSwitch() {
   while (switching) await switching.catch(() => undefined);
 }
 
-function requireInit(): { uri: string; store: DemoStateStore } {
+function requireInit(): { uri: string; store: ControlStore } {
   if (!realUri || !store) throw new Error("Demo mode is not initialised");
   return { uri: realUri, store };
 }
@@ -252,7 +252,7 @@ async function connectReal() {
     await mongoose.connection.close();
     throw new Error("Connected to an unexpected database");
   }
-  setDemoModeFlag(false);
+  setArchiveFlag(false);
   await maintainIndexes();
 }
 
@@ -261,12 +261,12 @@ async function reconnectDemo() {
   const { uri } = requireInit();
   const demoName = demoDbName(uri);
   await mongoose.connection.close();
-  await mongoose.connect(uri, demoConnectOptions(uri, demoName));
+  await mongoose.connect(uri, dbConnectOptions(uri, demoName));
   if (mongoose.connection.name !== demoName) {
     await mongoose.connection.close();
     throw new Error("Connected to an unexpected database");
   }
-  setDemoModeFlag(true);
+  setArchiveFlag(true);
 }
 
 /**
@@ -285,14 +285,14 @@ async function enterDemo(): Promise<Date> {
   const { uri, store: stateStore } = requireInit();
   const demoName = demoDbName(uri);
   await mongoose.connection.close();
-  await mongoose.connect(uri, demoConnectOptions(uri, demoName));
+  await mongoose.connect(uri, dbConnectOptions(uri, demoName));
   const connection = mongoose.connection;
   // Never drop anything but the demo database
   if (connection.name !== demoName || demoName === stateStore.connection.name) {
     await connection.close();
     throw new Error("Refusing to drop a database that is not the demo database");
   }
-  setDemoModeFlag(true);
+  setArchiveFlag(true);
   await connection.dropDatabase();
   // model.init() only runs once per process, so build the indexes of the fresh database explicitly
   await Promise.all(Object.values(mongoose.models).map((model) => model.createIndexes()));
@@ -318,12 +318,12 @@ async function fallbackToReal() {
   } catch (error) {
     log.error("Could not reconnect to the real database", error);
     await mongoose.connection.close().catch(() => undefined);
-    setDemoModeFlag(false);
+    setArchiveFlag(false);
   }
   await dropDemoDatabase().catch((error) => log.error("Could not drop the demo database", error));
 }
 
-async function switchOn(stateStore: DemoStateStore, user?: { _id: unknown } | null) {
+async function switchOn(stateStore: ControlStore, user?: { _id: unknown } | null) {
   let startedAt: Date;
   try {
     startedAt = await enterDemo();
@@ -336,7 +336,7 @@ async function switchOn(stateStore: DemoStateStore, user?: { _id: unknown } | nu
   await stateStore.write({ enabled: true, enabledAt: state.enabledAt, enabledBy: user?._id ? String(user._id) : null, startedAt });
 }
 
-async function switchOff(stateStore: DemoStateStore) {
+async function switchOff(stateStore: ControlStore) {
   try {
     await connectReal();
   } catch (error) {
@@ -365,16 +365,16 @@ async function notifyListeners(enabled: boolean) {
 
 async function performSwitch(enabled: boolean, user?: { _id: unknown } | null): Promise<DemoState> {
   const { store: stateStore } = requireInit();
-  if (enabled === isDemoMode()) return getDemoState();
+  if (enabled === isArchiveShown()) return getDemoState();
 
   // From here on tracked jobs are skipped; wait for the running requests and jobs, or refuse the switch
-  setDemoSwitchInProgress(true);
+  setSwitchInProgress(true);
   if (!(await waitForIdleWork(drainTimeoutMs))) {
     log.warn(`Demo switch refused: ${activeWorkCount()} request(s)/job(s) still running after ${drainTimeoutMs / 1000} s`);
-    setDemoSwitchInProgress(false);
+    setSwitchInProgress(false);
     // Nothing changed, but jobs were skipped while waiting (e.g. the AI jobs): let the listeners pick them up
-    await notifyListeners(isDemoMode());
-    throw new DemoSwitchBusyError();
+    await notifyListeners(isArchiveShown());
+    throw new SwitchBusyError();
   }
 
   nextGeneration();
@@ -385,10 +385,10 @@ async function performSwitch(enabled: boolean, user?: { _id: unknown } | null): 
   } catch (error) {
     failure = error;
   } finally {
-    setDemoSwitchInProgress(false);
+    setSwitchInProgress(false);
   }
   // Listeners may start tracked work (e.g. the AI jobs), so they run after the switch is marked done
-  await notifyListeners(isDemoMode());
+  await notifyListeners(isArchiveShown());
   if (failure) throw failure;
   log.info(`Demo mode ${enabled ? "on" : "off"}`);
   return getDemoState();

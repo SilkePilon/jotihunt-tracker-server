@@ -1,4 +1,4 @@
-import type { PredictionSettingDoc } from "../demo/demo-state";
+import type { PredictionSettingDoc } from "../editions/control-store";
 
 /** The part of the demo state store this module needs (the `settings` collection of the REAL database). */
 export interface PredictionSettingStore {

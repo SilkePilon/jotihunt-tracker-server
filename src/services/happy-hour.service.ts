@@ -1,6 +1,6 @@
 import { HappyHour } from "../models/happy-hour.model";
 import { AppNotification } from "../models/notification.model";
-import { runTracked, runTrackedRetrying } from "../demo/demo-mode";
+import { runTracked, runTrackedRetrying } from "../editions/work-tracking";
 import { sendToAll } from "./push.service";
 import { buildHappyHourNotification, happyHourView, isHappyHourEnd, parseHappyHourWindow, type HappyHourView, type HappyHourWindow } from "./happy-hour.helpers";
 import type { ServiceLogger } from "../utils/service-logger";

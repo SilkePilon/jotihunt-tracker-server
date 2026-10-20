@@ -1,6 +1,6 @@
 import axios from "axios";
 import { logger } from "../logger";
-import { currentGeneration, runTracked, skipInDemoMode } from "../demo/demo-mode";
+import { currentGeneration, runTracked, skipWhenArchive } from "../editions/work-tracking";
 import { Team } from "../models/team.model";
 import { MB } from "../services/http-limits";
 import { USER_AGENT } from "../services/prediction/constants";
@@ -11,7 +11,7 @@ import { normalizeTeamName, parseTeamLogos } from "../services/team-logos.helper
  * The API has no logo field; the page is public, so no login is needed.
  */
 export default async function retrieveJotihuntLogos() {
-  if (skipInDemoMode("jotihunt-logos", (message) => logger.debug(message))) return;
+  if (skipWhenArchive("jotihunt-logos", (message) => logger.debug(message))) return;
 
   const baseUrl = (process.env.JOTIHUNT_WEB_URL || "https://jotihunt.nl").replace(/\/+$/, "");
   const generation = currentGeneration();

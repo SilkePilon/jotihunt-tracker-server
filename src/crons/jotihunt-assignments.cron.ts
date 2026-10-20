@@ -1,5 +1,5 @@
 import { logger } from "../logger";
-import { currentGeneration, runTracked, skipInDemoMode } from "../demo/demo-mode";
+import { currentGeneration, runTracked, skipWhenArchive } from "../editions/work-tracking";
 import { assignmentsToCheck, markSiteAttempt, storeSubmission } from "../services/assignment-sync.service";
 import { deadline } from "../services/http-limits";
 import { parseAssignmentPage } from "../services/jotihunt-assignment.parse";
@@ -20,7 +20,7 @@ interface Options {
  * a failed login ends the run.
  */
 export default async function syncJotihuntAssignments(options: Options = {}): Promise<void> {
-  if (skipInDemoMode("jotihunt-assignments", (message) => logger.debug(message))) return;
+  if (skipWhenArchive("jotihunt-assignments", (message) => logger.debug(message))) return;
   if (!jotihuntLogin()) return;
   const get = options.fetch ?? fetchPage;
   const now = options.now ?? (() => new Date());

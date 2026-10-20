@@ -1,5 +1,5 @@
 import { logger } from "../logger";
-import { currentGeneration, runTracked, skipInDemoMode } from "../demo/demo-mode";
+import { currentGeneration, runTracked, skipWhenArchive } from "../editions/work-tracking";
 import { Article } from "../models/article.model";
 import { getArticlesPage, JotihuntPausedError, type ArticlesPage } from "../services/jotihunt.service";
 import { syncArticles } from "../services/article-sync.service";
@@ -38,7 +38,7 @@ async function knownArticleIds(ids: unknown[]): Promise<Set<number>> {
 }
 
 export default async function retrieveJotihuntArticles() {
-  if (skipInDemoMode("jotihunt-articles", (message) => logger.debug(message))) return;
+  if (skipWhenArchive("jotihunt-articles", (message) => logger.debug(message))) return;
 
   logger.debug("(CRON) Retrieving Jotihunt articles from API...");
 

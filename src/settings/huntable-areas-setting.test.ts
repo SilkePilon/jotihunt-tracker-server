@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { openDemoStateStore, type DemoStateStore } from "../demo/demo-state";
+import { openControlStore, type ControlStore } from "../editions/control-store";
 import { getHuntableAreas, initHuntableAreas, normalizeAreas, resetHuntableAreas, setHuntableAreas, type HuntableAreasStore } from "./huntable-areas-setting";
 
 const uri = process.env.MONGO_URI_TEST ?? "mongodb://localhost:27017/jotihunt-test";
-let store: DemoStateStore;
+let store: ControlStore;
 
 beforeAll(async () => {
-  store = await openDemoStateStore(uri);
+  store = await openControlStore(uri);
 });
 beforeEach(async () => {
   await store.connection.collection("settings").deleteMany({});

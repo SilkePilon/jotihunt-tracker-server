@@ -1,5 +1,5 @@
 import mongoose, { type Model } from "mongoose";
-import { isDemoMode } from "../demo/demo-mode";
+import { isArchiveShown } from "../editions/work-tracking";
 import { newWebauthnUserId, User, UserSchema, type UserType } from "../models/user.model";
 import { authConnection } from "./auth-db";
 
@@ -17,7 +17,7 @@ export interface PasskeyFields {
  */
 function userModels(): Model<unknown>[] {
   const real = authConnection();
-  if (!isDemoMode() || real === mongoose.connection) return [User as unknown as Model<unknown>];
+  if (!isArchiveShown() || real === mongoose.connection) return [User as unknown as Model<unknown>];
   const realUser = (real.models.User ?? real.model("User", UserSchema)) as unknown as Model<unknown>;
   return [User as unknown as Model<unknown>, realUser];
 }

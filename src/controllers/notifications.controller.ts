@@ -4,7 +4,7 @@ import { PushSubscription } from "../models/push-subscription.model";
 import { User } from "../models/user.model";
 import { buildBroadcastNotification, knownOptionalTypes, REMOVED_NOTIFICATION_TYPES } from "../services/notifier.helpers";
 import { counterHuntView } from "../services/telegram.helpers";
-import { currentGeneration, runTracked } from "../demo/demo-mode";
+import { currentGeneration, runTracked } from "../editions/work-tracking";
 import { sendToAll, vapidPublicKey } from "../services/push.service";
 
 const FEED_LIMIT = 50;

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { Request, Response } from "express";
-import { openDemoStateStore, type DemoStateStore } from "../demo/demo-state";
+import { openControlStore, type ControlStore } from "../editions/control-store";
 import { initPredictionSetting, isPredictionEnabled, resetPredictionSetting, setPredictionEnabled } from "./prediction-setting";
 
 // The controllers and the cron import the logger from the app entry point, which would start the server
@@ -14,10 +14,10 @@ const { putPredictionSetting, getPredictionSetting } = await import("./settings.
 const { default: recomputePredictions } = await import("../crons/prediction.cron");
 
 const uri = process.env.MONGO_URI_TEST ?? "mongodb://localhost:27017/jotihunt-test";
-let store: DemoStateStore;
+let store: ControlStore;
 
 beforeAll(async () => {
-  store = await openDemoStateStore(uri);
+  store = await openControlStore(uri);
 });
 beforeEach(async () => {
   await store.connection.collection("settings").deleteMany({});

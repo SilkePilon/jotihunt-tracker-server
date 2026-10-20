@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import mongoose from "mongoose";
 import { User } from "../models/user.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
-import { setDemoModeFlag } from "../demo/demo-mode";
+import { setArchiveFlag } from "../editions/work-tracking";
 import { setAuthConnection } from "./auth-db";
 import { createAccount, updateAccounts } from "./user-store";
 import { publicUser } from "./public-user";
@@ -18,11 +18,11 @@ beforeAll(async () => {
 beforeEach(async () => {
   await clearTestDb();
   await real.collection("users").deleteMany({});
-  setDemoModeFlag(false);
+  setArchiveFlag(false);
   setAuthConnection(null);
 });
 afterAll(async () => {
-  setDemoModeFlag(false);
+  setArchiveFlag(false);
   setAuthConnection(null);
   await real.dropDatabase();
   await real.close();
@@ -50,7 +50,7 @@ describe("createAccount", () => {
 
   test("in demo mode the user is mirrored to the real database with the same id", async () => {
     setAuthConnection(real);
-    setDemoModeFlag(true);
+    setArchiveFlag(true);
     const user = await createAccount({ name: "Jesse", passkey });
     const mirrored = await real.collection("users").findOne({ _id: user._id });
     expect(mirrored?.name).toBe("Jesse");
@@ -72,7 +72,7 @@ describe("createAccount", () => {
 describe("updateAccounts", () => {
   test("in demo mode updates both databases", async () => {
     setAuthConnection(real);
-    setDemoModeFlag(true);
+    setArchiveFlag(true);
     const user = await createAccount({ name: "Jesse" });
     await updateAccounts({ _id: user._id }, { $set: { name: "Jes" } });
     expect((await User.findById(user._id))?.name).toBe("Jes");
@@ -81,7 +81,7 @@ describe("updateAccounts", () => {
 
   test("in demo mode leaves the real database alone when the current one matched nothing", async () => {
     setAuthConnection(real);
-    setDemoModeFlag(true);
+    setArchiveFlag(true);
     const user = await createAccount({ name: "Jesse" });
     // Only the real database still has the old name, so only it would match
     await User.updateOne({ _id: user._id }, { $set: { name: "Demo" } });

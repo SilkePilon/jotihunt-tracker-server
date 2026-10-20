@@ -1,7 +1,7 @@
 import { pipeUIMessageStreamToResponse, type UIMessage } from "ai";
 import type { Request, Response } from "express";
-import { releaseDemoWork } from "../demo/database-switch";
-import { currentGeneration, runTracked } from "../demo/demo-mode";
+import { releaseSwitchWork } from "../editions/database-switch";
+import { currentGeneration, runTracked } from "../editions/work-tracking";
 import { logger } from "../logger";
 import { streamIntelChat } from "../services/intel-chat/agent";
 import { getIntelChatModels, getIntelToolDeps } from "../services/intel-chat/instance";
@@ -41,7 +41,7 @@ export async function resumeChat(req: Request, res: Response) {
   const gone = new AbortController();
   res.on("close", () => gone.abort());
   // Following a turn is not demo work: the turn itself is
-  releaseDemoWork(res);
+  releaseSwitchWork(res);
   await pipeUIMessageStreamToResponse({ response: res, stream: followTurn(turn, gone.signal) });
 }
 
@@ -109,7 +109,7 @@ export async function postChat(req: Request, res: Response) {
     });
     streaming = true;
     // A turn may stream for minutes: it must not hold up a demo switch (its save is counted and generation-checked)
-    releaseDemoWork(res);
+    releaseSwitchWork(res);
     // Read on the server to the end (onEnd then saves and ends the turn); this client follows while it is connected
     runTurnStream(turn, stream).catch((error) => {
       logger.error(`Intel chat turn of item ${articleId} failed: ${error instanceof Error ? error.name : "unknown error"}`);

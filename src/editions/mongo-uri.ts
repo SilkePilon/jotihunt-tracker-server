@@ -36,7 +36,7 @@ export function demoDbName(uri: string): string {
  * the selected database, so keep authenticating where the real connection does. `mongodb+srv` URIs are left alone:
  * the driver takes their authSource from the DNS TXT record.
  */
-export function demoConnectOptions(uri: string, dbName: string): ConnectOptions {
+export function dbConnectOptions(uri: string, dbName: string): ConnectOptions {
   const { authority, path, query } = parseMongoUri(uri);
   const isSrv = authority.startsWith("mongodb+srv:");
   const hasCredentials = authority.includes("@");

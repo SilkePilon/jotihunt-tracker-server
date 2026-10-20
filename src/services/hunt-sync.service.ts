@@ -2,7 +2,7 @@ import { Hunt } from "../models/hunt.model";
 import { HuntSyncEvent } from "../models/hunt-sync-event.model";
 import { Marker, MarkerType } from "../models/marker.model";
 import { AppNotification, type AppNotificationDocument } from "../models/notification.model";
-import { currentGeneration, runTracked } from "../demo/demo-mode";
+import { currentGeneration, runTracked } from "../editions/work-tracking";
 import { buildHuntSyncNotification, type HuntSyncNotificationEvent } from "./notifier.helpers";
 import { sendToAll } from "./push.service";
 

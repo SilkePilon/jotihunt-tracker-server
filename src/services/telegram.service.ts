@@ -3,7 +3,7 @@ import { ServiceError } from "../http/service-error";
 import { AppNotification } from "../models/notification.model";
 import { TELEGRAM_LINK_KEY, telegramLinkModel, type TelegramLinkDoc } from "../models/telegram-link.model";
 import { telegramMessageModel, type TelegramMessageDoc } from "../models/telegram-message.model";
-import { runTracked, runTrackedRetrying } from "../demo/demo-mode";
+import { runTracked, runTrackedRetrying } from "../editions/work-tracking";
 import { sendToAll } from "./push.service";
 import {
   buildTelegramCounterHuntNotification,
