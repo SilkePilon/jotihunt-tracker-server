@@ -14,6 +14,7 @@ import {
   setAiModels,
   setGeneral,
   setPlain,
+  setHuntTimesSource,
   setSecret,
   settingsKeyOk,
 } from "./app-config";
@@ -184,4 +185,23 @@ describe("vehicle groups sync", () => {
     syncVehicleGroups(shared);
     expect(shared as Partial<VehicleGroups>).toEqual({ walking: 1, car: 3 });
   });
+});
+
+test("hunt times come from the hunt times source; env only for the live edition", async () => {
+  const env = { HUNT_START_TIME: "2026-10-17T08:00:00Z", HUNT_END_TIME: "2026-10-18T10:00:00Z" };
+  await initAppConfig(connection, env);
+  let times = { huntStart: null as string | null, huntEnd: null as string | null, live: false };
+  const writes: unknown[] = [];
+  setHuntTimesSource({ read: () => times, write: async (patch) => void writes.push(patch) });
+  try {
+    expect(general("huntStart")).toEqual({ value: null, source: "default" });
+    times = { ...times, live: true };
+    expect(general("huntStart")).toEqual({ value: "2026-10-17T08:00:00.000Z", source: "env" });
+    times = { huntStart: "2027-10-16T08:00:00.000Z", huntEnd: null, live: true };
+    expect(general("huntStart")).toEqual({ value: "2027-10-16T08:00:00.000Z", source: "db" });
+    await setGeneral({ huntStart: "2027-10-16T09:00:00Z", groupName: "X" }, null);
+    expect(writes).toEqual([{ huntStart: "2027-10-16T09:00:00.000Z" }]);
+  } finally {
+    setHuntTimesSource(null);
+  }
 });

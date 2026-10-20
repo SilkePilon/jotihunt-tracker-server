@@ -102,6 +102,17 @@ let env: Env = process.env;
 let doc: AppConfigDoc = { key: DOC_KEY };
 const events = new EventEmitter();
 
+/** Hunt times belong to an edition (registry entry); env HUNT_START_TIME/HUNT_END_TIME only back up the live one. */
+export interface HuntTimesSource {
+  read(): { huntStart: string | null; huntEnd: string | null; live: boolean };
+  write(patch: { huntStart?: string | null; huntEnd?: string | null }): Promise<void>;
+}
+let huntTimes: HuntTimesSource | null = null;
+
+export function setHuntTimesSource(source: HuntTimesSource | null) {
+  huntTimes = source;
+}
+
 const text = (value: string | null | undefined) => value?.trim() || null;
 const positiveInt = (value: unknown): number | null => {
   const n = typeof value === "number" ? value : Number(typeof value === "string" ? value.trim() : NaN);
@@ -134,6 +145,7 @@ export function resetAppConfig() {
   connection = null;
   env = process.env;
   doc = { key: DOC_KEY };
+  huntTimes = null;
   events.removeAllListeners();
 }
 
@@ -145,9 +157,13 @@ export function general<K extends keyof GeneralValues>(key: K): Sourced<GeneralV
   const g = doc.general ?? {};
   switch (key) {
     case "huntStart":
-      return pick(isoDate(g.huntStart), isoDate(env.HUNT_START_TIME), null) as Sourced<GeneralValues[K]>;
-    case "huntEnd":
-      return pick(isoDate(g.huntEnd), isoDate(env.HUNT_END_TIME), null) as Sourced<GeneralValues[K]>;
+    case "huntEnd": {
+      const hunt = key as "huntStart" | "huntEnd";
+      const envName = hunt === "huntStart" ? "HUNT_START_TIME" : "HUNT_END_TIME";
+      if (!huntTimes) return pick(isoDate(g[hunt]), isoDate(env[envName]), null) as Sourced<GeneralValues[K]>;
+      const times = huntTimes.read();
+      return pick(isoDate(times[hunt]), times.live ? isoDate(env[envName]) : null, null) as Sourced<GeneralValues[K]>;
+    }
     case "homeTeamApiId":
       return pick(positiveInt(g.homeTeamApiId), positiveInt(env.HOME_TEAM_API_ID), null) as Sourced<GeneralValues[K]>;
     case "groupName":
@@ -252,7 +268,13 @@ export async function setGeneral(patch: GeneralSettings, by: string | null): Pro
   const set: Record<string, unknown> = {};
   const unset: string[] = [];
   const put = (path: string, value: unknown) => (value === null || value === undefined || value === "" ? unset.push(path) : (set[path] = value));
-  for (const key of ["huntStart", "huntEnd"] as const) if (key in patch) put(`general.${key}`, isoDate(patch[key]));
+  const huntPatch: { huntStart?: string | null; huntEnd?: string | null } = {};
+  for (const key of ["huntStart", "huntEnd"] as const) {
+    if (!(key in patch)) continue;
+    if (huntTimes) huntPatch[key] = isoDate(patch[key]);
+    else put(`general.${key}`, isoDate(patch[key]));
+  }
+  if (Object.keys(huntPatch).length) await huntTimes!.write(huntPatch);
   if ("homeTeamApiId" in patch) put("general.homeTeamApiId", positiveInt(patch.homeTeamApiId));
   for (const key of ["groupName", "logoUrl", "discordUrl"] as const) if (key in patch) put(`general.${key}`, text(patch[key]));
   for (const vehicle of VEHICLE_KEYS) if (patch.vehicleGroups && vehicle in patch.vehicleGroups) put(`general.vehicleGroups.${vehicle}`, positiveInt(patch.vehicleGroups[vehicle]));

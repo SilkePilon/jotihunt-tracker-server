@@ -17,6 +17,7 @@ export async function initNightAreas(settingStore: NightAreasStore): Promise<Rou
   store = settingStore;
   const doc = await settingStore.readNightAreas();
   current = doc ? { enabled: doc.enabled !== false, areas: doc.areas ?? [] } : DEFAULT;
+  for (const listener of listeners) listener();
   return current;
 }
 
