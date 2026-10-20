@@ -15,6 +15,15 @@ export const CONE_HALF_ANGLE = 30;
 /** ~15 m in degrees: isochrones come back with a point every few metres */
 const SIMPLIFY_TOLERANCE = 0.00015;
 
+const round5 = (n: number) => Math.round(n * 1e5) / 1e5;
+const roundRing = (ring: GeoJSON.Position[]) => ring.map(([lng, lat]) => [round5(lng), round5(lat)]);
+
+/** Coordinates rounded to 5 decimals (~1 m): smaller responses, no visible change. */
+export function roundGeometry<T extends AreaGeometry>(geometry: T): T {
+  if (geometry.type === "Polygon") return { type: "Polygon", coordinates: geometry.coordinates.map(roundRing) } as T;
+  return { type: "MultiPolygon", coordinates: geometry.coordinates.map((polygon) => polygon.map(roundRing)) } as T;
+}
+
 /** Fallback area without a router: a circle of the walking distance. */
 export function reachCircle(center: [number, number], distanceM: number): GeoJSON.Polygon {
   return circle(center, distanceM, { units: "meters", steps: 64 }).geometry;

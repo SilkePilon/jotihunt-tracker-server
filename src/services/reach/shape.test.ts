@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import area from "@turf/area";
 import booleanPointInPolygon from "@turf/boolean-point-in-polygon";
 import destination from "@turf/destination";
-import { coneIn, nearestUnvisited, reachCircle, simplifyArea, type Group } from "./shape";
+import { coneIn, nearestUnvisited, reachCircle, roundGeometry, simplifyArea, type Group } from "./shape";
 
 const fix: [number, number] = [5.9, 52.0];
 const at = (km: number, bearing: number) => destination(fix, km, bearing).geometry.coordinates as [number, number];
@@ -63,5 +63,14 @@ describe("coneIn", () => {
   test("no overlap: null", () => {
     const farArea = reachCircle(at(10, 270), 500);
     expect(coneIn(fix, target, farArea, 1000)).toBeNull();
+  });
+});
+
+describe("roundGeometry", () => {
+  test("rounds polygon and multipolygon coordinates to 5 decimals", () => {
+    expect(roundGeometry({ type: "Polygon", coordinates: [[[5.123456789, 52.987654321], [5.1, 52.1], [5.2, 52.0], [5.123456789, 52.987654321]]] }))
+      .toEqual({ type: "Polygon", coordinates: [[[5.12346, 52.98765], [5.1, 52.1], [5.2, 52.0], [5.12346, 52.98765]]] });
+    expect(roundGeometry({ type: "MultiPolygon", coordinates: [[[[1.000004, 2.000006], [1, 3], [2, 2], [1.000004, 2.000006]]]] }).coordinates[0][0][0])
+      .toEqual([1, 2.00001]);
   });
 });

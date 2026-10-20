@@ -57,6 +57,12 @@ class ServedConfig(unittest.TestCase):
         self.assertNotEqual(first, second)
         self.assertNotEqual(second, supervisor.config_hash())
 
+    def test_hash_skips_subdirectories_in_custom_models(self):
+        os.makedirs(os.path.join(self.app, "custom_models", "nested"))
+        with open(os.path.join(self.app, "custom_models", "foot_night.json"), "w") as f:
+            f.write("{}")
+        self.assertEqual(len(supervisor.config_hash()), 40)
+
     def test_needs_rebuild_when_meta_hash_differs(self):
         self.assertTrue(supervisor.config_outdated({}))
         self.assertTrue(supervisor.config_outdated({"configHash": "old"}))
@@ -94,6 +100,32 @@ class RetryDecision(unittest.TestCase):
 
     def test_config_rebuild_failure_retries_while_old_graph_serves(self):
         self.assertTrue(supervisor.should_retry(retry=True, has_graph=True))
+
+
+class FakeProc:
+    def __init__(self, code):
+        self.code = code
+
+    def poll(self):
+        return self.code
+
+
+class RestartDecision(unittest.TestCase):
+    def test_restarts_when_never_started(self):
+        self.assertTrue(supervisor.needs_restart(None, swapping=False, has_graph=True))
+
+    def test_restarts_when_process_exited(self):
+        self.assertTrue(supervisor.needs_restart(FakeProc(1), swapping=False, has_graph=True))
+
+    def test_leaves_running_process_alone(self):
+        self.assertFalse(supervisor.needs_restart(FakeProc(None), swapping=False, has_graph=True))
+
+    def test_waits_while_swapping_graph_dirs(self):
+        self.assertFalse(supervisor.needs_restart(None, swapping=True, has_graph=True))
+        self.assertFalse(supervisor.needs_restart(FakeProc(1), swapping=True, has_graph=True))
+
+    def test_nothing_to_serve_without_a_graph(self):
+        self.assertFalse(supervisor.needs_restart(None, swapping=False, has_graph=False))
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import destination from "@turf/destination";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../../test/db";
+import { logger } from "../../logger";
 import { Area } from "../../models/area.model";
 import { Marker, MarkerType } from "../../models/marker.model";
 import { Team } from "../../models/team.model";
@@ -8,6 +9,7 @@ import { RoutingUnavailableError } from "../prediction/routing";
 import type { IsochroneRequest, IsochroneRouter } from "../routes/graphhopper.client";
 import type { TrailsResponse } from "../routes/trails.service";
 import { createReachService } from "./reach.service";
+import { coneIn, reachCircle } from "./shape";
 
 beforeAll(connectTestDb);
 beforeEach(clearTestDb);
@@ -133,5 +135,109 @@ describe("reach service", () => {
       const [alpha] = (await service.reach()).areas;
       expect(alpha).toMatchObject({ speedKmh: 5, measured: false, legs: 1 });
     });
+  });
+
+  describe("per-area failures", () => {
+    // Two points: simplify throws "invalid polygon" on it
+    const degenerate = { type: "Polygon", coordinates: [[[5.9, 52.0], [5.91, 52.0]]] } as unknown as GeoJSON.Polygon;
+    const bravoAt = east(20);
+
+    async function twoAreas() {
+      await Area.create([{ name: "Alpha", status: "green", updatedAt: t("09:00") }, { name: "Bravo", status: "green", updatedAt: t("09:00") }]);
+      await Marker.create([
+        { area: "alpha", time: t("13:00"), location: point(start), type: MarkerType.Hint },
+        { area: "bravo", time: t("13:00"), location: point(bravoAt), type: MarkerType.Hint },
+      ]);
+      await team(1, "A", "Alpha", east(1));
+      await team(2, "B", "Bravo", east(21));
+    }
+    const routerByPoint = (alpha: GeoJSON.Polygon) => {
+      const router: IsochroneRouter = { async isochrone({ point: p }) { return p[0] === start[0] ? alpha : square; } };
+      return router;
+    };
+
+    test("a degenerate isochrone falls back to a circle for that area only, logged once", async () => {
+      await twoAreas();
+      let clock = t("14:00");
+      const warn = spyOn(logger, "warn");
+      try {
+        const service = createReachService({ router: routerByPoint(degenerate), trails: noTrails, now: () => clock, configured: () => true, visits: async () => [] });
+        const { areas } = await service.reach();
+        expect(areas.map((a) => [a.area, a.estimate])).toEqual([["alpha", true], ["bravo", false]]);
+        expect(areas[0].polygon.type).toBe("Polygon");
+        expect(areas[0].cone).not.toBeNull();
+        clock = t("14:05"); // past the memo: computes again
+        await service.reach();
+        expect(warn.mock.calls.filter(([m]) => String(m).includes("alpha")).length).toBe(1);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    test("a failing cone only drops that cone", async () => {
+      await twoAreas();
+      const service = createReachService({
+        router: routerByPoint(square), trails: noTrails, now: () => t("14:00"), configured: () => true, visits: async () => [],
+        shapes: { coneIn: (fix, target, area, radius) => { if (fix[0] === start[0]) throw new Error("boom"); return coneIn(fix, target, area, radius); } },
+      });
+      const { areas } = await service.reach();
+      expect(areas.map((a) => [a.area, a.cone === null])).toEqual([["alpha", true], ["bravo", false]]);
+    });
+
+    test("any other per-area error skips just that area", async () => {
+      await twoAreas();
+      const { router } = fakeRouter(async () => { throw new RoutingUnavailableError("down", { kind: "temporary" }); });
+      const service = createReachService({
+        router, trails: noTrails, now: () => t("14:00"), configured: () => true, visits: async () => [],
+        shapes: { reachCircle: (center, distanceM) => { if (center[0] === start[0]) throw new Error("boom"); return reachCircle(center, distanceM); } },
+      });
+      const { areas } = await service.reach();
+      expect(areas.map((a) => a.area)).toEqual(["bravo"]);
+    });
+
+    test("a rejected compute does not poison the next call", async () => {
+      await twoAreas();
+      let fail = true;
+      const service = createReachService({
+        router: routerByPoint(square), trails: noTrails, now: () => t("14:00"), configured: () => true,
+        visits: async () => { if (fail) throw new Error("db down"); return []; },
+      });
+      await expect(service.reach()).rejects.toThrow("db down");
+      fail = false;
+      expect((await service.reach()).areas).toHaveLength(2);
+    });
+  });
+
+  test("isochrones run at most 3 at a time, results stay in area order", async () => {
+    const names = ["echo", "delta", "charlie", "bravo", "alpha"];
+    await Area.create(names.map((name) => ({ name, status: "green", updatedAt: t("09:00") })));
+    await Marker.create(names.map((area, i) => ({ area, time: t("13:00"), location: point(east(i * 5)), type: MarkerType.Hint })));
+    let running = 0;
+    let peak = 0;
+    const router: IsochroneRouter = {
+      async isochrone() {
+        running++;
+        peak = Math.max(peak, running);
+        await new Promise((r) => setTimeout(r, 20));
+        running--;
+        return square;
+      },
+    };
+    const service = createReachService({ router, trails: noTrails, now: () => t("14:00"), configured: () => true, visits: async () => [] });
+    const { areas } = await service.reach();
+    expect(areas.map((a) => a.area)).toEqual(["alpha", "bravo", "charlie", "delta", "echo"]);
+    expect(peak).toBe(3);
+  });
+
+  test("output coordinates have at most 5 decimals", async () => {
+    await Area.create([{ name: "Alpha", status: "green", updatedAt: t("09:00") }]);
+    await Marker.create([{ area: "alpha", time: t("13:00"), location: point(start), type: MarkerType.Hint }]);
+    await team(1, "A", "Alpha", east(1));
+    const { router } = fakeRouter(async () => { throw new RoutingUnavailableError("down", { kind: "temporary" }); });
+    const service = createReachService({ router, trails: noTrails, now: () => t("14:00"), configured: () => true, visits: async () => [] });
+    const [alpha] = (await service.reach()).areas;
+    const decimals = (g: unknown) => Math.max(...(JSON.stringify(g).match(/\d+\.\d+/g) ?? []).map((n) => n.split(".")[1].length));
+    expect(decimals(alpha.polygon)).toBeLessThanOrEqual(5);
+    expect(decimals(alpha.cone?.polygon)).toBeLessThanOrEqual(5);
   });
 });

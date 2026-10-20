@@ -28,7 +28,7 @@ SERVE_HEAP = os.environ.get("SERVE_HEAP", "1g")
 IMPORT_HEAP = os.environ.get("IMPORT_HEAP", "2g")
 TZ = ZoneInfo("Europe/Amsterdam")
 
-state = {"building": False, "builtAt": None, "report": None, "lastError": None}
+state = {"building": False, "swapping": False, "builtAt": None, "report": None, "lastError": None}
 lock = threading.Lock()  # guards starting a rebuild
 state_lock = threading.Lock()  # guards reads/writes of state
 RETRY_DELAYS = [300, 900, 1800, 3600]  # first-build retries, then hourly
@@ -59,8 +59,11 @@ def config_hash():
         digest.update(f.read())
     if os.path.isdir(CUSTOM_MODELS):
         for name in sorted(os.listdir(CUSTOM_MODELS)):
+            file = os.path.join(CUSTOM_MODELS, name)
+            if not os.path.isfile(file):
+                continue
             digest.update(name.encode())
-            with open(os.path.join(CUSTOM_MODELS, name), "rb") as f:
+            with open(file, "rb") as f:
                 digest.update(f.read())
     return digest.hexdigest()
 
@@ -156,30 +159,39 @@ def build():
     shutil.rmtree(new_graph, ignore_errors=True)
     run_captured(["java", f"-Xmx{IMPORT_HEAP}", f"-Ddw.graphhopper.graph.location={new_graph}", f"-Ddw.graphhopper.datareader.file={night_pbf}", "-jar", JAR, "import", CONFIG])
     config_digest = snapshot_config(new_graph)
-    stop_server()
-    shutil.rmtree(graph_old, ignore_errors=True)
-    had_old = os.path.isdir(graph_cache)
-    built_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    set_state(swapping=True)  # the watchdog leaves the server alone only during stop -> swap -> start
     try:
-        if had_old:
-            os.rename(graph_cache, graph_old)
-        os.rename(new_graph, graph_cache)
-        with open(path("meta.json.tmp"), "w") as f:
-            json.dump({"builtAt": built_at, "report": report, "configHash": config_digest}, f)
-        os.replace(path("meta.json.tmp"), path("meta.json"))
-    except Exception:
-        if had_old and os.path.isdir(graph_old):
-            shutil.rmtree(graph_cache, ignore_errors=True)
-            os.rename(graph_old, graph_cache)
-        raise
-    shutil.rmtree(graph_old, ignore_errors=True)
-    set_state(builtAt=built_at, report=report)
-    start_server()
+        stop_server()
+        shutil.rmtree(graph_old, ignore_errors=True)
+        had_old = os.path.isdir(graph_cache)
+        built_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        try:
+            if had_old:
+                os.rename(graph_cache, graph_old)
+            os.rename(new_graph, graph_cache)
+            with open(path("meta.json.tmp"), "w") as f:
+                json.dump({"builtAt": built_at, "report": report, "configHash": config_digest}, f)
+            os.replace(path("meta.json.tmp"), path("meta.json"))
+        except Exception:
+            if had_old and os.path.isdir(graph_old):
+                shutil.rmtree(graph_cache, ignore_errors=True)
+                os.rename(graph_old, graph_cache)
+            raise
+        shutil.rmtree(graph_old, ignore_errors=True)
+        set_state(builtAt=built_at, report=report)
+        start_server()
+    finally:
+        set_state(swapping=False)
 
 
 def should_retry(retry, has_graph):
     """After a failed build: retry without a graph, or when asked to (config changed); else wait for the weekly run."""
     return retry or not has_graph
+
+
+def needs_restart(proc, swapping, has_graph):
+    """Watchdog decision: (re)start GraphHopper when it never started or exited, unless a graph swap is in progress."""
+    return not swapping and has_graph and (proc is None or proc.poll() is not None)
 
 
 def rebuild_async(retry=False):
@@ -200,7 +212,7 @@ def rebuild_async(retry=False):
                 except Exception as error:  # noqa: BLE001 - report any failure via /status
                     set_state(lastError=str(error)[-1500:])
                     log(f"rebuild failed: {error}")
-                    if server_proc is None and os.path.isdir(path("graph-cache")):
+                    if needs_restart(server_proc, swapping=False, has_graph=os.path.isdir(path("graph-cache"))):
                         start_server()
                     if not should_retry(retry, os.path.isdir(path("graph-cache"))):
                         return  # old graph keeps serving; the next weekly run retries
@@ -256,8 +268,8 @@ def weekly_tick(last):
         last = now.date()
         rebuild_async()
     with state_lock:
-        building = state["building"]
-    if not building and (server_proc is None or server_proc.poll() is not None) and os.path.isdir(path("graph-cache")):
+        swapping = state["swapping"]
+    if needs_restart(server_proc, swapping, os.path.isdir(path("graph-cache"))):
         log("GraphHopper is not running, restarting")
         start_server()
     return last
