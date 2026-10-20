@@ -1,0 +1,94 @@
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import destination from "@turf/destination";
+import { clearTestDb, connectTestDb, disconnectTestDb } from "../../test/db";
+import { Area } from "../../models/area.model";
+import { Marker, MarkerType } from "../../models/marker.model";
+import { Team } from "../../models/team.model";
+import { RoutingUnavailableError } from "../prediction/routing";
+import type { IsochroneRequest, IsochroneRouter } from "../routes/graphhopper.client";
+import type { TrailsResponse } from "../routes/trails.service";
+import { createReachService } from "./reach.service";
+
+beforeAll(connectTestDb);
+beforeEach(clearTestDb);
+afterAll(disconnectTestDb);
+
+// 14:00 on 17 Oct is daytime in Gelderland
+const t = (hhmm: string) => new Date(`2026-10-17T${hhmm}:00+02:00`);
+const start: [number, number] = [5.9, 52.0];
+const east = (km: number) => destination(start, km, 90).geometry.coordinates as [number, number];
+const point = (c: [number, number]) => ({ type: "Point" as const, coordinates: c });
+// Covers the fixes and the groups east of them, so the cone has something to cut
+const square: GeoJSON.Polygon = { type: "Polygon", coordinates: [[[5.8, 51.9], [6.2, 51.9], [6.2, 52.1], [5.8, 52.1], [5.8, 51.9]]] };
+const noTrails = async (): Promise<TrailsResponse> => ({ enabled: false, trails: { type: "FeatureCollection", features: [] } });
+
+function fakeRouter(answer: () => Promise<GeoJSON.Polygon>) {
+  const calls: IsochroneRequest[] = [];
+  const router: IsochroneRouter = { async isochrone(request) { calls.push(request); return answer(); } };
+  return { router, calls };
+}
+
+async function team(apiId: number, name: string, area: string, coord: [number, number]) {
+  await Team.create({ apiId, name, accomodation: "x", street: "x", houseNumber: 1, postCode: "1234AB", city: "x", area, location: point(coord) });
+}
+
+describe("reach service", () => {
+  test("isochrone at the measured speed, cone toward the nearest unvisited group", async () => {
+    await Area.create([{ name: "Alpha", status: "green", updatedAt: t("09:00") }]);
+    // Two legs of 1 h at 4 km/h straight × 1.2 → 4 km/h
+    await Marker.create([
+      { area: "alpha", time: t("11:00"), location: point(start), type: MarkerType.Hint },
+      { area: "alpha", time: t("12:00"), location: point(east(4 / 1.2)), type: MarkerType.Hint },
+      { area: "alpha", time: t("13:00"), location: point(east(8 / 1.2)), type: MarkerType.Hunt },
+    ]);
+    await team(1, "Bezocht", "Alpha", east(7));
+    await team(2, "Open", "Alpha", east(9));
+    const { router, calls } = fakeRouter(async () => square);
+    const service = createReachService({
+      router, trails: noTrails, now: () => t("13:30"), configured: () => true,
+      visits: async () => [{ area: "alpha", teamApiId: 1, round: 1, state: "visited", source: "auto", visitedAt: null }],
+    });
+    const { areas } = await service.reach();
+    expect(areas).toHaveLength(1);
+    const [alpha] = areas;
+    expect(alpha).toMatchObject({ area: "alpha", speedKmh: 4, measured: true, legs: 2, distanceM: 2000, capped: false, night: false, estimate: false });
+    expect(alpha.fix).toMatchObject({ type: "hunt", at: t("13:00").toISOString() });
+    expect(calls).toEqual([{ profile: "foot", point: east(8 / 1.2), distanceM: 2000 }]);
+    expect(alpha.cone?.teamApiId).toBe(2);
+    expect(alpha.cone?.polygon).toBeTruthy();
+  });
+
+  test("router down: circle, estimate; OV areas and areas without markers are skipped", async () => {
+    await Area.create([{ name: "Alpha", status: "green", updatedAt: t("09:00") }, { name: "Bravo", status: "blue", updatedAt: t("09:00") }]);
+    await Marker.create([
+      { area: "alpha", time: t("13:00"), location: point(start), type: MarkerType.Hint },
+      { area: "bravo", time: t("13:00"), location: point(start), type: MarkerType.Hint },
+    ]);
+    const { router } = fakeRouter(async () => { throw new RoutingUnavailableError("down", { kind: "temporary" }); });
+    const service = createReachService({ router, trails: noTrails, now: () => t("14:00"), configured: () => true, visits: async () => [] });
+    const { areas } = await service.reach();
+    expect(areas.map((a) => a.area)).toEqual(["alpha"]);
+    expect(areas[0]).toMatchObject({ speedKmh: 5, measured: false, distanceM: 5000, estimate: true, cone: null });
+    expect(areas[0].polygon.type).toBe("Polygon");
+  });
+
+  test("capped at 3 hours of walking, night profile after sunset", async () => {
+    await Area.create([{ name: "Alpha", status: "green", updatedAt: t("09:00") }]);
+    await Marker.create([{ area: "alpha", time: t("16:00"), location: point(start), type: MarkerType.Hint }]);
+    const { router, calls } = fakeRouter(async () => square);
+    const service = createReachService({ router, trails: noTrails, now: () => t("22:00"), configured: () => true, visits: async () => [] });
+    const [alpha] = (await service.reach()).areas;
+    expect(alpha).toMatchObject({ capped: true, night: true, distanceM: 15000 });
+    expect(calls[0].profile).toBe("foot_night");
+  });
+
+  test("same fix and distance within the memo: one router call", async () => {
+    await Area.create([{ name: "Alpha", status: "green", updatedAt: t("09:00") }]);
+    await Marker.create([{ area: "alpha", time: t("13:00"), location: point(start), type: MarkerType.Hint }]);
+    const { router, calls } = fakeRouter(async () => square);
+    const service = createReachService({ router, trails: noTrails, now: () => t("14:00"), configured: () => true, visits: async () => [] });
+    await service.reach();
+    await service.reachJson();
+    expect(calls).toHaveLength(1);
+  });
+});
