@@ -6,6 +6,11 @@ export interface RouteRequest { profile: "foot" | "car"; from: [number, number];
 export interface RouteResult { coordinates: [number, number][]; distanceM: number; durationS: number }
 export interface Router { route(request: RouteRequest): Promise<RouteResult> }
 export type PostFn = (url: string, body: unknown, timeoutMs: number) => Promise<{ status: number; json: unknown }>;
+export type ReachProfile = "foot" | "foot_night";
+/** `point` is [lng, lat] */
+export interface IsochroneRequest { profile: ReachProfile; point: [number, number]; distanceM: number }
+export interface IsochroneRouter { isochrone(request: IsochroneRequest): Promise<GeoJSON.Polygon | GeoJSON.MultiPolygon> }
+export type GetFn = (url: string, timeoutMs: number) => Promise<{ status: number; json: unknown }>;
 
 const UNPAVED = "(road_class == PATH || road_class == FOOTWAY || road_class == TRACK || road_class == BRIDLEWAY)";
 const NIGHT_BLOCK = "foot_temporal_access == NO";
@@ -37,10 +42,21 @@ const defaultPost: PostFn = async (url, body, timeoutMs) => {
   return { status: res.status, json: await res.json().catch(() => null) };
 };
 
+const defaultGet: GetFn = async (url, timeoutMs) => {
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+  return { status: res.status, json: await res.json().catch(() => null) };
+};
+
+interface GhIsochrone { polygons?: { geometry?: { type?: string } }[]; message?: string }
+
+/** 408/429 are the router being busy, not a bad request */
+const isRequestError = (status: number) => status >= 400 && status < 500 && status !== 408 && status !== 429;
+
 interface GhResponse { paths?: { distance: number; time: number; points: { coordinates: [number, number][] } }[]; message?: string }
 
-export function createGraphHopperRouter(baseUrl: string | undefined, deps: { post?: PostFn; timeoutMs?: number } = {}): Router {
+export function createGraphHopperRouter(baseUrl: string | undefined, deps: { post?: PostFn; get?: GetFn; timeoutMs?: number } = {}): Router & IsochroneRouter {
   const post = deps.post ?? defaultPost;
+  const get = deps.get ?? defaultGet;
   const timeoutMs = deps.timeoutMs ?? 10_000;
   return {
     async route({ profile, from, to, night, nightAreas }) {
@@ -54,12 +70,29 @@ export function createGraphHopperRouter(baseUrl: string | undefined, deps: { pos
         throw new RoutingUnavailableError(`Router unreachable: ${error instanceof Error ? error.message : String(error)}`, { kind: "temporary" });
       }
       const json = (res.json ?? {}) as GhResponse;
-      // 408/429 are the router being busy, not a bad request: retry later
-      if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) throw new RoutingUnavailableError(json.message ?? `Router answered ${res.status}`, { kind: "request" });
+      if (isRequestError(res.status)) throw new RoutingUnavailableError(json.message ?? `Router answered ${res.status}`, { kind: "request" });
       const path = json.paths?.[0];
       if (res.status !== 200 || !path) throw new RoutingUnavailableError(json.message ?? `Router answered ${res.status}`, { kind: "temporary" });
       if (!Array.isArray(path.points?.coordinates)) throw new RoutingUnavailableError("Router answered without route points", { kind: "temporary" });
       return { coordinates: path.points.coordinates, distanceM: path.distance, durationS: Math.round(path.time / 1000) };
+    },
+    /** The area reachable within `distanceM` along the profile's ways (one bucket). */
+    async isochrone({ profile, point, distanceM }) {
+      if (!baseUrl) throw new RoutingUnavailableError("ROUTER_URL is not set", { kind: "permanent" });
+      const query = new URLSearchParams({ point: `${point[1]},${point[0]}`, profile, distance_limit: String(Math.round(distanceM)), buckets: "1" });
+      let res: { status: number; json: unknown };
+      try {
+        res = await get(`${baseUrl.replace(/\/$/, "")}/isochrone?${query}`, timeoutMs);
+      } catch (error) {
+        throw new RoutingUnavailableError(`Router unreachable: ${error instanceof Error ? error.message : String(error)}`, { kind: "temporary" });
+      }
+      const json = (res.json ?? {}) as GhIsochrone;
+      if (isRequestError(res.status)) throw new RoutingUnavailableError(json.message ?? `Router answered ${res.status}`, { kind: "request" });
+      const geometry = json.polygons?.[0]?.geometry;
+      if (res.status !== 200 || !geometry || (geometry.type !== "Polygon" && geometry.type !== "MultiPolygon")) {
+        throw new RoutingUnavailableError(json.message ?? `Router answered ${res.status} without a polygon`, { kind: "temporary" });
+      }
+      return geometry as GeoJSON.Polygon | GeoJSON.MultiPolygon;
     },
   };
 }

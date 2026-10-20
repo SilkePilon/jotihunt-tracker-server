@@ -1,11 +1,14 @@
 graphhopper:
   datareader.file: /data/gelderland-night.osm.pbf
   graph.location: /data/graph-cache
+  custom_models.directory: /app/custom_models
   graph.encoded_values: foot_temporal_access, foot_access, foot_average_speed, foot_priority, car_access, car_average_speed, road_class, road_access, hike_rating, country, foot_road_access, mtb_rating
   import.osm.ignored_highways: ""
   profiles:
     - name: foot
       custom_model_files: [foot.json]
+    - name: foot_night
+      custom_model_files: [foot.json, foot_night.json]
     - name: car
       custom_model_files: [car.json]
   # No CH: requests (incl. per-request custom_model for night) must work without ch.disable.

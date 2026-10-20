@@ -1,5 +1,6 @@
 import express from "express";
 import { body, param } from "express-validator";
+import * as reachController from "../controllers/reach.controller";
 import * as trailsController from "../controllers/trails.controller";
 import verifyToken from "../middleware/auth.middleware";
 import { validate } from "../middleware/validate.middleware";
@@ -7,6 +8,7 @@ import { validate } from "../middleware/validate.middleware";
 const router = express.Router();
 
 router.get("/trails", verifyToken, trailsController.getTrails);
+router.get("/reach", verifyToken, reachController.getReach);
 router.patch(
   "/legs/:markerId",
   [
