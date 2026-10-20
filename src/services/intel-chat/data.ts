@@ -1,6 +1,4 @@
 import { knownAreaName } from "../../constants/areas";
-import { isDemoMode } from "../../demo/demo-mode";
-import { simulatedPositions } from "../../demo/simulated-trackers";
 import { Article, publicArticlesFilter } from "../../models/article.model";
 import { HintCell, HintCellStatus } from "../../models/hint-cell.model";
 import { Team } from "../../models/team.model";
@@ -59,11 +57,10 @@ interface PositionLike {
   serverTime?: string | Date;
 }
 
-/** Traccar positions (demo: the simulated hunters); none when Traccar is not configured or fails */
+/** Traccar positions; none when Traccar is not configured or fails */
 async function traccarFixes(now: Date): Promise<TrackerFix[]> {
   let positions: PositionLike[] = [];
-  if (isDemoMode()) positions = simulatedPositions(now);
-  else if (traccar.isTraccarConfigured) positions = ((await traccar.getPositions().catch(() => [])) as unknown as PositionLike[]) ?? [];
+  if (traccar.isTraccarConfigured) positions = ((await traccar.getPositions().catch(() => [])) as unknown as PositionLike[]) ?? [];
   return positions
     .filter((position) => Number.isFinite(position.latitude) && Number.isFinite(position.longitude))
     .map((position) => ({

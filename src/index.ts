@@ -13,7 +13,6 @@ import { initNightAreas } from "./settings/night-areas-setting";
 import { initAppConfig, onAppConfigChange, settingsKeyOk } from "./settings/app-config";
 import { aiAvailable } from "./services/ai/model";
 import { getDemoStateStore, initDemoMode, onDemoSwitch } from "./demo/database-switch";
-import { installDemoWorld } from "./demo/demo-world";
 import { syncVehicleGroups } from "./services/tracker-onboarding.helpers";
 import { vehicleGroups } from "./services/tracker-onboarding.instance";
 import { isTraccarConfigured, usesLegacyTraccarEnv } from "./services/traccar-http";
@@ -75,7 +74,6 @@ if (!db) {
   process.exit(1);
 }
 logger.info("Trying to connect to MongoDB...");
-installDemoWorld((message) => logger.info(message));
 // Connects to the real database, or to a freshly generated demo database when demo mode was left on
 // The services log through the app logger
 const serviceLogger: ServiceLogger = { info: (message) => logger.info(message), warn: (message) => logger.warn(message), error: (message, error) => logger.error(message, error) };
