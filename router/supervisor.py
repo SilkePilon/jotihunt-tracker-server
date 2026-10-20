@@ -23,7 +23,7 @@ JAR = "/app/graphhopper-web.jar"
 CONFIG = "/app/config.yml"
 LEGACY_CONFIG = "/app/config-legacy.yml"
 CUSTOM_MODELS = "/app/custom_models"
-BUILT_CONFIG = "config-built.yml"
+SERVED = "served"  # inside a graph dir: the config + custom models it was imported with
 SERVE_HEAP = os.environ.get("SERVE_HEAP", "1g")
 IMPORT_HEAP = os.environ.get("IMPORT_HEAP", "2g")
 TZ = ZoneInfo("Europe/Amsterdam")
@@ -66,8 +66,8 @@ def config_hash():
 
 
 def served_config():
-    """The config the current graph was imported with: its copy, else the legacy config (graphs from before the copy existed)."""
-    built = path(BUILT_CONFIG)
+    """The config the current graph was imported with: its snapshot, else the legacy config (graphs from before snapshots existed)."""
+    built = os.path.join(path("graph-cache"), SERVED, "config.yml")
     if os.path.isfile(built):
         return built
     return LEGACY_CONFIG if os.path.isfile(LEGACY_CONFIG) else CONFIG
@@ -85,10 +85,28 @@ def read_meta():
         return {}
 
 
-def remember_built_config():
-    """Copy the shipped config next to the graph; returns its hash for meta.json."""
-    shutil.copyfile(CONFIG, path(BUILT_CONFIG + ".tmp"))
-    os.replace(path(BUILT_CONFIG + ".tmp"), path(BUILT_CONFIG))
+def snapshot_config(graph_dir):
+    """Snapshot the shipped config + custom models into graph_dir/served, so they move with the graph in one rename.
+
+    The copy's custom_models.directory points at the snapshot's final place (graph-cache/served/custom_models).
+    Returns the config hash for meta.json.
+    """
+    served = os.path.join(graph_dir, SERVED)
+    shutil.rmtree(served, ignore_errors=True)
+    os.makedirs(served)
+    if os.path.isdir(CUSTOM_MODELS):
+        shutil.copytree(CUSTOM_MODELS, os.path.join(served, "custom_models"))
+    target = os.path.join(path("graph-cache"), SERVED, "custom_models")
+    with open(CONFIG) as f:
+        lines = f.read().splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        key = line.lstrip()
+        if key.startswith("custom_models.directory:"):
+            indent = line[: len(line) - len(key)]
+            ending = "\n" if line.endswith("\n") else ""
+            lines[i] = f"{indent}custom_models.directory: {target}{ending}"
+    with open(os.path.join(served, "config.yml"), "w") as f:
+        f.write("".join(lines))
     return config_hash()
 
 
@@ -137,6 +155,7 @@ def build():
     report = json.loads(out.stdout.strip().splitlines()[-1])
     shutil.rmtree(new_graph, ignore_errors=True)
     run_captured(["java", f"-Xmx{IMPORT_HEAP}", f"-Ddw.graphhopper.graph.location={new_graph}", f"-Ddw.graphhopper.datareader.file={night_pbf}", "-jar", JAR, "import", CONFIG])
+    config_digest = snapshot_config(new_graph)
     stop_server()
     shutil.rmtree(graph_old, ignore_errors=True)
     had_old = os.path.isdir(graph_cache)
@@ -145,7 +164,6 @@ def build():
         if had_old:
             os.rename(graph_cache, graph_old)
         os.rename(new_graph, graph_cache)
-        config_digest = remember_built_config()
         with open(path("meta.json.tmp"), "w") as f:
             json.dump({"builtAt": built_at, "report": report, "configHash": config_digest}, f)
         os.replace(path("meta.json.tmp"), path("meta.json"))
@@ -159,7 +177,12 @@ def build():
     start_server()
 
 
-def rebuild_async():
+def should_retry(retry, has_graph):
+    """After a failed build: retry without a graph, or when asked to (config changed); else wait for the weekly run."""
+    return retry or not has_graph
+
+
+def rebuild_async(retry=False):
     with lock:
         if state["building"]:
             return False
@@ -179,11 +202,11 @@ def rebuild_async():
                     log(f"rebuild failed: {error}")
                     if server_proc is None and os.path.isdir(path("graph-cache")):
                         start_server()
-                    if os.path.isdir(path("graph-cache")):
+                    if not should_retry(retry, os.path.isdir(path("graph-cache"))):
                         return  # old graph keeps serving; the next weekly run retries
                     delay = RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
                     attempt += 1
-                    log(f"no graph yet, retrying in {delay // 60} min")
+                    log(f"retrying in {delay // 60} min")
                     time.sleep(delay)
         finally:
             set_state(building=False)
@@ -257,7 +280,7 @@ def main():
         start_server()
         if config_outdated(read_meta()):
             log("config changed since the last import, rebuilding (the old graph keeps serving)")
-            rebuild_async()
+            rebuild_async(retry=True)
     else:
         rebuild_async()
     threading.Thread(target=weekly, daemon=True).start()

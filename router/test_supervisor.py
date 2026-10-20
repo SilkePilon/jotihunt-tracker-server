@@ -30,12 +30,14 @@ class ServedConfig(unittest.TestCase):
             p.stop()
         self.tmp.cleanup()
 
-    def test_built_copy_wins(self):
-        with open(os.path.join(self.data, "config-built.yml"), "w") as f:
+    def test_graph_snapshot_wins(self):
+        served = os.path.join(self.data, "graph-cache", "served")
+        os.makedirs(served)
+        with open(os.path.join(served, "config.yml"), "w") as f:
             f.write("built")
         with open(self.legacy, "w") as f:
             f.write("legacy")
-        self.assertEqual(supervisor.served_config(), os.path.join(self.data, "config-built.yml"))
+        self.assertEqual(supervisor.served_config(), os.path.join(served, "config.yml"))
 
     def test_legacy_when_never_built_with_a_copy(self):
         with open(self.legacy, "w") as f:
@@ -60,11 +62,38 @@ class ServedConfig(unittest.TestCase):
         self.assertTrue(supervisor.config_outdated({"configHash": "old"}))
         self.assertFalse(supervisor.config_outdated({"configHash": supervisor.config_hash()}))
 
-    def test_remember_built_config_copies_and_returns_hash(self):
-        digest = supervisor.remember_built_config()
-        with open(os.path.join(self.data, "config-built.yml")) as f:
-            self.assertEqual(f.read(), "new")
+    def test_snapshot_config_rewrites_custom_models_dir_and_copies_models(self):
+        with open(self.config, "w") as f:
+            f.write("graphhopper:\n  datareader.file: x\n  custom_models.directory: /app/custom_models\n  profiles: []\n")
+        with open(os.path.join(self.app, "custom_models", "foot_night.json"), "w") as f:
+            f.write('{"priority": []}')
+        graph_new = os.path.join(self.data, "graph-new")
+        os.makedirs(graph_new)
+        digest = supervisor.snapshot_config(graph_new)
+        target = os.path.join(self.data, "graph-cache", "served", "custom_models")
+        with open(os.path.join(graph_new, "served", "config.yml")) as f:
+            self.assertEqual(f.read(), f"graphhopper:\n  datareader.file: x\n  custom_models.directory: {target}\n  profiles: []\n")
+        with open(os.path.join(graph_new, "served", "custom_models", "foot_night.json")) as f:
+            self.assertEqual(f.read(), '{"priority": []}')
         self.assertEqual(digest, supervisor.config_hash())
+
+    def test_snapshot_config_copies_as_is_without_custom_models_line(self):
+        graph_new = os.path.join(self.data, "graph-new")
+        os.makedirs(graph_new)
+        supervisor.snapshot_config(graph_new)
+        with open(os.path.join(graph_new, "served", "config.yml")) as f:
+            self.assertEqual(f.read(), "new")
+
+
+class RetryDecision(unittest.TestCase):
+    def test_retries_without_a_graph(self):
+        self.assertTrue(supervisor.should_retry(retry=False, has_graph=False))
+
+    def test_weekly_failure_keeps_old_graph_without_retry(self):
+        self.assertFalse(supervisor.should_retry(retry=False, has_graph=True))
+
+    def test_config_rebuild_failure_retries_while_old_graph_serves(self):
+        self.assertTrue(supervisor.should_retry(retry=True, has_graph=True))
 
 
 if __name__ == "__main__":
