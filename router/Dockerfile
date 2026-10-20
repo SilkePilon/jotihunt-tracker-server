@@ -10,7 +10,8 @@ WORKDIR /app
 RUN curl -fsSL -o /app/graphhopper-web.jar \
       "https://repo1.maven.org/maven2/com/graphhopper/graphhopper-web/${GH_VERSION}/graphhopper-web-${GH_VERSION}.jar"
 
-COPY config.yml prepare_night.py supervisor.py /app/
+COPY config.yml config-legacy.yml prepare_night.py supervisor.py /app/
+COPY custom_models /app/custom_models
 VOLUME /data
 EXPOSE 8989 8990
 ENTRYPOINT ["/usr/bin/tini", "--"]

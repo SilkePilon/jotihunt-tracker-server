@@ -5,6 +5,7 @@ download NL extract -> cut to Gelderland+10 km -> prepare_night.py -> GraphHoppe
 stop server -> swap dirs -> start server. The old graph keeps serving while a rebuild runs.
 """
 import datetime
+import hashlib
 import json
 import os
 import shutil
@@ -20,6 +21,9 @@ SOURCE_URL = os.environ.get("OSM_SOURCE_URL", "https://download.geofabrik.de/eur
 BBOX = os.environ.get("OSM_BBOX", "4.85,51.61,7.00,52.64")
 JAR = "/app/graphhopper-web.jar"
 CONFIG = "/app/config.yml"
+LEGACY_CONFIG = "/app/config-legacy.yml"
+CUSTOM_MODELS = "/app/custom_models"
+BUILT_CONFIG = "config-built.yml"
 SERVE_HEAP = os.environ.get("SERVE_HEAP", "1g")
 IMPORT_HEAP = os.environ.get("IMPORT_HEAP", "2g")
 TZ = ZoneInfo("Europe/Amsterdam")
@@ -48,10 +52,50 @@ def load_meta():
         pass
 
 
+def config_hash():
+    """sha1 of the shipped config and its custom models: a change means the graph must be imported again."""
+    digest = hashlib.sha1()
+    with open(CONFIG, "rb") as f:
+        digest.update(f.read())
+    if os.path.isdir(CUSTOM_MODELS):
+        for name in sorted(os.listdir(CUSTOM_MODELS)):
+            digest.update(name.encode())
+            with open(os.path.join(CUSTOM_MODELS, name), "rb") as f:
+                digest.update(f.read())
+    return digest.hexdigest()
+
+
+def served_config():
+    """The config the current graph was imported with: its copy, else the legacy config (graphs from before the copy existed)."""
+    built = path(BUILT_CONFIG)
+    if os.path.isfile(built):
+        return built
+    return LEGACY_CONFIG if os.path.isfile(LEGACY_CONFIG) else CONFIG
+
+
+def config_outdated(meta):
+    return meta.get("configHash") != config_hash()
+
+
+def read_meta():
+    try:
+        with open(path("meta.json")) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+
+def remember_built_config():
+    """Copy the shipped config next to the graph; returns its hash for meta.json."""
+    shutil.copyfile(CONFIG, path(BUILT_CONFIG + ".tmp"))
+    os.replace(path(BUILT_CONFIG + ".tmp"), path(BUILT_CONFIG))
+    return config_hash()
+
+
 def start_server():
     global server_proc
     log("starting GraphHopper")
-    server_proc = subprocess.Popen(["java", f"-Xmx{SERVE_HEAP}", f"-Ddw.graphhopper.graph.location={path('graph-cache')}", "-jar", JAR, "server", CONFIG])
+    server_proc = subprocess.Popen(["java", f"-Xmx{SERVE_HEAP}", f"-Ddw.graphhopper.graph.location={path('graph-cache')}", "-jar", JAR, "server", served_config()])
 
 
 def stop_server():
@@ -101,8 +145,9 @@ def build():
         if had_old:
             os.rename(graph_cache, graph_old)
         os.rename(new_graph, graph_cache)
+        config_digest = remember_built_config()
         with open(path("meta.json.tmp"), "w") as f:
-            json.dump({"builtAt": built_at, "report": report}, f)
+            json.dump({"builtAt": built_at, "report": report, "configHash": config_digest}, f)
         os.replace(path("meta.json.tmp"), path("meta.json"))
     except Exception:
         if had_old and os.path.isdir(graph_old):
@@ -210,6 +255,9 @@ def main():
     load_meta()
     if os.path.isdir(path("graph-cache")):
         start_server()
+        if config_outdated(read_meta()):
+            log("config changed since the last import, rebuilding (the old graph keeps serving)")
+            rebuild_async()
     else:
         rebuild_async()
     threading.Thread(target=weekly, daemon=True).start()

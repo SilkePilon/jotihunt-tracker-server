@@ -1,0 +1,28 @@
+graphhopper:
+  datareader.file: /data/gelderland-night.osm.pbf
+  graph.location: /data/graph-cache
+  graph.encoded_values: foot_temporal_access, foot_access, foot_average_speed, foot_priority, car_access, car_average_speed, road_class, road_access, hike_rating, country, foot_road_access, mtb_rating
+  import.osm.ignored_highways: ""
+  profiles:
+    - name: foot
+      custom_model_files: [foot.json]
+    - name: car
+      custom_model_files: [car.json]
+  # No CH: requests (incl. per-request custom_model for night) must work without ch.disable.
+  profiles_ch: []
+  profiles_lm: []
+  prepare.min_network_size: 200
+  routing.non_ch.max_waypoint_distance: 100000
+  routing.max_visited_nodes: 3000000
+  graph.dataaccess.default_type: RAM_STORE
+server:
+  application_connectors:
+    - type: http
+      port: 8989
+      bind_host: 0.0.0.0
+  request_log:
+    appenders: []
+  admin_connectors:
+    - type: http
+      port: 8991
+      bind_host: localhost

@@ -1,0 +1,5 @@
+{
+  "priority": [
+    { "if": "foot_temporal_access == NO", "multiply_by": "0" }
+  ]
+}
