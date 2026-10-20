@@ -5,7 +5,7 @@ export const GEMINI_JOB_PAUSE_MS = 120_000;
 /** Longest pause of a job */
 export const GEMINI_JOB_MAX_PAUSE_MS = 900_000;
 
-/** Runs `fn` against the database a run started on, or skips it (undefined) when a demo switch happened meanwhile */
+/** Runs `fn` against the database a run started on, or skips it (undefined) when an edition switch happened meanwhile */
 export type Tracked = <T>(fn: () => Promise<T>) => Promise<T | undefined>;
 
 const isOutage = (error: unknown) => error instanceof GeminiError && error.retryable;
@@ -14,7 +14,7 @@ const isOutage = (error: unknown) => error instanceof GeminiError && error.retry
  * Background job that lets Gemini work on pending articles, a few per run (`batch`, default 1). `beginRun` gives every
  * run its own `tracked` wrapper, bound to the database the run started on: reading (`findPending`) and storing
  * (`store`) run inside it, the Gemini call (`work`) outside it (it can take long). When a tracked call is skipped (a
- * demo switch happened) the run stops.
+ * edition switch happened) the run stops.
  *
  * A retryable failure (Gemini down or busy: 429, 5xx, timeout, network) stops the run and pauses the job:
  * 2 minutes at first, doubling on every next such failure up to 15 minutes, back to 2 after a success. Any other
@@ -65,7 +65,7 @@ export function createGeminiJob<A extends { id: number }, R>({
           const result = await work(article);
           nextPause = GEMINI_JOB_PAUSE_MS;
           const stored = await tracked(async () => (await store(article, result)) !== false);
-          // Skipped: a demo switch happened
+          // Skipped: an edition switch happened
           if (stored === undefined) break;
           // Changed meanwhile: not done, and not a failure either
           if (!stored) continue;

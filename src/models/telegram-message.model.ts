@@ -2,7 +2,7 @@ import mongoose, { type Connection, type Model } from "mongoose";
 import { BOT_MESSAGE_KINDS, type BotMessageKind } from "../services/telegram.helpers";
 
 /**
- * A message from @Jotihunt_bot (only the bot's messages are stored), in the REAL database next to the Telegram link.
+ * A message from @Jotihunt_bot (only the bot's messages are stored), in the control database next to the Telegram link.
  * No TTL: a few hundred during the event at most.
  */
 export interface TelegramMessageDoc {

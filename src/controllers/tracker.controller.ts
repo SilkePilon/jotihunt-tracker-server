@@ -1,11 +1,10 @@
 import * as traccarService from "../services/traccar.service";
 import { Request, Response } from "express";
 import { logger } from "../logger";
+import { isArchiveShown } from "../editions/work-tracking";
 import { describeTraccarError } from "../services/traccar-http";
 import { type Vehicle, withVehicle } from "../services/tracker-onboarding.helpers";
 import { onboarding, vehicleGroups } from "../services/tracker-onboarding.instance";
-import { isDemoMode } from "../demo/demo-mode";
-import { setSimulatedVehicle, simulatedDevices, simulatedPositions } from "../demo/simulated-trackers";
 
 function traccarUnavailable(res: Response) {
   return res.status(503).json({ message: "Traccar is not configured" });
@@ -17,8 +16,8 @@ function traccarFailed(res: Response) {
 }
 
 async function getDevices(_req: Request, res: Response) {
-  // Demo mode: the simulated hunters instead of Traccar (positions follow the clock)
-  if (isDemoMode()) return res.json(simulatedDevices(new Date(), vehicleGroups).map((device) => withVehicle(device, vehicleGroups)));
+  // Archive: no live trackers (they belong to the live edition)
+  if (isArchiveShown()) return res.json([]);
   if (!traccarService.isTraccarConfigured) return traccarUnavailable(res);
   try {
     const [devices, groups] = await Promise.all([traccarService.getDevices(), traccarService.getGroups()]);
@@ -31,7 +30,8 @@ async function getDevices(_req: Request, res: Response) {
 }
 
 async function getPositions(_req: Request, res: Response) {
-  if (isDemoMode()) return res.json(simulatedPositions(new Date()));
+  // Archive: no live trackers (they belong to the live edition)
+  if (isArchiveShown()) return res.json([]);
   if (!traccarService.isTraccarConfigured) return traccarUnavailable(res);
   try {
     const positions = await traccarService.getPositions();
@@ -51,10 +51,6 @@ async function putVehicle(req: Request, res: Response) {
 
 /** Admin: PUT /admin/devices/:id/vehicle — change any hunter's vehicle (Traccar group / map icon). */
 async function putDeviceVehicle(req: Request, res: Response) {
-  if (isDemoMode()) {
-    const simulated = setSimulatedVehicle(Number(req.params.id), req.body.vehicle as Vehicle, vehicleGroups);
-    if (simulated) return res.status(200).json(simulated);
-  }
   if (!traccarService.isTraccarConfigured) return traccarUnavailable(res);
   try {
     const result = await onboarding.setDeviceVehicle(Number(req.params.id), req.body.vehicle as Vehicle);

@@ -1,7 +1,7 @@
 import { pipeUIMessageStreamToResponse, type UIMessage } from "ai";
 import type { Request, Response } from "express";
-import { releaseDemoWork } from "../demo/database-switch";
-import { currentGeneration, runTracked } from "../demo/demo-mode";
+import { releaseSwitchWork, shownEdition } from "../editions/database-switch";
+import { currentGeneration, runTracked } from "../editions/work-tracking";
 import { logger } from "../logger";
 import { streamIntelChat } from "../services/intel-chat/agent";
 import { getIntelChatModels, getIntelToolDeps } from "../services/intel-chat/instance";
@@ -40,8 +40,8 @@ export async function resumeChat(req: Request, res: Response) {
   if (!turn) return res.status(204).end();
   const gone = new AbortController();
   res.on("close", () => gone.abort());
-  // Following a turn is not demo work: the turn itself is
-  releaseDemoWork(res);
+  // Following a turn is not counted by an edition switch: the turn itself is
+  releaseSwitchWork(res);
   await pipeUIMessageStreamToResponse({ response: res, stream: followTurn(turn, gone.signal) });
 }
 
@@ -65,7 +65,7 @@ export async function deleteChat(req: Request, res: Response) {
 /**
  * POST /intel-chat/:articleId { message, web, deep } → UI message stream. The stored history plus the new message go to
  * the model; when the stream ends (also after a stop or error) everything produced is saved, unless the chat was
- * cleared ("Nieuw gesprek") or the database was switched (demo) meanwhile. One turn per chat at a time (409 busy).
+ * cleared ("Nieuw gesprek") or the database was switched (edition switch) meanwhile. One turn per chat at a time (409 busy).
  * The turn runs on when the client leaves (closed chat or page); only POST /stop or "Nieuw gesprek" stop it.
  */
 export async function postChat(req: Request, res: Response) {
@@ -98,6 +98,7 @@ export async function postChat(req: Request, res: Response) {
       web: req.body.web === true,
       deep: req.body.deep === true,
       now: new Date(),
+      edition: shownEdition(),
       abortSignal: turn.abort.signal,
       toolContext: getIntelToolDeps(),
       onEnd: (messages: UIMessage[]) => {
@@ -108,8 +109,8 @@ export async function postChat(req: Request, res: Response) {
       },
     });
     streaming = true;
-    // A turn may stream for minutes: it must not hold up a demo switch (its save is counted and generation-checked)
-    releaseDemoWork(res);
+    // A turn may stream for minutes: it must not hold up an edition switch (its save is counted and generation-checked)
+    releaseSwitchWork(res);
     // Read on the server to the end (onEnd then saves and ends the turn); this client follows while it is connected
     runTurnStream(turn, stream).catch((error) => {
       logger.error(`Intel chat turn of item ${articleId} failed: ${error instanceof Error ? error.name : "unknown error"}`);
@@ -132,7 +133,7 @@ export async function postChat(req: Request, res: Response) {
 }
 
 /**
- * Save what a turn produced, unless a demo switch is running or the database was switched since the turn started;
+ * Save what a turn produced, unless an edition switch is running or the database was switched since the turn started;
  * counted so a switch waits for it
  */
 async function saveTurn(turn: ActiveTurn, userId: Parameters<typeof saveChat>[0], articleId: number, generation: number, messages: UIMessage[]) {

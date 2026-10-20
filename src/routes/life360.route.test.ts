@@ -3,6 +3,7 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { randomBytes } from "node:crypto";
 import mongoose, { type Connection } from "mongoose";
+import { setArchiveFlag } from "../editions/work-tracking";
 import { life360LinkModel } from "../models/life360-link.model";
 import { User } from "../models/user.model";
 import { Life360CodeInvalidError } from "../services/life360.client";
@@ -177,6 +178,21 @@ describe("/life360", () => {
     // m2 has a Life360 avatar URL but Life360 has no image for it (fake: NotFound)
     expect((await request("/life360/avatar/m2", { token: user })).status).toBe(404);
     expect((await request("/life360/avatar/nobody", { token: user })).status).toBe(404);
+  });
+
+  test("while an archive is shown the members endpoint is empty (no live positions on the archive map)", async () => {
+    const user = tokenOf(await createUser());
+    const admin = tokenOf(await createUser(true));
+    expect((await request("/admin/life360/token", { method: "POST", token: admin, json: { token: "tok" } })).status).toBe(200);
+    client.memberAnswers = [{ notModified: false, etag: "e1", members: [rawMember("m1", "Silke", "Pilon")] }];
+    await service.pollOnce();
+    setArchiveFlag(true);
+    try {
+      expect(await (await request("/life360/members", { token: user })).json()).toEqual({ linked: false, stale: false, members: [] });
+    } finally {
+      setArchiveFlag(false);
+    }
+    expect((await (await request("/life360/members", { token: user })).json()).members).toHaveLength(1);
   });
 
   test("an avatar memberId over 100 characters: 400", async () => {

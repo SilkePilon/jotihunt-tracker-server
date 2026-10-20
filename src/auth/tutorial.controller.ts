@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { setTutorialVersion } from "../models/user.model";
+import { setTutorialVersion } from "./user-store";
 
 export async function updateTutorial(req: Request, res: Response) {
   const tutorialVersion = await setTutorialVersion(req.user!, req.body.version);

@@ -37,6 +37,7 @@ async function runTurn(steps: StreamStep[], options: { web?: boolean; deep?: boo
     web: options.web ?? false,
     deep: options.deep ?? false,
     now: NOW,
+    edition: null,
     abortSignal: new AbortController().signal,
     onEnd: (messages) => {
       saved = messages;
@@ -160,6 +161,7 @@ describe("streamIntelChat", () => {
         web: false,
         deep: false,
         now: NOW,
+        edition: null,
         abortSignal: new AbortController().signal,
         onEnd: () => {},
         downloadImages: async () => [],

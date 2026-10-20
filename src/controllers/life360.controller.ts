@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import { respond, ServiceError } from "../http/service-error";
+import { isArchiveShown } from "../editions/work-tracking";
 import { getLife360Service, requireLife360Service } from "../services/life360.service";
 
 export async function getStatus(_req: Request, res: Response) {
@@ -31,6 +32,8 @@ export async function unlink(_req: Request, res: Response) {
 }
 
 export async function getMembers(_req: Request, res: Response) {
+  // Archive: no live positions (they belong to the live edition), like the trackers; the client then hides the layer
+  if (isArchiveShown()) return res.status(200).json({ linked: false, stale: false, members: [] });
   return respond(res, 200, async () => getLife360Service()?.members() ?? { linked: false, stale: false, members: [] });
 }
 

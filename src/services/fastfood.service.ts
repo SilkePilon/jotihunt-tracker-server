@@ -24,7 +24,7 @@ export interface FastfoodItem extends Omit<Restaurant, "updatedAt"> {
 }
 
 export interface FastfoodServiceOptions {
-  /** Connection to the REAL database (the demo state store's), so the cache survives demo mode */
+  /** Connection to the control database (the control store's), so the cache survives edition switches */
   connection: Connection;
   client: FastfoodApi;
   logger: ServiceLogger;

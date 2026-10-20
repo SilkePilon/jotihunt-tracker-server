@@ -55,6 +55,14 @@ test("vehicle groups partly stored: the env-only vehicles are copied, stored one
   expect(adminConfig().general.vehicleGroups.value).toEqual({ walking: 9, bike: 4, car: 3, motorcycle: null });
 });
 
+test("HUNT_START_TIME/HUNT_END_TIME are not copied: hunt times belong to an edition", async () => {
+  await initAppConfig(connection, { HUNT_START_TIME: "2026-10-17T10:00:00+02:00", HUNT_END_TIME: "2026-10-18T12:00:00+02:00" });
+  const result = await migrateEnvSettings("migration");
+  expect(result.copied).not.toContain("huntStart");
+  expect(result.copied).not.toContain("huntEnd");
+  expect((await connection.collection("settings").findOne({ key: "app-config" }))?.general?.huntStart).toBeUndefined();
+});
+
 test("without SETTINGS_KEY secrets are skipped, the rest is copied", async () => {
   await initAppConfig(connection, { ...ENV, SETTINGS_KEY: "" });
   const result = await migrateEnvSettings("migration");

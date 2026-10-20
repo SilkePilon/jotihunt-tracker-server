@@ -10,8 +10,6 @@
     "lint": "eslint .",
     "test": "bun test --timeout 30000",
     "load-teams": "bun run src/scripts/load-teams.ts",
-    "seed-hint": "bun run src/scripts/seed-hint.ts",
-    "seed-prediction": "bun run src/scripts/seed-prediction.ts",
     "login-link": "bun run src/scripts/login-link.ts",
     "migrate-passwordless": "bun run src/scripts/migrate-passwordless.ts",
     "migrate-env-settings": "bun run src/scripts/migrate-env-settings.ts"

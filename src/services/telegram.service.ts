@@ -3,7 +3,7 @@ import { ServiceError } from "../http/service-error";
 import { AppNotification } from "../models/notification.model";
 import { TELEGRAM_LINK_KEY, telegramLinkModel, type TelegramLinkDoc } from "../models/telegram-link.model";
 import { telegramMessageModel, type TelegramMessageDoc } from "../models/telegram-message.model";
-import { runTracked, runTrackedRetrying } from "../demo/demo-mode";
+import { runTracked, runTrackedRetrying } from "../editions/work-tracking";
 import { sendToAll } from "./push.service";
 import {
   buildTelegramCounterHuntNotification,
@@ -164,7 +164,7 @@ export interface TelegramServiceOptions {
   config: TelegramConfig | null;
   /** TELEGRAM_SESSION_KEY is valid: without app credentials the status asks for them */
   sessionKeyOk?: boolean;
-  /** Connection to the REAL database (the demo state store's), so the link survives demo mode */
+  /** Connection to the control database (the control store's), so the link survives edition switches */
   connection: Connection;
   gateway: TelegramGatewayFactory;
   logger: ServiceLogger;
@@ -175,7 +175,7 @@ export interface TelegramServiceOptions {
   firstUrlTimeoutMs?: number;
   /** A login nobody finishes is cancelled after this */
   pendingTimeoutMs?: number;
-  /** Wait between tries when a tegenhunt alert is skipped by a running demo switch, and how often to try */
+  /** Wait between tries when a tegenhunt alert is skipped by a running edition switch, and how often to try */
   alertRetryMs?: number;
   alertAttempts?: number;
   /** Receives the happy-hour messages (happy-hour.service.ts); throws when a message could not be handled */
@@ -199,9 +199,9 @@ const isDuplicateKey = (error: unknown) => (error as { code?: number })?.code ==
  * The group's Telegram account: linking by QR (admins), listening to @Jotihunt_bot and alerting everyone on a
  * tegenhunt. One listener per server process (the server runs as a single replica). At most one pending login.
  *
- * Demo mode: the link and the bot messages live in the real database, but alerts (notifications, happy hours) are
- * written to the current database like every other alert. A real tegenhunt during demo mode therefore lands in the
- * demo database and is gone when demo mode is switched off (accepted: demo mode is not used during the event).
+ * Editions: the link and the bot messages live in the control database, but alerts (notifications, happy hours) are
+ * written to the shown edition's database like every other alert. A tegenhunt while an archive is shown therefore lands
+ * in the archive (accepted: showing an archive is refused during the live hunt).
  */
 export class TelegramService {
   private readonly links: Model<TelegramLinkDoc>;
@@ -654,7 +654,7 @@ export class TelegramService {
 
   /**
    * The counter-hunt notification for a tegenhunt message, like the former admin button: stored in the current
-   * database, then pushed. Once per Telegram message; retried while a demo switch is running, then throws.
+   * database, then pushed. Once per Telegram message; retried while an edition switch is running, then throws.
    */
   private async alertCounterHunt(message: { id: number; text: string; date: Date }) {
     const input = buildTelegramCounterHuntNotification({ telegramId: message.id, text: message.text, date: message.date });
@@ -665,7 +665,7 @@ export class TelegramService {
       },
       { waitMs: this.options.alertRetryMs, attempts: this.options.alertAttempts },
     );
-    if (!result) throw new Error(`Tegenhunt alert for Telegram message ${message.id} not sent: a demo switch kept running`);
+    if (!result) throw new Error(`Tegenhunt alert for Telegram message ${message.id} not sent: an edition switch kept running`);
     const notification = result.value;
     if (!notification) return;
     this.options.logger.info(`Tegenhunt alert sent: ${input.title}`);

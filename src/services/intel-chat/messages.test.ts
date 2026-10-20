@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ModelMessage, UIMessage } from "ai";
 import { clearItemImageCache, loadItemImages } from "./item-images";
 import { appendMessage, DROPPED_IMAGE_TEXT, forStorage, MAX_HISTORY_TO_MODEL, MAX_STORED_BYTES, MAX_STORED_TOOL_TEXT, modelWindow, parseIncomingMessage, withItemImages, withoutNullPartFields } from "./messages";
-import { buildSystemPrompt, dutchDateTime } from "./prompt";
+import { buildSystemPrompt, dutchDateTime, gameRules } from "./prompt";
 import type { ItemView } from "./tools/app-data";
 
 const png = (bytes: number) => `data:image/png;base64,${Buffer.alloc(bytes, 1).toString("base64")}`;
@@ -188,9 +188,10 @@ describe("buildSystemPrompt", () => {
     ],
   };
   const now = new Date("2026-10-17T12:05:00Z");
+  const edition = { year: 2026, huntStart: "2026-10-17T08:00:00Z", huntEnd: "2026-10-18T10:00:00Z" };
 
   test("rules, Dutch time, the item with its cells and images", () => {
-    const prompt = buildSystemPrompt({ item, now, web: true, attachedImages: ["alpha.png"] });
+    const prompt = buildSystemPrompt({ item, now, web: true, attachedImages: ["alpha.png"], edition });
     expect(dutchDateTime(now)).toBe("zaterdag 17 oktober 14:05");
     expect(prompt).toContain("zaterdag 17 oktober 14:05");
     expect(prompt).toContain("Titel: De Highland Games");
@@ -205,8 +206,19 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("Denk in het Nederlands; ook je gedachten/overwegingen schrijf je in het Nederlands.");
   });
 
+  test("the rules start with the shown edition's dates; the theme only for 2026", () => {
+    expect(gameRules(edition)).toContain("- Jotihunt 2026: zaterdag 17 oktober 10:00 tot zondag 18 oktober 12:00, in Gelderland. Thema: BRAVE (Pixar) en Schotland. HQ Jotihunt: Stikkerstraat 10, Arnhem");
+    expect(buildSystemPrompt({ item, now, web: false, attachedImages: [], edition })).toContain("Jotihunt 2026: zaterdag 17 oktober 10:00 tot zondag 18 oktober 12:00");
+    const next = gameRules({ year: 2027, huntStart: null, huntEnd: null });
+    expect(next).toContain("- Jotihunt 2027: datum nog niet bekend, in Gelderland. HQ Jotihunt:");
+    expect(next).not.toContain("BRAVE");
+    expect(next).not.toContain("{{EDITION}}");
+    // Before the editions are initialised (tests, scripts)
+    expect(gameRules(null)).toContain("- Jotihunt: datum nog niet bekend, in Gelderland. HQ Jotihunt:");
+  });
+
   test("web off tells the model to suggest switching Web on", () => {
-    const prompt = buildSystemPrompt({ item, now, web: false, attachedImages: [] });
+    const prompt = buildSystemPrompt({ item, now, web: false, attachedImages: [], edition });
     expect(prompt).toContain('Internet staat uit');
     expect(prompt).not.toContain("gebruik webSearch");
   });

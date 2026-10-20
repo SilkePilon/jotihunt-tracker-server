@@ -1,41 +1,41 @@
 /**
- * The demo mode flag of this process and the work tracking a database switch waits for. Kept in its own module
+ * The archive flag of this process and the work tracking a database switch waits for. Kept in its own module
  * (without database imports) so low-level modules such as the crons can use it
  * without import cycles. Only database-switch.ts changes the flag, the switch state and the generation.
  */
-let demoMode = false;
+let archiveShown = false;
 /** True from the moment a switch starts waiting for running work until the default connection is settled again */
 let switchInProgress = false;
 /** Incremented every time the default connection is about to change database */
 let generation = 0;
-/** Running HTTP requests (see demoGate) plus running tracked jobs (see runTracked) */
+/** Running HTTP requests (see editionGate) plus running tracked jobs (see runTracked) */
 let activeWork = 0;
 const idleWaiters = new Set<() => void>();
 
-/** True while the default Mongoose connection serves the demo database. */
-export function isDemoMode(): boolean {
-  return demoMode;
+/** True while the default Mongoose connection serves an archived edition (a database other than the live one). */
+export function isArchiveShown(): boolean {
+  return archiveShown;
 }
 
 /** @internal Used by database-switch.ts only. */
-export function setDemoModeFlag(enabled: boolean) {
-  demoMode = enabled;
+export function setArchiveFlag(enabled: boolean) {
+  archiveShown = enabled;
 }
 
 /**
- * For the jotihunt.nl crons: true (after a debug log) when the run must be skipped because demo mode is on.
- * Usage: `if (skipInDemoMode("jotihunt-areas", (message) => logger.debug(message))) return;`
+ * For the jotihunt.nl crons: true (after a debug log) when the run must be skipped because the archive is shown.
+ * Usage: `if (skipWhenArchive("jotihunt-areas", (message) => logger.debug(message))) return;`
  */
-export function skipInDemoMode(job: string, debug: (message: string) => void): boolean {
-  if (!demoMode) return false;
-  debug(`(CRON) Skipping ${job}: demo mode is on`);
+export function skipWhenArchive(job: string, debug: (message: string) => void): boolean {
+  if (!archiveShown) return false;
+  debug(`(CRON) Skipping ${job}: archive is shown`);
   return true;
 }
 
 // --- Work tracking ----------------------------------------------------------------------------------------------
 
 /** True while a switch waits for running work or changes the database; tracked jobs are skipped meanwhile. */
-export function isDemoSwitchInProgress(): boolean {
+export function isSwitchInProgress(): boolean {
   return switchInProgress;
 }
 
@@ -48,16 +48,16 @@ export function currentGeneration(): number {
 }
 
 /** Thrown by `assertGeneration` when the database was switched since the job captured its generation. */
-export class DemoSwitchedError extends Error {
+export class EditionSwitchedError extends Error {
   constructor() {
     super("The database was switched while this job was running");
-    this.name = "DemoSwitchedError";
+    this.name = "EditionSwitchedError";
   }
 }
 
-/** Throw a DemoSwitchedError when the database was switched since `captured`; call right before writing. */
+/** Throw an EditionSwitchedError when the database was switched since `captured`; call right before writing. */
 export function assertGeneration(captured: number) {
-  if (captured !== generation) throw new DemoSwitchedError();
+  if (captured !== generation) throw new EditionSwitchedError();
 }
 
 /**
@@ -119,7 +119,7 @@ export async function runTrackedRetrying<T>(
 }
 
 /** @internal Used by database-switch.ts only. */
-export function setDemoSwitchInProgress(inProgress: boolean) {
+export function setSwitchInProgress(inProgress: boolean) {
   switchInProgress = inProgress;
 }
 

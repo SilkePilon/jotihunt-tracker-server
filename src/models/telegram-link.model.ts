@@ -1,8 +1,8 @@
 import mongoose, { type Connection, type Model } from "mongoose";
 
 /**
- * The linked Telegram account (one document, key "telegram") in the REAL database, like the settings: the link stays
- * while demo mode swaps the default connection. The mtcute session is AES-256-GCM encrypted with
+ * The linked Telegram account (one document, key "telegram") in the control database, like the settings: the link stays
+ * while an edition switch swaps the default connection. The mtcute session is AES-256-GCM encrypted with
  * TELEGRAM_SESSION_KEY; the ciphertext is never logged or returned by the API.
  */
 export interface TelegramLinkDoc {
@@ -36,7 +36,7 @@ const TelegramLinkSchema = new mongoose.Schema<TelegramLinkDoc>(
   { collection: "telegramlinks", versionKey: false },
 );
 
-/** The model on `connection` (the demo state store's connection to the real database; the test connection in tests). */
+/** The model on `connection` (the control store's connection to the control database; the test connection in tests). */
 export function telegramLinkModel(connection: Connection): Model<TelegramLinkDoc> {
   return (connection.models.TelegramLink as Model<TelegramLinkDoc> | undefined) ?? connection.model<TelegramLinkDoc>("TelegramLink", TelegramLinkSchema);
 }

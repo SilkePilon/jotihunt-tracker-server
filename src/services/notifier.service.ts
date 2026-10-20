@@ -3,7 +3,7 @@ import { Article, publicArticlesFilter } from "../models/article.model";
 import { AppNotification, type AppNotificationDocument } from "../models/notification.model";
 import { NotifierState } from "../models/notifier-state.model";
 import { buildArticleNotification, buildFoxStatusNotification, diffAreaStatus, type NotificationInput } from "./notifier.helpers";
-import { currentGeneration, runTracked } from "../demo/demo-mode";
+import { currentGeneration, runTracked } from "../editions/work-tracking";
 import { deadline } from "./http-limits";
 import { sendToAll } from "./push.service";
 import { isDuplicateKeyError } from "../utils/mongo";
@@ -26,7 +26,7 @@ const PUSH_TRACK_LIMIT_MS = 8_000;
 /**
  * Compare the database with what was seen last and store a notification per change (fox status, new article), then
  * push them. Hunt notifications come from the scraper cron (hunt-sync.service). The first run per database only records the
- * current state, so a restart or demo switch doesn't flood everyone. The new state is claimed with a
+ * current state, so a restart or edition switch doesn't flood everyone. The new state is claimed with a
  * compare-and-set before anything is announced, so overlapping runs (cron overlap, a second process) never announce
  * the same change twice; when storing the notifications fails the state is rolled back so the next run re-detects.
  * @returns The created notifications
@@ -81,7 +81,7 @@ export async function runNotifier(options: NotifierOptions = {}): Promise<AppNot
   const inputs: NotificationInput[] = [];
   if (ownsTransition) {
     inputs.push(...statusChanges.map(buildFoxStatusNotification));
-    // After a demo stint a backlog can pile up: announce only the newest few (lastArticleId still advances past all)
+    // After an archive was shown a backlog can pile up: announce only the newest few (lastArticleId still advances past all)
     inputs.push(...articles.slice(-MAX_ARTICLES_PER_RUN).map(buildArticleNotification));
   }
 

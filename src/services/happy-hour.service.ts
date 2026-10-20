@@ -1,6 +1,6 @@
 import { HappyHour } from "../models/happy-hour.model";
 import { AppNotification } from "../models/notification.model";
-import { runTracked, runTrackedRetrying } from "../demo/demo-mode";
+import { runTracked, runTrackedRetrying } from "../editions/work-tracking";
 import { sendToAll } from "./push.service";
 import { buildHappyHourNotification, happyHourView, isHappyHourEnd, parseHappyHourWindow, type HappyHourView, type HappyHourWindow } from "./happy-hour.helpers";
 import type { ServiceLogger } from "../utils/service-logger";
@@ -9,7 +9,7 @@ export interface HappyHourServiceOptions {
   logger: ServiceLogger;
   /** Tests only */
   now?: () => Date;
-  /** Wait between tries while a demo switch is running, and how often to try */
+  /** Wait between tries while an edition switch is running, and how often to try */
   retryWaitMs?: number;
   attempts?: number;
 }
@@ -30,7 +30,7 @@ export async function currentHappyHour(now = new Date()): Promise<HappyHourView>
 /**
  * Happy hours from @Jotihunt_bot messages: stores the window, alerts on the message, and at the start (when it was
  * announced for later) and the end with in-process timers. The timers are rebuilt from the database at startup and
- * after a demo switch (one server replica).
+ * after an edition switch (one server replica).
  */
 export class HappyHourService {
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>[]>();
@@ -66,7 +66,7 @@ export class HappyHourService {
       },
       { waitMs: this.options.retryWaitMs, attempts: this.options.attempts },
     );
-    if (!result) throw new Error(`Happy hour from Telegram message ${message.telegramId} not handled: a demo switch kept running`);
+    if (!result) throw new Error(`Happy hour from Telegram message ${message.telegramId} not handled: an edition switch kept running`);
     if (!result.value) return;
     const { hour, notification } = result.value;
     if (notification) {
@@ -113,7 +113,7 @@ export class HappyHourService {
     });
   }
 
-  /** Re-arm the start/end timers from the current database (startup, after a demo switch). */
+  /** Re-arm the start/end timers from the current database (startup, after an edition switch). */
   async rebuild(): Promise<void> {
     this.stop();
     const open = await HappyHour.find({ $or: [{ startNotifiedAt: null }, { endNotifiedAt: null }] }).lean();

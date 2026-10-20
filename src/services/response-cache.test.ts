@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { nextGeneration } from "../demo/demo-mode";
+import { nextGeneration } from "../editions/work-tracking";
 import { Hunt } from "../models/hunt.model";
 import { Marker, MarkerType } from "../models/marker.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";

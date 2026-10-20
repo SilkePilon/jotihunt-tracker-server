@@ -1,14 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { validationResult } from "express-validator";
-import { openDemoStateStore, type DemoStateStore } from "../demo/demo-state";
+import { openTestSettingsStore, type TestSettingsStore } from "../test/settings-store";
 
 mock.module("../logger", () => ({ logger: { info() {}, error() {}, warn() {}, debug() {} } }));
 const { getNightAreasSetting, putNightAreasSetting } = await import("./settings.controller");
-const { initNightAreas, nightAreasHash, resetNightAreas, getRoutesSetting } = await import("./night-areas-setting");
+const { initNightAreas, nightAreasHash, onRoutesSettingChange, resetNightAreas, getRoutesSetting } = await import("./night-areas-setting");
 const { nightAreasValidation } = await import("./night-areas.validation");
 
 const URI = process.env.MONGO_URI_TEST ?? "mongodb://localhost:27017/jotihunt-test";
-let store: DemoStateStore;
+let store: TestSettingsStore;
 function fakeRes() {
   const res = { statusCode: 0, body: undefined as unknown, status(code: number) { res.statusCode = code; return res; }, json(body: unknown) { res.body = body; return res; } };
   return res;
@@ -21,7 +21,7 @@ async function check(body: unknown) {
   return validationResult(req).isEmpty();
 }
 
-beforeAll(async () => { store = await openDemoStateStore(URI); });
+beforeAll(async () => { store = await openTestSettingsStore(URI); });
 beforeEach(async () => { await store.connection.collection("settings").deleteMany({}); resetNightAreas(); await initNightAreas(store); });
 afterAll(async () => { await store.connection.collection("settings").deleteMany({}); resetNightAreas(); await store.close(); });
 
@@ -59,5 +59,14 @@ describe("night areas setting", () => {
     expect(validationResult(req).array().map((e) => e.msg)).toEqual(["Gebied mag zichzelf niet kruisen."]);
     const square4 = { type: "Polygon", coordinates: [[[5.8, 52], [5.81, 52], [5.81, 52.01], [5.8, 52.01], [5.8, 52]]] };
     expect(await check({ enabled: true, areas: [{ id: "a", name: "X", kind: "open", polygon: square4 }] })).toBe(true);
+  });
+  test("a (re)load tells the listeners, so the trails memo drops after an edition switch", async () => {
+    let calls = 0;
+    const off = onRoutesSettingChange(() => void calls++);
+    await store.writeNightAreas({ enabled: false, areas: [], updatedAt: null, updatedBy: null });
+    await initNightAreas(store);
+    off();
+    expect(calls).toBe(1);
+    expect(getRoutesSetting().enabled).toBe(false);
   });
 });

@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { openDemoStateStore, type DemoStateStore } from "../demo/demo-state";
+import { openTestSettingsStore, type TestSettingsStore } from "../test/settings-store";
 import { getHuntableAreas, initHuntableAreas, normalizeAreas, resetHuntableAreas, setHuntableAreas, type HuntableAreasStore } from "./huntable-areas-setting";
 
 const uri = process.env.MONGO_URI_TEST ?? "mongodb://localhost:27017/jotihunt-test";
-let store: DemoStateStore;
+let store: TestSettingsStore;
 
 beforeAll(async () => {
-  store = await openDemoStateStore(uri);
+  store = await openTestSettingsStore(uri);
 });
 beforeEach(async () => {
   await store.connection.collection("settings").deleteMany({});
@@ -52,12 +52,12 @@ describe("huntable areas setting store and cache", () => {
     expect(await initHuntableAreas(store)).toEqual([]);
   });
 
-  test("does not touch the demo or prediction documents", async () => {
-    await store.write({ enabled: true, enabledAt: null, enabledBy: null, startedAt: null });
+  test("does not touch the app-config or prediction documents", async () => {
+    await store.connection.collection("settings").insertOne({ key: "app-config", general: { groupName: "X" } });
     await store.writePrediction({ enabled: false, updatedAt: null, updatedBy: null });
     await initHuntableAreas(store);
     await setHuntableAreas(["alpha"], null);
-    expect((await store.read())?.enabled).toBe(true);
+    expect((await store.connection.collection("settings").findOne({ key: "app-config" }))?.general).toEqual({ groupName: "X" });
     expect((await store.readPrediction())?.enabled).toBe(false);
   });
 

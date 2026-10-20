@@ -1,5 +1,5 @@
 import { logger } from "../logger";
-import { currentGeneration, runTracked, skipInDemoMode } from "../demo/demo-mode";
+import { currentGeneration, runTracked, skipWhenArchive } from "../editions/work-tracking";
 import { jotihuntLogin } from "../services/jotihunt-scraper.service";
 import { readScore, recordScore, recordScoreFailure } from "../services/score-sync.service";
 import type { SiteScore } from "../services/jotihunt-score.parse";
@@ -14,7 +14,7 @@ export const SCORE_DEADLINE_MS = 60_000;
  * replaceable for tests.
  */
 export default async function syncJotihuntScore(options: { read?: () => Promise<SiteScore> } = {}): Promise<void> {
-  if (skipInDemoMode("jotihunt-score", (message) => logger.debug(message))) return;
+  if (skipWhenArchive("jotihunt-score", (message) => logger.debug(message))) return;
   if (!jotihuntLogin()) return;
 
   const generation = currentGeneration();

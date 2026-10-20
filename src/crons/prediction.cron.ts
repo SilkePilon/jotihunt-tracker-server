@@ -1,5 +1,5 @@
 import { logger } from "../logger";
-import { runTracked } from "../demo/demo-mode";
+import { runTracked, skipWhenArchive } from "../editions/work-tracking";
 import { isPredictionEnabled } from "../settings/prediction-setting";
 import { predictionService } from "../services/prediction/instance";
 
@@ -10,8 +10,10 @@ async function recompute() {
   for (const failure of failed) logger.error(`(CRON) Fox prediction for ${failure.area} failed:`, failure.error);
 }
 
-/** Tracked, so a demo switch waits for it (and it is skipped while a switch runs). */
+/** Tracked, so an edition switch waits for it (and it is skipped while a switch runs). */
 export default async function recomputePredictions() {
+  // An archive is read-only: no Gemini/ORS calls, nothing written into it
+  if (skipWhenArchive("fox-prediction", (message) => logger.debug(message))) return;
   if (!isPredictionEnabled()) return; // switched off by an admin: no Gemini or ORS calls
   await runTracked(recompute);
 }

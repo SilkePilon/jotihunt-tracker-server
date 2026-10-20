@@ -9,7 +9,7 @@ import { IntelChat } from "../models/intel-chat.model";
 import { User } from "../models/user.model";
 import { EventEmitter } from "node:events";
 import type { Request, Response } from "express";
-import { activeWorkCount, setDemoSwitchInProgress } from "../demo/demo-mode";
+import { activeWorkCount, setSwitchInProgress } from "../editions/work-tracking";
 import { postChat } from "../controllers/intel-chat.controller";
 import { endTurn, findTurn, startTurn } from "../services/intel-chat/turns";
 import { setIntelChatModels } from "../services/intel-chat/instance";
@@ -315,13 +315,13 @@ describe("/intel-chat", () => {
     const res = await ask(token, question("m1"));
     const reader = res.body!.getReader();
     await reader.read();
-    setDemoSwitchInProgress(true);
+    setSwitchInProgress(true);
     try {
       while (!(await reader.read()).done);
       await Bun.sleep(200);
       expect(await IntelChat.findOne({ userId: user._id, articleId: 10 })).toBeNull();
     } finally {
-      setDemoSwitchInProgress(false);
+      setSwitchInProgress(false);
     }
     const next = startTurn(user._id, 10);
     expect(next).not.toBeNull();

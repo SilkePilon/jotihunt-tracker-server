@@ -168,7 +168,7 @@ Lokaal testen met een telefoon in hetzelfde wifi-netwerk: gebruik het LAN-adres 
 Dit zijn de inloggegevens die je normaal gebruikt om in te loggen op [jotihunt.nl](https://jotihunt.nl). De server zal deze gebruiken om automatisch de hunts op te halen (scrapen).
 
 #### `HUNT_START_TIME` en `HUNT_END_TIME`
-Stel hier de start- en eindtijd van de hunt in. Let goed op de juiste tijdzone (bijv. `+02:00` voor Nederland tijdens zomertijd).
+Start- en eindtijd van de hunt. Let goed op de juiste tijdzone (bijv. `+02:00` voor Nederland tijdens zomertijd). Worden alleen bij de eerste start met edities gebruikt (als er in Beheer nog geen tijden staan); daarna stel je de hunttijden per editie in via Beheer → Algemeen.
 
 #### `ORS_API_KEY` (optioneel)
 Wordt gebruikt door de vossenvoorspelling voor looptijden naar de groepen via [OpenRouteService](https://openrouteservice.org/).
@@ -213,7 +213,7 @@ Hunters zetten ook pins en hint-oplossingen op [Jotiboard](https://jotiboard.nl)
 1. Zet `JOTIBOARD_SESSION_KEY` op 32 willekeurige bytes in base64 (`openssl rand -base64 32`). Hiermee wordt de Jotiboard-sessie versleuteld opgeslagen; verander je de key, dan moet een admin opnieuw inloggen. Op k3s komt de key met de hand in de Secret `jotihunt-secret`.
 2. Een admin koppelt het Jotiboard-account in de kaart "Jotiboard" (gebruikersnaam + wachtwoord). Het wachtwoord wordt niet bewaard, alleen het refresh-token.
 
-Zolang "Automatisch synchroniseren" aan staat, leest de server elke 20 seconden `manualLocations` en `hintSolves` (alleen lezen). Pins worden markers (hint/hunt/spot) en opgeloste hints vullen open hint-vakken; staat er al een eigen marker van hetzelfde type in hetzelfde deelgebied binnen 15 minuten en 300 meter, of is het vak al opgelost, dan wordt het overgeslagen. Een pin die van Jotiboard verdwijnt, verdwijnt ook hier. "Data verwijderen" haalt alles weg wat van Jotiboard kwam en zet de sync uit. In demomodus wordt niet gesynchroniseerd.
+Zolang "Automatisch synchroniseren" aan staat, leest de server elke 20 seconden `manualLocations` en `hintSolves` (alleen lezen). Pins worden markers (hint/hunt/spot) en opgeloste hints vullen open hint-vakken; staat er al een eigen marker van hetzelfde type in hetzelfde deelgebied binnen 15 minuten en 300 meter, of is het vak al opgelost, dan wordt het overgeslagen. Een pin die van Jotiboard verdwijnt, verdwijnt ook hier. "Data verwijderen" haalt alles weg wat van Jotiboard kwam en zet de sync uit. Terwijl een archief (oude editie) getoond wordt, wordt niet gesynchroniseerd.
 
 #### `JWT_SECRET`
 Genereer een willekeurige, veilige string van minimaal 32 tekens. Deze wordt gebruikt om JWT tokens te ondertekenen voor de authenticatie.
@@ -305,7 +305,7 @@ Hunters registreren een hunt met een foto vanaf hun telefoon, plus de vossengroe
 
 De APK van de Android-app en een bestand `latest.json` (`{ "versionCode": 1, "versionName": "1.0.0", "file": "jotihunt-1.0.0.apk", "sha256": "<hex>" }`) staan in de map `app-releases` (aan te passen met `APP_DIR`; in Docker een bind mount). De server serveert ze zonder inloggen op `GET /app/latest` en `GET /app/download/<bestand>`. De site toont de downloadknop zodra `GET /app/latest` antwoordt.
 
-**Let op:** het koppelen en ontkoppelen van telefoons terwijl demomodus aan staat blijft niet bewaard nadat demomodus is uitgezet (apparaten staan op het gebruikersrecord en demo kopieert de gebruikers). Koppel en ontkoppel dus buiten demomodus.
+**Let op:** de gebruikers (met hun gekoppelde apparaten) staan in de database van de live editie. Een getoond archief krijgt daar een kopie van; wat alleen in die kopie verandert (bijv. koppelen of ontkoppelen van telefoons) blijft niet bewaard. Koppel en ontkoppel dus terwijl de live editie getoond wordt.
 
 ## 🤝 Bijdragen
 - Heb je zelf verbeteringen gemaakt? Open een Pull Request!

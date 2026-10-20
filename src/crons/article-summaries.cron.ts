@@ -1,5 +1,5 @@
 import { logger } from "../logger";
-import { currentGeneration, runTracked } from "../demo/demo-mode";
+import { currentGeneration, runTracked, skipWhenArchive } from "../editions/work-tracking";
 import { aiAvailable, requireAiModel } from "../services/ai/model";
 import { GeminiError } from "../services/ai/gemini-error";
 import { createArticleSummarizer, createSummaryJob } from "../services/article-summary.service";
@@ -8,7 +8,7 @@ import { createArticleSummarizer, createSummaryJob } from "../services/article-s
 // Built once (the job keeps its backoff); the model is read per article, so a key or model set in Beheer applies at once
 const job = createSummaryJob({
   summarizer: { summarize: (article) => createArticleSummarizer({ model: requireAiModel("summary") }).summarize(article) },
-  // Only into the database the run started on (skipped when a demo switch happened meanwhile)
+  // Only into the database the run started on (skipped when an edition switch happened meanwhile)
   beginRun: () => {
     const generation = currentGeneration();
     return (fn) => runTracked(fn, { generation });
@@ -27,6 +27,7 @@ function describe(error: unknown): string {
 
 /** Summarise new or changed news and assignment articles (one per run) */
 export default async function summarizeArticles() {
+  if (skipWhenArchive("article-summaries", (message) => logger.debug(message))) return;
   if (!aiAvailable()) return;
   const { done, failed } = await job.run();
   if (done.length > 0) logger.info(`(CRON) Summarised articles ${done.join(", ")}`);

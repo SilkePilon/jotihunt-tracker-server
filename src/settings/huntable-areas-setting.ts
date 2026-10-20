@@ -1,7 +1,7 @@
 import { AREAS, type AreaName } from "../constants/areas";
-import type { HuntableAreasSettingDoc } from "../demo/demo-state";
+import type { HuntableAreasSettingDoc } from "../editions/edition-settings-store";
 
-/** The part of the demo state store this module needs (the `settings` collection of the REAL database). */
+/** The part of the edition settings store this module needs (the `settings` collection of the shown edition's database). */
 export interface HuntableAreasStore {
   readHuntableAreas(): Promise<HuntableAreasSettingDoc | null>;
   writeHuntableAreas(setting: Omit<HuntableAreasSettingDoc, "key">): Promise<void>;

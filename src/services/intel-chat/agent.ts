@@ -4,7 +4,7 @@ import { toGeminiError } from "../ai/gemini-error";
 import type { ArticleImage, FetchedImage } from "../article-media";
 import { loadItemImages } from "./item-images";
 import { modelWindow, withItemImages, withoutNullPartFields } from "./messages";
-import { buildSystemPrompt } from "./prompt";
+import { buildSystemPrompt, type PromptEdition } from "./prompt";
 import type { ItemView } from "./tools/app-data";
 import { activeToolNames, createIntelTools, type IntelToolContext } from "./tools";
 
@@ -24,6 +24,8 @@ export interface IntelChatTurn {
   web: boolean;
   deep: boolean;
   now: Date;
+  /** The shown edition (its dates go into the rules); null before the editions are initialised */
+  edition: PromptEdition | null;
   /** Aborts the turn (client gone) */
   abortSignal: AbortSignal;
   /** Called once with every message when the stream ends (finished, failed or aborted) */
@@ -45,7 +47,7 @@ export async function streamIntelChat(turn: IntelChatTurn): Promise<ReadableStre
   const messages = withItemImages(await convertToModelMessages(withoutNullPartFields(modelWindow(turn.conversation)), { tools, ignoreIncompleteToolCalls: true }), images);
   const result = streamText({
     model: turn.deep ? turn.models.deep : turn.models.chat,
-    instructions: buildSystemPrompt({ item: turn.item, now: turn.now, web: turn.web, attachedImages: images.map((image) => image.name) }),
+    instructions: buildSystemPrompt({ item: turn.item, now: turn.now, web: turn.web, attachedImages: images.map((image) => image.name), edition: turn.edition }),
     messages,
     tools,
     activeTools: activeToolNames(tools, turn.web),

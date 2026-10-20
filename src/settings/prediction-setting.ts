@@ -1,6 +1,6 @@
-import type { PredictionSettingDoc } from "../demo/demo-state";
+import type { PredictionSettingDoc } from "../editions/edition-settings-store";
 
-/** The part of the demo state store this module needs (the `settings` collection of the REAL database). */
+/** The part of the edition settings store this module needs (the `settings` collection of the shown edition's database). */
 export interface PredictionSettingStore {
   readPrediction(): Promise<PredictionSettingDoc | null>;
   writePrediction(setting: Omit<PredictionSettingDoc, "key">): Promise<void>;

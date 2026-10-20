@@ -136,7 +136,7 @@ describe("runNotifier", () => {
   });
 
   test("a hanging push stops counting as running work", async () => {
-    const { activeWorkCount } = await import("../demo/demo-mode");
+    const { activeWorkCount } = await import("../editions/work-tracking");
     await setAreas({ Alpha: "red" });
     await run();
     await setAreas({ Alpha: "green" });

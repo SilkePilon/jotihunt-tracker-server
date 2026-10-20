@@ -93,11 +93,3 @@ UserSchema.set("toJSON", {
 
 export const User = mongoose.model("User", UserSchema);
 export type UserType = HydratedDocument<InferSchemaType<typeof UserSchema>>;
-
-/** Record that the user has seen the onboarding tour up to `version`. Never lowers the stored version. */
-export async function setTutorialVersion(user: UserType, version: number): Promise<number> {
-  // $max in the database, so concurrent requests can never lower the stored version
-  const updated = await User.findOneAndUpdate({ _id: user._id }, { $max: { tutorialVersion: version } }, { returnDocument: "after" });
-  user.tutorialVersion = updated?.tutorialVersion ?? Math.max(user.tutorialVersion ?? 0, version);
-  return user.tutorialVersion;
-}

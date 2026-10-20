@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import { User } from "../models/user.model";
 import { logger } from "../logger";
 import { useSession } from "../auth/sessions";
+import { updateAccounts } from "../auth/user-store";
 import { isObjectIdString } from "../utils/mongo";
 
 /**
@@ -67,7 +68,8 @@ const DEVICE_SEEN_INTERVAL_MS = 60 * 60 * 1000;
 function touchDevice(userId: unknown, deviceId: string, lastSeenAt: Date | null | undefined) {
   const now = new Date();
   if (lastSeenAt && now.getTime() - lastSeenAt.getTime() < DEVICE_SEEN_INTERVAL_MS) return;
-  User.updateOne({ _id: userId, "devices.id": deviceId }, { $set: { "devices.$.lastSeenAt": now } }).catch((error) =>
+  // Also in the live edition's database while an archive is shown (the device list is the live one's)
+  updateAccounts({ _id: userId, "devices.id": deviceId }, { $set: { "devices.$.lastSeenAt": now } }).catch((error) =>
     logger.warn(`Could not update device lastSeenAt: ${error}`),
   );
 }

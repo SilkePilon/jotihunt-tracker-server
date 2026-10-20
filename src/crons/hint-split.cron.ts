@@ -1,5 +1,5 @@
 import { logger } from "../logger";
-import { currentGeneration, runTracked } from "../demo/demo-mode";
+import { currentGeneration, runTracked, skipWhenArchive } from "../editions/work-tracking";
 import { aiAvailable, requireAiModel } from "../services/ai/model";
 import { GeminiError } from "../services/ai/gemini-error";
 import { createHintSplitJob, createHintSplitter } from "../services/hint-split.service";
@@ -8,7 +8,7 @@ import { createHintSplitJob, createHintSplitter } from "../services/hint-split.s
 // Built once (the job keeps its backoff); the model is read per article, so a key or model set in Beheer applies at once
 const job = createHintSplitJob({
   splitter: { split: (article, areas) => createHintSplitter({ model: requireAiModel("split") }).split(article, areas) },
-  // Only into the database the run started on (skipped when a demo switch happened meanwhile)
+  // Only into the database the run started on (skipped when an edition switch happened meanwhile)
   beginRun: () => {
     const generation = currentGeneration();
     return (fn) => runTracked(fn, { generation });
@@ -27,6 +27,7 @@ function describe(error: unknown): string {
 
 /** Let Gemini correct the per-area split of new or changed hint articles (one per run) */
 export default async function splitHints() {
+  if (skipWhenArchive("hint-split", (message) => logger.debug(message))) return;
   if (!aiAvailable()) return;
   const { done, failed } = await job.run();
   if (done.length > 0) logger.info(`(CRON) Split hint articles ${done.join(", ")}`);

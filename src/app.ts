@@ -5,7 +5,8 @@ import compression from "compression";
 import { logger } from "./logger";
 import { parseTrustProxy } from "./utils/trust-proxy";
 import { clientIpHeader } from "./utils/client-ip-header";
-import { demoGate } from "./demo/database-switch";
+import { editionGate } from "./editions/database-switch";
+import { archiveReadOnly } from "./editions/archive-read-only";
 import { errorHandler } from "./middleware/error.middleware";
 import authRoute from "./routes/auth.route";
 import invitesRoute from "./routes/invites.route";
@@ -28,7 +29,7 @@ import predictionsRoute from "./routes/predictions.route";
 import visitsRoute from "./routes/visits.route";
 import notificationsRoute from "./routes/notifications.route";
 import pushRoute from "./routes/push.route";
-import demoRoute from "./routes/demo.route";
+import editionsRoute from "./routes/editions.route";
 import appRoute from "./routes/app.route";
 import settingsRoute from "./routes/settings.route";
 import telegramRoute from "./routes/telegram.route";
@@ -62,7 +63,7 @@ app.use(
     },
   }),
 );
-// Website error reports for Sentry (raw envelope body, no auth, before the JSON parser and the demo gate)
+// Website error reports for Sentry (raw envelope body, no auth, before the JSON parser and the edition gate)
 app.use("/sentry-tunnel", cors({ maxAge: 86400, exposedHeaders: ["X-Sentry-Rate-Limits", "Retry-After"] }), sentryTunnelRoute);
 // AI chat questions may carry one image (≤ 2 MB, base64 in JSON); every other route keeps the 100 kB default
 app.use("/intel-chat", express.json({ limit: "4mb" }));
@@ -86,11 +87,13 @@ app.use(
 // Let browsers cache the CORS preflight for a day (it was ~45% of all requests)
 app.use(cors({ maxAge: 86400 }));
 
-// The demo switch itself is not gated; every other request waits for a running switch (see database-switch.ts)
-app.use("/demo", demoRoute);
-// Release files are not in the database, so this stays before the demo gate
+// The edition switch itself is not gated; every other request waits for a running switch (see database-switch.ts)
+app.use("/editions", editionsRoute);
+// Release files are not in the database, so this stays before the edition gate
 app.use("/app", appRoute);
-app.use(demoGate);
+app.use(editionGate);
+// An archive edition is read-only for everyone
+app.use(archiveReadOnly);
 app.use("/auth", authRoute);
 app.use("/invites", invitesRoute);
 app.use(configRoute);
@@ -116,17 +119,17 @@ app.use("/predictions", predictionsRoute);
 app.use("/visits", visitsRoute);
 app.use("/notifications", notificationsRoute);
 app.use("/push", pushRoute);
-// Messages of @Jotihunt_bot and the tegenhunt state; the Telegram link itself is in the real database
+// Messages of @Jotihunt_bot and the tegenhunt state; the Telegram link itself is in the control database
 app.use("/telegram", telegramRoute);
-// Members of the team's Life360 circle (memory only) and their avatars; the link itself is in the real database
+// Members of the team's Life360 circle (memory only) and their avatars; the link itself is in the control database
 app.use("/life360", life360Route);
-// 3D building vector tiles (3DBAG), cached in the real database
+// 3D building vector tiles (3DBAG), cached in the control database
 app.use("/buildings", buildingsRoute);
 app.use("/counter-hunt", counterHuntRoute);
 app.use("/happy-hour", happyHourRoute);
 // AI chat per user per Intel item (Gemini with our tools; the AI never writes)
 app.use("/intel-chat", intelChatRoute);
-// After the demo gate: verifyToken reads the users of the default connection. The setting itself is global (real database).
+// After the edition gate: verifyToken reads the users of the default connection; the settings belong to the shown edition
 app.use("/settings", settingsRoute);
 
 // Fallback handlers

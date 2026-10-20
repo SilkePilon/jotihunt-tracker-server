@@ -13,7 +13,7 @@ const by = (req: Request) => req.user?.name ?? null;
 const MAX_LOGO_BYTES = 1024 * 1024;
 const LOGO_TYPES: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/svg+xml": "svg" };
 
-/** Uploaded branding lives in the uploads dir (the real one, never a demo one). */
+/** Uploaded branding lives in the uploads dir (shared by all editions). */
 function brandingDir(): string {
   return path.join(path.resolve(process.env.UPLOADS_DIR || "uploads"), "branding");
 }

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { NightAreasSettingDoc } from "../demo/demo-state";
+import type { NightAreasSettingDoc } from "../editions/edition-settings-store";
 import type { NightArea } from "../services/routes/graphhopper.client";
 
 export interface NightAreasStore {
@@ -17,6 +17,7 @@ export async function initNightAreas(settingStore: NightAreasStore): Promise<Rou
   store = settingStore;
   const doc = await settingStore.readNightAreas();
   current = doc ? { enabled: doc.enabled !== false, areas: doc.areas ?? [] } : DEFAULT;
+  for (const listener of listeners) listener();
   return current;
 }
 

@@ -4,7 +4,7 @@ import { migrateEnvSettings } from "../settings/migrate-env";
 
 const uri = process.env.MONGO_URI;
 if (!uri) throw new Error("MONGO_URI is not set");
-// The settings live in the real database (the demo database never holds them)
+// The settings live in the control database (other edition databases never hold them)
 const connection = await mongoose.createConnection(uri).asPromise();
 try {
   await initAppConfig(connection);

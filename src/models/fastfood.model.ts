@@ -26,8 +26,8 @@ const FastfoodSchema = new mongoose.Schema<FastfoodDoc>(
 );
 
 /**
- * McDonald's / KFC / Burger King from OpenStreetMap in the REAL database (the demo state store's connection), so the
- * cache survives demo mode; the test connection in tests.
+ * McDonald's / KFC / Burger King from OpenStreetMap in the control database (the control store's connection), so the
+ * cache survives edition switches; the test connection in tests.
  */
 export function fastfoodModel(connection: Connection): Model<FastfoodDoc> {
   return (connection.models.Fastfood as Model<FastfoodDoc> | undefined) ?? connection.model<FastfoodDoc>("Fastfood", FastfoodSchema);

@@ -1,5 +1,5 @@
 import { logger } from "../logger";
-import { currentGeneration, runTracked, skipInDemoMode } from "../demo/demo-mode";
+import { currentGeneration, runTracked, skipWhenArchive } from "../editions/work-tracking";
 import { Article } from "../models/article.model";
 import { getArticlesPage, JotihuntPausedError, type ArticlesPage } from "../services/jotihunt.service";
 import { syncArticles } from "../services/article-sync.service";
@@ -38,7 +38,7 @@ async function knownArticleIds(ids: unknown[]): Promise<Set<number>> {
 }
 
 export default async function retrieveJotihuntArticles() {
-  if (skipInDemoMode("jotihunt-articles", (message) => logger.debug(message))) return;
+  if (skipWhenArchive("jotihunt-articles", (message) => logger.debug(message))) return;
 
   logger.debug("(CRON) Retrieving Jotihunt articles from API...");
 
@@ -52,7 +52,7 @@ export default async function retrieveJotihuntArticles() {
     else if (!(error instanceof Error && error.name === "JotihuntApiError")) logger.error("(CRON) Error retrieving articles:", error);
     return;
   }
-  // Store only into the database the run started on (skipped when a demo switch happened meanwhile)
+  // Store only into the database the run started on (skipped when an edition switch happened meanwhile)
   const result = await runTracked(() => syncArticles(apiArticles), { generation });
   if (!result) return;
 

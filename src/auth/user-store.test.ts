@@ -2,30 +2,27 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import mongoose from "mongoose";
 import { User } from "../models/user.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
-import { setDemoModeFlag } from "../demo/demo-mode";
-import { setAuthConnection } from "./auth-db";
-import { createAccount, updateAccounts } from "./user-store";
+import { createAccount, setLiveUsersConnection, updateAccounts } from "./user-store";
 import { publicUser } from "./public-user";
 
-const REAL_DB = "jotihunt-test-real";
-let real: mongoose.Connection;
+/** The live edition's database (master copy of the users) while the default connection serves an archive on another database */
+const LIVE_DB = "jotihunt-test-live";
+let live: mongoose.Connection;
 
 beforeAll(async () => {
   await connectTestDb();
-  real = await mongoose.createConnection(process.env.MONGO_URI_TEST?.replace(/\/[^/]*$/, `/${REAL_DB}`) ?? `mongodb://localhost:27017/${REAL_DB}`).asPromise();
-  await real.dropDatabase();
+  live = await mongoose.createConnection(process.env.MONGO_URI_TEST?.replace(/\/[^/]*$/, `/${LIVE_DB}`) ?? `mongodb://localhost:27017/${LIVE_DB}`).asPromise();
+  await live.dropDatabase();
 });
 beforeEach(async () => {
   await clearTestDb();
-  await real.collection("users").deleteMany({});
-  setDemoModeFlag(false);
-  setAuthConnection(null);
+  await live.collection("users").deleteMany({});
+  setLiveUsersConnection(undefined);
 });
 afterAll(async () => {
-  setDemoModeFlag(false);
-  setAuthConnection(null);
-  await real.dropDatabase();
-  await real.close();
+  setLiveUsersConnection(undefined);
+  await live.dropDatabase();
+  await live.close();
   await disconnectTestDb();
 });
 
@@ -42,17 +39,24 @@ describe("createAccount", () => {
     expect(user.lastActiveAt).toBeInstanceOf(Date);
   });
 
-  test("outside demo mode only the default database gets the user", async () => {
-    setAuthConnection(real);
-    await createAccount({ name: "Jesse" });
-    expect(await real.collection("users").countDocuments()).toBe(0);
+  test("when the live edition is shown the user is written once", async () => {
+    const sameDb = await mongoose.createConnection(process.env.MONGO_URI_TEST ?? "mongodb://localhost:27017/jotihunt-test").asPromise();
+    try {
+      expect(sameDb.name).toBe(mongoose.connection.name);
+      setLiveUsersConnection(sameDb);
+      await createAccount({ name: "Jesse" });
+      expect(await User.countDocuments()).toBe(1);
+      expect(await live.collection("users").countDocuments()).toBe(0);
+    } finally {
+      setLiveUsersConnection(undefined);
+      await sameDb.close();
+    }
   });
 
-  test("in demo mode the user is mirrored to the real database with the same id", async () => {
-    setAuthConnection(real);
-    setDemoModeFlag(true);
+  test("when an archive on another database is shown the user is mirrored to the live database with the same id", async () => {
+    setLiveUsersConnection(live);
     const user = await createAccount({ name: "Jesse", passkey });
-    const mirrored = await real.collection("users").findOne({ _id: user._id });
+    const mirrored = await live.collection("users").findOne({ _id: user._id });
     expect(mirrored?.name).toBe("Jesse");
     expect(mirrored?.passkeys).toHaveLength(1);
   });
@@ -70,23 +74,21 @@ describe("createAccount", () => {
 });
 
 describe("updateAccounts", () => {
-  test("in demo mode updates both databases", async () => {
-    setAuthConnection(real);
-    setDemoModeFlag(true);
+  test("in an archive updates both databases", async () => {
+    setLiveUsersConnection(live);
     const user = await createAccount({ name: "Jesse" });
     await updateAccounts({ _id: user._id }, { $set: { name: "Jes" } });
     expect((await User.findById(user._id))?.name).toBe("Jes");
-    expect((await real.collection("users").findOne({ _id: user._id }))?.name).toBe("Jes");
+    expect((await live.collection("users").findOne({ _id: user._id }))?.name).toBe("Jes");
   });
 
-  test("in demo mode leaves the real database alone when the current one matched nothing", async () => {
-    setAuthConnection(real);
-    setDemoModeFlag(true);
+  test("in an archive leaves the live database alone when the shown one matched nothing", async () => {
+    setLiveUsersConnection(live);
     const user = await createAccount({ name: "Jesse" });
-    // Only the real database still has the old name, so only it would match
-    await User.updateOne({ _id: user._id }, { $set: { name: "Demo" } });
+    // Only the live database still has the old name, so only it would match
+    await User.updateOne({ _id: user._id }, { $set: { name: "Other" } });
     expect(await updateAccounts({ _id: user._id, name: "Jesse" }, { $set: { name: "Jes" } })).toBe(false);
-    expect((await real.collection("users").findOne({ _id: user._id }))?.name).toBe("Jesse");
+    expect((await live.collection("users").findOne({ _id: user._id }))?.name).toBe("Jesse");
     expect(await updateAccounts({ _id: user._id }, { $set: { name: "Jes" } })).toBe(true);
   });
 });

@@ -50,7 +50,7 @@ export function scheduleCrons() {
     logger.warn("ROUTER_URL not set, fox trails are drawn as straight lines");
   }
 
-  // Summaries of news and assignments (Gemini): one per run, also for demo articles
+  // Summaries of news and assignments (Gemini): one per run
   cron.schedule("5,25,45 * * * * *", reportCronErrors("article-summaries", summarizeArticles), { name: "article-summaries", noOverlap: true });
 
   // AI hint split (Gemini): corrects the rule's per-area cells of one hint article per run

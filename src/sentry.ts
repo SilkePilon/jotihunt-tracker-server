@@ -3,7 +3,7 @@ import type { BunOptions } from "@sentry/bun";
 import { isDatabaseUnavailable } from "./utils/database-errors";
 
 /**
- * Sentry options from the environment, or null when no SENTRY_DSN is set (tests, local dev, demo stacks send nothing).
+ * Sentry options from the environment, or null when no SENTRY_DSN is set (tests, local dev and test stacks send nothing).
  * Errors only: no tracing, and none of the request data Sentry v11 collects by default (bodies hold GPS positions,
  * AI calls hold images and hint text). Access-log lines are kept out of Sentry Logs (see dropAccessLogs in logger.ts);
  * beforeSendLog drops any that still get through.
