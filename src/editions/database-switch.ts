@@ -148,6 +148,7 @@ export async function initEditions(
     // One-off: hunt times from Beheer (app-config), else HUNT_START_TIME/HUNT_END_TIME; after this only the registry counts
     const general = (await store.connection.collection("settings").findOne({ key: "app-config" }))?.general ?? {};
     const env = options.env ?? process.env;
+    // Per side, so mixed sources (start from Beheer, end from env) are intended
     const hunt = {
       huntStart: isoTime(general.huntStart) ?? isoTime(env.HUNT_START_TIME),
       huntEnd: isoTime(general.huntEnd) ?? isoTime(env.HUNT_END_TIME),

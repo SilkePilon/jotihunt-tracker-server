@@ -4,7 +4,9 @@ import type { NextFunction, Request, Response } from "express";
 import express from "express";
 import mongoose from "mongoose";
 import { Area } from "../models/area.model";
+import { body } from "express-validator";
 import { createAccount, updateAccounts } from "../auth/user-store";
+import { deleteUser, updateUser } from "../controllers/admin.controller";
 import { User } from "../models/user.model";
 import { general, initAppConfig, resetAppConfig, setGeneral, setHuntTimesSource } from "../settings/app-config";
 import {
@@ -202,6 +204,43 @@ describe("users master copy (the live edition's database)", () => {
     expect((await liveConnection()!.collection("users").findOne({ _id: user._id }))?.name).toBe("silke-renamed");
     await showEdition(2027);
     expect((await User.findById(user._id))?.name).toBe("silke-renamed");
+  });
+
+  /** Run an admin controller handler with a minimal request/response; resolves to the status */
+  async function runAdmin(handler: (req: Request, res: Response) => unknown, req: Partial<Request>) {
+    let status = 0;
+    const res = { status: (code: number) => ((status = code), res), json: () => res } as unknown as Response;
+    await handler({ params: {}, body: {}, ...req } as Request, res);
+    return status;
+  }
+
+  test("an admin deleting a user in the archive also deletes it (and its push subscriptions) in the live database", async () => {
+    await initEditions(uri);
+    await createEdition();
+    const user = await createAccount({ name: "silke" });
+    await createAccount({ name: "admin", admin: true });
+    await mongoose.connection.collection("pushsubscriptions").insertOne({ user: user._id, endpoint: "https://push.example/1" });
+    await showEdition(2026);
+    expect(await runAdmin(deleteUser, { params: { id: String(user._id) } })).toBe(200);
+    expect(await User.exists({ _id: user._id })).toBeNull();
+    expect(await liveConnection()!.collection("users").findOne({ _id: user._id })).toBeNull();
+    expect(await liveConnection()!.collection("pushsubscriptions").countDocuments({ user: user._id })).toBe(0);
+    await showEdition(2027);
+    expect(await User.exists({ _id: user._id })).toBeNull();
+  });
+
+  test("an admin update in the archive reaches the live database", async () => {
+    await initEditions(uri);
+    await createEdition();
+    const user = await createAccount({ name: "silke" });
+    await showEdition(2026);
+    const req = { params: { id: String(user._id) }, body: { name: "silke-renamed", admin: true } } as unknown as Request;
+    await body("name").optional().run(req);
+    await body("admin").optional().run(req);
+    expect(await runAdmin(updateUser, req)).toBe(200);
+    expect(await liveConnection()!.collection("users").findOne({ _id: user._id })).toMatchObject({ name: "silke-renamed", admin: true });
+    await showEdition(2027);
+    expect(await User.findById(user._id).lean()).toMatchObject({ name: "silke-renamed", admin: true });
   });
 
   test("booting with an archive shown copies the live users into it", async () => {

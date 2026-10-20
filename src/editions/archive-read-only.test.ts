@@ -39,10 +39,13 @@ test("reads and account/admin writes still pass in the archive", async () => {
   expect((await send("GET", "/markers")).status).toBe(200);
   expect((await send("HEAD", "/markers")).status).toBe(200);
   expect((await send("OPTIONS", "/markers")).status).toBe(200);
-  for (const path of ["/intel-chat", "/intel-chat/stream", "/auth/login", "/account/passkeys/x", "/push/subscribe", "/admin/config/general", "/admin/users/1", "/invites/abc"]) {
+  for (const path of ["/intel-chat", "/intel-chat/stream", "/auth/login", "/account/passkeys/x", "/admin/config/general", "/admin/users/1", "/invites/abc"]) {
     expect((await send("POST", path)).status).toBe(200);
   }
   expect((await send("POST", "/admin/broadcast")).status).toBe(423);
+  // Push subscriptions would only land in the archive's copy (the live edition holds the master)
+  expect((await send("POST", "/push/subscribe")).status).toBe(423);
+  expect((await send("DELETE", "/push/subscribe")).status).toBe(423);
   // A prefix only matches whole path segments
   expect((await send("POST", "/authx")).status).toBe(423);
 });

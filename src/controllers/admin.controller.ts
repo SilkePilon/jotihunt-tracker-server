@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import { User } from "../models/user.model";
 import { revokeUserSessions } from "../auth/sessions";
-import { PushSubscription } from "../models/push-subscription.model";
+import { deleteAccounts, updateAccounts } from "../auth/user-store";
 import { logger } from "../logger";
 import { matchedData } from "express-validator";
 
@@ -38,12 +38,13 @@ export async function deleteUser(req: Request, res: Response) {
       const user = await User.findById(id, { admin: 1 }).lean();
       if (!user) return "not-found";
       if (user.admin && !(await hasOtherAdmin(id))) return "last-admin";
-      await User.deleteOne({ _id: id });
+      // Also in the live edition's database while an archive is shown, with the push subscriptions
+      await deleteAccounts({ _id: id });
       return "deleted";
     });
     if (result === "not-found") return res.status(404).json({ message: "User not found" });
     if (result === "last-admin") return res.status(409).json({ message: LAST_ADMIN });
-    await Promise.all([PushSubscription.deleteMany({ user: id }), revokeUserSessions(id)]);
+    await revokeUserSessions(id);
 
     return res.status(200).json({ message: "User deleted" });
   } catch (error) {
@@ -58,13 +59,15 @@ export async function updateUser(req: Request, res: Response) {
 
   try {
     const result = await serializeAdminChange(async () => {
-      const user = await User.findById(id);
+      const user = await User.findById(id, { admin: 1 }).lean();
       if (!user) return "not-found";
       if (data.admin === false && user.admin && !(await hasOtherAdmin(id))) return "last-admin";
-      if (data.name) user.name = data.name;
-      if (data.admin !== undefined) user.admin = data.admin;
-      await user.save();
-      return user;
+      const set: Record<string, unknown> = {};
+      if (data.name) set.name = data.name;
+      if (data.admin !== undefined) set.admin = data.admin;
+      // Also in the live edition's database while an archive is shown
+      if (Object.keys(set).length > 0) await updateAccounts({ _id: id }, { $set: set });
+      return User.findById(id);
     });
     if (result === "not-found") return res.status(404).json({ message: "User not found" });
     if (result === "last-admin") return res.status(409).json({ message: LAST_ADMIN });

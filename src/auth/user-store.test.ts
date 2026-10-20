@@ -6,23 +6,23 @@ import { createAccount, setLiveUsersConnection, updateAccounts } from "./user-st
 import { publicUser } from "./public-user";
 
 /** The live edition's database (master copy of the users) while the default connection serves an archive on another database */
-const CONTROL_DB = "jotihunt-test-control";
-let control: mongoose.Connection;
+const LIVE_DB = "jotihunt-test-live";
+let live: mongoose.Connection;
 
 beforeAll(async () => {
   await connectTestDb();
-  control = await mongoose.createConnection(process.env.MONGO_URI_TEST?.replace(/\/[^/]*$/, `/${CONTROL_DB}`) ?? `mongodb://localhost:27017/${CONTROL_DB}`).asPromise();
-  await control.dropDatabase();
+  live = await mongoose.createConnection(process.env.MONGO_URI_TEST?.replace(/\/[^/]*$/, `/${LIVE_DB}`) ?? `mongodb://localhost:27017/${LIVE_DB}`).asPromise();
+  await live.dropDatabase();
 });
 beforeEach(async () => {
   await clearTestDb();
-  await control.collection("users").deleteMany({});
+  await live.collection("users").deleteMany({});
   setLiveUsersConnection(undefined);
 });
 afterAll(async () => {
   setLiveUsersConnection(undefined);
-  await control.dropDatabase();
-  await control.close();
+  await live.dropDatabase();
+  await live.close();
   await disconnectTestDb();
 });
 
@@ -46,7 +46,7 @@ describe("createAccount", () => {
       setLiveUsersConnection(sameDb);
       await createAccount({ name: "Jesse" });
       expect(await User.countDocuments()).toBe(1);
-      expect(await control.collection("users").countDocuments()).toBe(0);
+      expect(await live.collection("users").countDocuments()).toBe(0);
     } finally {
       setLiveUsersConnection(undefined);
       await sameDb.close();
@@ -54,9 +54,9 @@ describe("createAccount", () => {
   });
 
   test("when an archive on another database is shown the user is mirrored to the live database with the same id", async () => {
-    setLiveUsersConnection(control);
+    setLiveUsersConnection(live);
     const user = await createAccount({ name: "Jesse", passkey });
-    const mirrored = await control.collection("users").findOne({ _id: user._id });
+    const mirrored = await live.collection("users").findOne({ _id: user._id });
     expect(mirrored?.name).toBe("Jesse");
     expect(mirrored?.passkeys).toHaveLength(1);
   });
@@ -75,20 +75,20 @@ describe("createAccount", () => {
 
 describe("updateAccounts", () => {
   test("in an archive updates both databases", async () => {
-    setLiveUsersConnection(control);
+    setLiveUsersConnection(live);
     const user = await createAccount({ name: "Jesse" });
     await updateAccounts({ _id: user._id }, { $set: { name: "Jes" } });
     expect((await User.findById(user._id))?.name).toBe("Jes");
-    expect((await control.collection("users").findOne({ _id: user._id }))?.name).toBe("Jes");
+    expect((await live.collection("users").findOne({ _id: user._id }))?.name).toBe("Jes");
   });
 
   test("in an archive leaves the live database alone when the shown one matched nothing", async () => {
-    setLiveUsersConnection(control);
+    setLiveUsersConnection(live);
     const user = await createAccount({ name: "Jesse" });
     // Only the live database still has the old name, so only it would match
     await User.updateOne({ _id: user._id }, { $set: { name: "Other" } });
     expect(await updateAccounts({ _id: user._id, name: "Jesse" }, { $set: { name: "Jes" } })).toBe(false);
-    expect((await control.collection("users").findOne({ _id: user._id }))?.name).toBe("Jesse");
+    expect((await live.collection("users").findOne({ _id: user._id }))?.name).toBe("Jesse");
     expect(await updateAccounts({ _id: user._id }, { $set: { name: "Jes" } })).toBe(true);
   });
 });

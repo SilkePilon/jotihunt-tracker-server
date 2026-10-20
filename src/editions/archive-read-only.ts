@@ -1,8 +1,11 @@
 import type { NextFunction, Request, Response } from "express";
 import { isArchiveShown } from "./work-tracking";
 
-/** Writes that don't touch game data (accounts, push, Beheer config, users, invites, the AI chat) also work in the archive. */
-const ALLOWED_PREFIXES = ["/intel-chat", "/auth", "/account", "/herstel", "/invites", "/push", "/admin/config", "/admin/users", "/admin/invites"];
+/**
+ * Writes that don't touch game data (accounts, Beheer config, users, invites, the AI chat) also work in the archive.
+ * Push subscriptions don't: they would only land in the archive's copy (the live edition holds the master).
+ */
+const ALLOWED_PREFIXES = ["/intel-chat", "/auth", "/account", "/herstel", "/invites", "/admin/config", "/admin/users", "/admin/invites"];
 
 const isRead = (method: string) => method === "GET" || method === "HEAD" || method === "OPTIONS";
 

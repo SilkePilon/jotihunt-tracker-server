@@ -10,10 +10,6 @@ export interface PasskeyFields {
   name: string;
 }
 
-/**
- * The users collections an account change must reach: the shown edition's, plus the live edition's (master copy) when
- * an archive on another database is shown (showing an archive copies the live users over).
- */
 let liveOverride: Connection | null | undefined;
 
 /** Tests only: the live edition's connection without initEditions; undefined = back to liveConnection(). */
@@ -21,6 +17,10 @@ export function setLiveUsersConnection(connection: Connection | null | undefined
   liveOverride = connection;
 }
 
+/**
+ * The users collections an account change must reach: the shown edition's, plus the live edition's (master copy) when
+ * an archive on another database is shown (showing an archive copies the live users over).
+ */
 function userModels(): Model<unknown>[] {
   const live = liveOverride === undefined ? liveConnection() : liveOverride;
   if (!live || live.name === mongoose.connection.name) return [User as unknown as Model<unknown>];
@@ -55,4 +55,20 @@ export async function updateAccounts(filter: Record<string, unknown>, update: Re
   if (result.matchedCount === 0) return false;
   for (const model of others) await model.updateOne(filter, update);
   return true;
+}
+
+/**
+ * Delete the accounts matching `filter` and their push subscriptions in the shown edition's database and (when an
+ * archive on another database is shown) the live one. Resolves to how many accounts the shown database deleted.
+ */
+export async function deleteAccounts(filter: Record<string, unknown>): Promise<number> {
+  let shownDeleted = 0;
+  for (const [index, model] of userModels().entries()) {
+    const ids = (await model.find(filter, { _id: 1 }).lean<{ _id: mongoose.Types.ObjectId }[]>()).map((user) => user._id);
+    if (ids.length === 0) continue;
+    const { deletedCount } = await model.deleteMany({ _id: { $in: ids } });
+    await model.db.collection("pushsubscriptions").deleteMany({ user: { $in: ids } });
+    if (index === 0) shownDeleted = deletedCount;
+  }
+  return shownDeleted;
 }
