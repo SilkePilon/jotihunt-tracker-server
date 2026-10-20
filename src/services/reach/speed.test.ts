@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import destination from "@turf/destination";
-import { measureSpeed, type SpeedLeg, type TrailInfo } from "./speed";
+import { combineTrails, measureSpeed, type SpeedLeg, type TrailInfo } from "./speed";
 
 const t = (hhmm: string) => new Date(`2026-10-17T${hhmm}:00+02:00`);
 const now = t("18:00");
@@ -50,5 +50,31 @@ describe("measureSpeed", () => {
     ]);
     // a: 6 km/h routed, b: skipped, c: no route so straight × 1.2 = 4 km/h
     expect(measureSpeed(legs, trails, [], now)).toEqual({ kmh: 5, measured: true, legs: 2 });
+  });
+});
+
+describe("combineTrails", () => {
+  const trails = new Map<string, TrailInfo>([
+    ["a:s", { mode: "walk", distanceM: 1200 }],
+    ["s:b", { mode: "walk", distanceM: 800 }],
+    ["s:c", { mode: "car", distanceM: 5000 }],
+    ["s:d", { mode: "walk", distanceM: null }],
+  ]);
+
+  test("all walk: distances summed", () => {
+    expect(combineTrails(["a:s", "s:b"], trails)).toEqual({ mode: "walk", distanceM: 2000 });
+  });
+
+  test("one car piece: the whole leg is car", () => {
+    expect(combineTrails(["a:s", "s:c"], trails)).toEqual({ mode: "car", distanceM: 6200 });
+  });
+
+  test("a missing piece: null", () => {
+    expect(combineTrails(["a:s", "s:x"], trails)).toBeNull();
+    expect(combineTrails([], trails)).toBeNull();
+  });
+
+  test("a piece without distance: distanceM null", () => {
+    expect(combineTrails(["a:s", "s:d"], trails)).toEqual({ mode: "walk", distanceM: null });
   });
 });

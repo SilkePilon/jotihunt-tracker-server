@@ -9,7 +9,7 @@ import type { IsochroneRouter, ReachProfile } from "../routes/graphhopper.client
 import { isNightAt } from "../routes/sun";
 import type { TrailsResponse } from "../routes/trails.service";
 import { coneIn, nearestUnvisited, reachCircle, simplifyArea, type AreaGeometry, type Group } from "./shape";
-import { measureSpeed, type SpeedLeg, type TrailInfo } from "./speed";
+import { combineTrails, measureSpeed, type SpeedLeg, type TrailInfo } from "./speed";
 
 export interface AreaReach {
   area: string;
@@ -83,7 +83,8 @@ export function createReachService(deps: {
     const at = now();
     const [areas, markers, events, teams, visitList, trails] = await Promise.all([
       Area.find({}, { name: 1, status: 1 }).lean(),
-      Marker.find({ type: { $in: [MarkerType.Hint, MarkerType.Hunt] } }).sort({ time: 1 }).lean(),
+      // All types: trails chain spots too, a hint-to-hint leg can span several trail pieces
+      Marker.find().sort({ time: 1 }).lean(),
       AreaStatusEvent.find().sort({ at: 1 }).lean(),
       Team.find({}, { apiId: 1, name: 1, area: 1, location: 1 }).lean(),
       visits(),
@@ -97,16 +98,30 @@ export function createReachService(deps: {
     }
 
     const result: AreaReach[] = [];
-    for (const [area, list] of [...byArea.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    for (const [area, chain] of [...byArea.entries()].sort(([a], [b]) => a.localeCompare(b))) {
       if (ov.has(area)) continue;
+      // Spots are not fox positions: legs and the fix use hints/hunts only, the chain gives the trail pieces between them
+      const fixIndexes = chain.flatMap((m, i) => (m.type === MarkerType.Hint || m.type === MarkerType.Hunt ? [i] : []));
+      if (fixIndexes.length === 0) continue;
+      const list = fixIndexes.map((i) => chain[i]);
       const fix = list[list.length - 1];
       const fixCoord = fix.location.coordinates as Coord;
       const legs: SpeedLeg[] = list.slice(1).map((to, i) => ({
         id: `${String(list[i]._id)}:${String(to._id)}`, from: list[i].time, to: to.time,
         fromCoord: list[i].location.coordinates as Coord, toCoord: to.location.coordinates as Coord,
       }));
+      let legTrails: Map<string, TrailInfo> | null = null;
+      if (trails) {
+        legTrails = new Map();
+        for (let k = 1; k < fixIndexes.length; k++) {
+          const pieceIds: string[] = [];
+          for (let i = fixIndexes[k - 1]; i < fixIndexes[k]; i++) pieceIds.push(`${String(chain[i]._id)}:${String(chain[i + 1]._id)}`);
+          const info = combineTrails(pieceIds, trails);
+          if (info) legTrails.set(legs[k - 1].id, info);
+        }
+      }
       const areaEvents = events.filter((e) => e.area.toLowerCase() === area).map((e) => ({ status: e.status, at: e.at }));
-      const speed = measureSpeed(legs, trails, areaEvents, at);
+      const speed = measureSpeed(legs, legTrails, areaEvents, at);
 
       const sinceMs = Math.max(0, at.getTime() - fix.time.getTime());
       const capped = sinceMs > MAX_WALK_MS;

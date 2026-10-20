@@ -91,4 +91,47 @@ describe("reach service", () => {
     await service.reachJson();
     expect(calls).toHaveLength(1);
   });
+
+  describe("spots between hints", () => {
+    async function setup(secondMode: "walk" | "car") {
+      await Area.create([{ name: "Alpha", status: "green", updatedAt: t("09:00") }]);
+      // Hint → spot → hint → spot → hint; the spots sit off the line, the fix stays the newest hint
+      const [h1, s1, h2, s2, h3] = await Marker.create([
+        { area: "alpha", time: t("10:00"), location: point(start), type: MarkerType.Hint },
+        { area: "alpha", time: t("10:30"), location: point(east(30)), type: MarkerType.Spot },
+        { area: "alpha", time: t("11:00"), location: point(east(1)), type: MarkerType.Hint },
+        { area: "alpha", time: t("11:30"), location: point(east(30)), type: MarkerType.Spot },
+        { area: "alpha", time: t("12:00"), location: point(east(2)), type: MarkerType.Hint },
+      ]);
+      const id = (a: { _id: unknown }, b: { _id: unknown }) => `${String(a._id)}:${String(b._id)}`;
+      const feature = (fid: string, mode: "walk" | "car", distanceM: number) => ({
+        type: "Feature" as const, geometry: { type: "LineString" as const, coordinates: [start, east(1)] },
+        properties: { id: fid, mode, distanceM },
+      });
+      // Leg 1: 2 + 2.6 km in 1 h; leg 2: 2 + 2 km in 1 h (or a car piece)
+      const trails = async () => ({
+        enabled: true,
+        trails: { type: "FeatureCollection", features: [
+          feature(id(h1, s1), "walk", 2000), feature(id(s1, h2), "walk", 2600),
+          feature(id(h2, s2), "walk", 2000), feature(id(s2, h3), secondMode, 2000),
+        ] },
+      }) as unknown as TrailsResponse;
+      const { router } = fakeRouter(async () => square);
+      return { service: createReachService({ router, trails, now: () => t("12:30"), configured: () => true, visits: async () => [] }), h3 };
+    }
+
+    test("routed pieces are summed into one walking leg", async () => {
+      const { service, h3 } = await setup("walk");
+      const [alpha] = (await service.reach()).areas;
+      // Median of 4.6 and 4 km/h
+      expect(alpha).toMatchObject({ speedKmh: 4.3, measured: true, legs: 2 });
+      expect(alpha.fix).toMatchObject({ id: String(h3._id), type: "hint" });
+    });
+
+    test("a car piece skips the whole leg", async () => {
+      const { service } = await setup("car");
+      const [alpha] = (await service.reach()).areas;
+      expect(alpha).toMatchObject({ speedKmh: 5, measured: false, legs: 1 });
+    });
+  });
 });

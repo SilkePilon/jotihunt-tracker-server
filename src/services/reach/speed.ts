@@ -20,6 +20,23 @@ export interface SpeedLeg { id: string; from: Date; to: Date; fromCoord: [number
 export interface TrailInfo { mode: "walk" | "car" | "extra"; distanceM: number | null }
 export interface Speed { kmh: number; measured: boolean; legs: number }
 
+/**
+ * One leg's trail info from the trail pieces it spans (spots between two hints/hunts split it into several trails):
+ * walk only when every piece is walk, else the first other mode; distances summed. Null when a piece has no trail.
+ */
+export function combineTrails(pieceIds: string[], trails: Map<string, TrailInfo>): TrailInfo | null {
+  if (pieceIds.length === 0) return null;
+  let mode: TrailInfo["mode"] = "walk";
+  let distanceM: number | null = 0;
+  for (const id of pieceIds) {
+    const piece = trails.get(id);
+    if (!piece) return null;
+    if (mode === "walk" && piece.mode !== "walk") mode = piece.mode;
+    distanceM = distanceM === null || piece.distanceM === null ? null : distanceM + piece.distanceM;
+  }
+  return { mode, distanceM };
+}
+
 function redMs(red: { from: Date; to: Date }[], from: Date, to: Date): number {
   let total = 0;
   for (const interval of red) total += Math.max(0, Math.min(interval.to.getTime(), to.getTime()) - Math.max(interval.from.getTime(), from.getTime()));
