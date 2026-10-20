@@ -2,30 +2,28 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import mongoose from "mongoose";
 import { User } from "../models/user.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
-import { setArchiveFlag } from "../editions/work-tracking";
 import { setAuthConnection } from "./auth-db";
 import { createAccount, updateAccounts } from "./user-store";
 import { publicUser } from "./public-user";
 
-const REAL_DB = "jotihunt-test-real";
-let real: mongoose.Connection;
+/** The control database (master copy of the users) while the default connection serves an edition database */
+const CONTROL_DB = "jotihunt-test-control";
+let control: mongoose.Connection;
 
 beforeAll(async () => {
   await connectTestDb();
-  real = await mongoose.createConnection(process.env.MONGO_URI_TEST?.replace(/\/[^/]*$/, `/${REAL_DB}`) ?? `mongodb://localhost:27017/${REAL_DB}`).asPromise();
-  await real.dropDatabase();
+  control = await mongoose.createConnection(process.env.MONGO_URI_TEST?.replace(/\/[^/]*$/, `/${CONTROL_DB}`) ?? `mongodb://localhost:27017/${CONTROL_DB}`).asPromise();
+  await control.dropDatabase();
 });
 beforeEach(async () => {
   await clearTestDb();
-  await real.collection("users").deleteMany({});
-  setArchiveFlag(false);
+  await control.collection("users").deleteMany({});
   setAuthConnection(null);
 });
 afterAll(async () => {
-  setArchiveFlag(false);
   setAuthConnection(null);
-  await real.dropDatabase();
-  await real.close();
+  await control.dropDatabase();
+  await control.close();
   await disconnectTestDb();
 });
 
@@ -42,17 +40,24 @@ describe("createAccount", () => {
     expect(user.lastActiveAt).toBeInstanceOf(Date);
   });
 
-  test("outside demo mode only the default database gets the user", async () => {
-    setAuthConnection(real);
-    await createAccount({ name: "Jesse" });
-    expect(await real.collection("users").countDocuments()).toBe(0);
+  test("when the shown edition is the control database the user is written once", async () => {
+    const sameDb = await mongoose.createConnection(process.env.MONGO_URI_TEST ?? "mongodb://localhost:27017/jotihunt-test").asPromise();
+    try {
+      expect(sameDb.name).toBe(mongoose.connection.name);
+      setAuthConnection(sameDb);
+      await createAccount({ name: "Jesse" });
+      expect(await User.countDocuments()).toBe(1);
+      expect(await control.collection("users").countDocuments()).toBe(0);
+    } finally {
+      setAuthConnection(null);
+      await sameDb.close();
+    }
   });
 
-  test("in demo mode the user is mirrored to the real database with the same id", async () => {
-    setAuthConnection(real);
-    setArchiveFlag(true);
+  test("when the shown edition has its own database the user is mirrored to the control database with the same id", async () => {
+    setAuthConnection(control);
     const user = await createAccount({ name: "Jesse", passkey });
-    const mirrored = await real.collection("users").findOne({ _id: user._id });
+    const mirrored = await control.collection("users").findOne({ _id: user._id });
     expect(mirrored?.name).toBe("Jesse");
     expect(mirrored?.passkeys).toHaveLength(1);
   });
@@ -70,23 +75,21 @@ describe("createAccount", () => {
 });
 
 describe("updateAccounts", () => {
-  test("in demo mode updates both databases", async () => {
-    setAuthConnection(real);
-    setArchiveFlag(true);
+  test("on an edition database updates both databases", async () => {
+    setAuthConnection(control);
     const user = await createAccount({ name: "Jesse" });
     await updateAccounts({ _id: user._id }, { $set: { name: "Jes" } });
     expect((await User.findById(user._id))?.name).toBe("Jes");
-    expect((await real.collection("users").findOne({ _id: user._id }))?.name).toBe("Jes");
+    expect((await control.collection("users").findOne({ _id: user._id }))?.name).toBe("Jes");
   });
 
-  test("in demo mode leaves the real database alone when the current one matched nothing", async () => {
-    setAuthConnection(real);
-    setArchiveFlag(true);
+  test("on an edition database leaves the control database alone when the current one matched nothing", async () => {
+    setAuthConnection(control);
     const user = await createAccount({ name: "Jesse" });
-    // Only the real database still has the old name, so only it would match
-    await User.updateOne({ _id: user._id }, { $set: { name: "Demo" } });
+    // Only the control database still has the old name, so only it would match
+    await User.updateOne({ _id: user._id }, { $set: { name: "Other" } });
     expect(await updateAccounts({ _id: user._id, name: "Jesse" }, { $set: { name: "Jes" } })).toBe(false);
-    expect((await real.collection("users").findOne({ _id: user._id }))?.name).toBe("Jesse");
+    expect((await control.collection("users").findOne({ _id: user._id }))?.name).toBe("Jesse");
     expect(await updateAccounts({ _id: user._id }, { $set: { name: "Jes" } })).toBe(true);
   });
 });

@@ -1,15 +1,10 @@
 import { Request, Response } from "express";
-import { logger } from "../logger";
-import { getDemoState, switchDemoMode } from "../editions/database-switch";
 
+// Demo mode is gone (replaced by editions); this route is removed in the editions boot rewiring (Task 6).
 export function getDemo(_req: Request, res: Response) {
-  return res.status(200).json(getDemoState());
+  return res.status(200).json({ enabled: false, enabledAt: null, startedAt: null });
 }
 
-export async function postDemo(req: Request, res: Response) {
-  const enabled = req.body.enabled === true;
-  logger.info(`Demo mode ${enabled ? "on" : "off"} requested by user ${req.user?._id}`);
-  // A SwitchBusyError (status 409: requests or jobs kept running, nothing changed) is mapped by the global error handler
-  const state = await switchDemoMode(enabled, req.user);
-  return res.status(200).json(state);
+export function postDemo(_req: Request, res: Response) {
+  return res.status(410).json({ message: "Demomodus bestaat niet meer; gebruik Jotihunt-edities." });
 }

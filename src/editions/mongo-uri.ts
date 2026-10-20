@@ -22,18 +22,10 @@ export function mongoUriDbName(uri: string): string {
   return decodeURIComponent(parseMongoUri(uri).path) || "test";
 }
 
-/** Name of the demo database belonging to a real connection string: `<realDbName>-demo`. */
-export function demoDbName(uri: string): string {
-  const real = mongoUriDbName(uri);
-  const demo = `${real}-demo`;
-  if (demo === real) throw new Error("Demo database name equals the real database name");
-  return demo;
-}
-
 /**
  * Connect options for another database on the same server. The URI stays untouched (it may hold credentials and
  * several hosts); `dbName` selects the database. Without an explicit authSource the driver would authenticate against
- * the selected database, so keep authenticating where the real connection does. `mongodb+srv` URIs are left alone:
+ * the selected database, so keep authenticating where the control connection does. `mongodb+srv` URIs are left alone:
  * the driver takes their authSource from the DNS TXT record.
  */
 export function dbConnectOptions(uri: string, dbName: string): ConnectOptions {

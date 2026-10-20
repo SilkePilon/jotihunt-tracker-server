@@ -1,26 +1,16 @@
 import type { NextFunction, Request, Response } from "express";
 import mongoose from "mongoose";
 import { redactPath } from "../sentry";
-import { activeWorkCount, beginWork, isArchiveShown, nextGeneration, setArchiveFlag, setSwitchInProgress, waitForIdleWork } from "./work-tracking";
+import { activeWorkCount, beginWork, nextGeneration, setArchiveFlag, setSwitchInProgress, waitForIdleWork } from "./work-tracking";
 import { openControlStore, type ControlStore } from "./control-store";
-import { dbConnectOptions, demoDbName, mongoUriDbName } from "./mongo-uri";
+import { dbConnectOptions, mongoUriDbName } from "./mongo-uri";
+import { checkCreate, checkShow, editionOf, isArchive, migrateRegistry, nextEditionRegistry, type Edition, type EditionsDoc } from "./registry";
 import { errorText } from "../utils/error-text";
 import { dropLegacyHuntCodeIndex } from "../models/hunt.model";
 import type { ServiceLogger } from "../utils/service-logger";
 
-export { dbConnectOptions, demoDbName, mongoUriDbName } from "./mongo-uri";
-
-/** Fills the (freshly dropped, users already copied) demo database; times relative to `now`. */
-export type DemoWorldGenerator = (now: Date) => Promise<void>;
-/** Called after every switch (on and off), e.g. to clear caches and queues holding data of the other database. */
-export type DemoSwitchListener = (enabled: boolean) => void | Promise<void>;
-
-export interface DemoState {
-  enabled: boolean;
-  enabledAt: Date | null;
-  /** When the current demo world was generated (null when demo mode is off) */
-  startedAt: Date | null;
-}
+/** Called after every switch (also a refused one), e.g. to clear caches and queues holding data of the other database. */
+export type EditionSwitchListener = (registry: EditionsDoc) => void | Promise<void>;
 
 /** A switch was refused because requests or background jobs kept running; nothing changed. */
 export class SwitchBusyError extends Error {
@@ -31,6 +21,17 @@ export class SwitchBusyError extends Error {
   }
 }
 
+/** A switch the registry refuses (unknown year, during the live hunt); mapped by the global error handler. */
+export class EditionRequestError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "EditionRequestError";
+  }
+}
+
 /** Max time a switch waits for running requests and tracked jobs; after that the switch is refused. */
 const DRAIN_TIMEOUT_MS = 10_000;
 let drainTimeoutMs = DRAIN_TIMEOUT_MS;
@@ -38,103 +39,129 @@ let drainTimeoutMs = DRAIN_TIMEOUT_MS;
 const ABANDONED_REQUEST_MS = 30_000;
 let abandonedRequestMs = ABANDONED_REQUEST_MS;
 
-const DISABLED_STATE: DemoState = Object.freeze({ enabled: false, enabledAt: null, startedAt: null });
-
 const noopLogger: ServiceLogger = { info() {}, warn() {}, error() {} };
 
-let realUri: string | null = null;
+let controlUri: string | null = null;
 let store: ControlStore | null = null;
+let registry: EditionsDoc | null = null;
+let now: () => Date = () => new Date();
 let log: ServiceLogger = noopLogger;
-let state: DemoState = DISABLED_STATE;
-let generator: DemoWorldGenerator = async () => {};
-const listeners = new Set<DemoSwitchListener>();
+const listeners = new Set<EditionSwitchListener>();
 /** Serialises switches; also what the gate waits for */
 let switching: Promise<unknown> | null = null;
 /** The gate's release of each counted response (see releaseSwitchWork) */
 const gateReleases = new WeakMap<object, () => void>();
 
+/** A planned switch: the registry to switch to, plus work to do on the new connection before it is saved. */
+interface SwitchPlan {
+  next: EditionsDoc;
+  prepare?: () => Promise<void>;
+}
+
 // --- Public API -------------------------------------------------------------------------------------------------
 
-/** Injected by the demo world generator (Task 2); the default does nothing (users are copied by the switch). */
-export function setDemoWorldGenerator(fn: DemoWorldGenerator) {
-  generator = fn;
+/** The edition registry (a copy). */
+export function getRegistry(): EditionsDoc {
+  const { registry: current } = requireInit();
+  return { ...current, editions: current.editions.map((edition) => ({ ...edition })) };
+}
+
+/** The store on the dedicated connection to the control database (also holds the other `settings` documents). */
+export function getControlStore(): ControlStore {
+  return requireInit().store;
+}
+
+/** Read-only access to a collection of the control database. Never write through this. */
+export async function readControlCollection<T = Record<string, unknown>>(collection: string, filter: Record<string, unknown> = {}): Promise<T[]> {
+  return (await requireInit().store.connection.collection(collection).find(filter).toArray()) as T[];
 }
 
 /** Register a callback that runs after every switch; returns an unsubscribe function. */
-export function onEditionSwitch(listener: DemoSwitchListener): () => void {
+export function onEditionSwitch(listener: EditionSwitchListener): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
 
 /**
- * Read-only access to a collection of the REAL database (through the DemoState connection), for the demo generator
- * (teams). Never write through this.
+ * Open the control store, register the existing data as 2026 on first boot, remove the old demo leftovers and connect
+ * the default Mongoose connection to the shown edition.
  */
-export async function readControlCollection<T = Record<string, unknown>>(collection: string, filter: Record<string, unknown> = {}): Promise<T[]> {
-  const { store: stateStore } = requireInit();
-  return (await stateStore.connection.collection(collection).find(filter).toArray()) as T[];
-}
-
-/** The store on the dedicated connection to the real database (also holds the other `settings` documents). */
-export function getControlStore(): ControlStore {
-  return requireInit().store;
-}
-
-export function getDemoState(): DemoState {
-  return { ...state };
-}
-
-/**
- * Open the DemoState store in the real database and connect the default Mongoose connection: to the real database, or,
- * when demo mode was left on, to a freshly generated demo database.
- */
-export async function initDemoMode(
+export async function initEditions(
   uri: string,
-  options: { logger?: ServiceLogger; /** tests only */ drainTimeoutMs?: number; /** tests only */ abandonedRequestMs?: number } = {},
-): Promise<DemoState> {
-  if (store) throw new Error("Demo mode is already initialised");
+  options: { logger?: ServiceLogger; /** tests only */ drainTimeoutMs?: number; /** tests only */ abandonedRequestMs?: number; /** tests only */ now?: () => Date } = {},
+): Promise<EditionsDoc> {
+  if (store) throw new Error("Editions are already initialised");
   log = options.logger ?? noopLogger;
   drainTimeoutMs = options.drainTimeoutMs ?? DRAIN_TIMEOUT_MS;
   abandonedRequestMs = options.abandonedRequestMs ?? ABANDONED_REQUEST_MS;
-  realUri = uri;
-  demoDbName(uri); // refuse to run with an unusable demo database name
+  now = options.now ?? (() => new Date());
+  const controlDb = mongoUriDbName(uri);
+  controlUri = uri;
   store = await openControlStore(uri);
-  const saved = await store.read();
-  if (saved?.enabled) {
-    log.info("Demo mode is on: starting with a fresh demo database");
-    try {
-      const startedAt = await enterDemo();
-      state = { enabled: true, enabledAt: saved.enabledAt ?? null, startedAt };
-      await store.write({ enabled: true, enabledAt: state.enabledAt, enabledBy: saved.enabledBy ?? null, startedAt });
-      return getDemoState();
-    } catch (error) {
-      log.error("Could not start in demo mode, falling back to the real database", error);
-      await fallbackToReal();
-      await store.write({ ...DISABLED_STATE, enabledBy: null });
-      return getDemoState();
-    }
-  }
-  await connectReal();
-  state = DISABLED_STATE;
-  // A demo database left behind by a failed switch or a crash
-  await dropDemoDatabase().catch((error) => log.warn(`Could not drop a leftover demo database: ${errorText(error)}`));
-  return getDemoState();
+
+  const saved = await store.readRegistry();
+  if (!saved) {
+    const general = (await store.connection.collection("settings").findOne({ key: "app-config" }))?.general ?? {};
+    registry = migrateRegistry(null, controlDb, { huntStart: general.huntStart ?? null, huntEnd: general.huntEnd ?? null }, now());
+    await store.writeRegistry(registry);
+    log.info(`Editions: registered the existing data as Jotihunt ${registry.liveYear}`);
+  } else registry = saved;
+
+  // Demo mode is gone: its switch document and a leftover demo database
+  if (await store.deleteDemoDoc()) log.info("Removed the old demo mode setting");
+  await store.connection
+    .useDb(`${controlDb}-demo`, { useCache: false })
+    .dropDatabase()
+    .catch((error) => log.warn(`Could not drop the old demo database: ${errorText(error)}`));
+
+  const shown = editionOf(registry, registry.shownYear);
+  if (!shown) throw new Error(`The shown edition ${registry.shownYear} is not in the registry`);
+  await connectEdition(shown, registry);
+  return getRegistry();
 }
 
-/**
- * Switch between the real and the demo database. Switching to the current state is a no-op. Rejects with a
- * SwitchBusyError (nothing changed) when requests or tracked jobs keep running for more than 10 s.
- */
-export function switchDemoMode(enabled: boolean, user?: { _id: unknown } | null): Promise<DemoState> {
-  const previous = switching ?? Promise.resolve();
-  const run = previous.catch(() => undefined).then(() => performSwitch(enabled, user));
-  const current = run.finally(() => {
-    if (switching === current) switching = null;
-  });
-  // The caller handles the rejection of `run`; this copy only serialises switches
-  current.catch(() => undefined);
-  switching = current;
-  return run;
+/** Show `year` to everyone. Rejects with EditionRequestError (404/409) or SwitchBusyError; nothing changes then. */
+export function showEdition(year: number): Promise<EditionsDoc> {
+  return enqueue(() =>
+    performSwitch((current) => {
+      if (year === current.shownYear) return null;
+      const check = checkShow(current, year, now());
+      if (!check.ok) throw new EditionRequestError(check.status, check.message);
+      return { next: { ...current, shownYear: year } };
+    }),
+  );
+}
+
+/** Start the next edition (live year + 1): fresh database, night areas copied, live and shown. */
+export function createEdition(): Promise<EditionsDoc> {
+  return enqueue(() =>
+    performSwitch((current) => {
+      const check = checkCreate(current, now());
+      if (!check.ok) throw new EditionRequestError(check.status, check.message);
+      const previousLive = editionOf(current, current.liveYear)!;
+      return {
+        next: nextEditionRegistry(current, mongoUriDbName(requireInit().uri), now()),
+        // Hand-drawn forests don't move between years
+        async prepare() {
+          const nightAreas = await requireInit()
+            .store.connection.useDb(previousLive.dbName, { useCache: true })
+            .collection("settings")
+            .findOne({ key: "night-areas" }, { projection: { _id: 0 } });
+          if (nightAreas) await mongoose.connection.collection("settings").replaceOne({ key: "night-areas" }, nightAreas, { upsert: true });
+        },
+      };
+    }),
+  );
+}
+
+/** Hunt times live on the registry entry (Beheer → Hunt card edits the shown edition). No database switch. */
+export async function updateEditionHuntTimes(year: number, patch: { huntStart?: string | null; huntEnd?: string | null }): Promise<EditionsDoc> {
+  const { registry: current, store: control } = requireInit();
+  if (!editionOf(current, year)) throw new EditionRequestError(404, "Die editie bestaat niet");
+  const next: EditionsDoc = { ...current, editions: current.editions.map((edition) => (edition.year === year ? { ...edition, ...patch } : edition)) };
+  await control.writeRegistry(next);
+  registry = next;
+  return getRegistry();
 }
 
 /**
@@ -163,7 +190,7 @@ export function editionGate(req: Request, res: Response, next: NextFunction) {
       // photo download in sendFile may not respond for a long time)
       if (res.writableFinished || isRead) return release();
       abandonedTimer = setTimeout(() => {
-        log.warn(`${req.method} ${redactPath(req.originalUrl)} (client gone) still running after ${abandonedRequestMs / 1000} s; no longer delays a demo switch`);
+        log.warn(`${req.method} ${redactPath(req.originalUrl)} (client gone) still running after ${abandonedRequestMs / 1000} s; no longer delays a switch`);
         released = true;
         finish();
       }, abandonedRequestMs);
@@ -185,48 +212,62 @@ export function editionGate(req: Request, res: Response, next: NextFunction) {
 }
 
 /**
- * A long-lived response (the Intel chat stream) stops delaying a demo switch from here on. Whatever its handler writes
+ * A long-lived response (the Intel chat stream) stops delaying a switch from here on. Whatever its handler writes
  * later must be counted on its own (beginWork) and check the database generation it started in.
  */
 export function releaseSwitchWork(res: Response) {
   gateReleases.get(res)?.();
 }
 
-/** Express middleware for the /demo routes themselves: waits for a running switch, not counted by it. */
+/** Express middleware for the /editions routes themselves: waits for a running switch, not counted by it. */
 export function waitForSwitch(_req: Request, _res: Response, next: NextFunction) {
   if (!switching) return next();
   waitForRunningSwitch().then(() => next(), next);
 }
 
-/** Close the DemoState connection and the default connection; resets the module (tests, shutdown). */
-export async function closeDemoMode() {
+/** Close the control connection and the default connection; resets the module (tests, shutdown). */
+export async function closeEditions() {
   await switching?.catch(() => undefined);
   await mongoose.connection.close();
   await store?.close();
   store = null;
-  realUri = null;
-  state = DISABLED_STATE;
+  controlUri = null;
+  registry = null;
+  now = () => new Date();
+  listeners.clear();
   setArchiveFlag(false);
   setSwitchInProgress(false);
-  generator = async () => {};
 }
 
 // --- Internals --------------------------------------------------------------------------------------------------
+
+function requireInit(): { uri: string; store: ControlStore; registry: EditionsDoc } {
+  if (!controlUri || !store || !registry) throw new Error("Editions are not initialised");
+  return { uri: controlUri, store, registry };
+}
 
 async function waitForRunningSwitch() {
   while (switching) await switching.catch(() => undefined);
 }
 
-function requireInit(): { uri: string; store: ControlStore } {
-  if (!realUri || !store) throw new Error("Demo mode is not initialised");
-  return { uri: realUri, store };
+/** Serialises switches; `switching` is also what editionGate waits for. */
+function enqueue<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = switching ?? Promise.resolve();
+  const run = previous.catch(() => undefined).then(fn);
+  const current = run.finally(() => {
+    if (switching === current) switching = null;
+  });
+  // The caller handles the rejection of `run`; this copy only serialises switches
+  current.catch(() => undefined);
+  switching = current;
+  return run;
 }
 
 /** Models whose old unique hunt-code index must be dropped: syncIndexes instead of createIndexes. */
 const SYNCED_MODELS = ["Hunt"];
 
 /**
- * Index maintenance of the real database (also after switching back from demo mode). model.init() only runs once
+ * Index maintenance of the edition database the default connection just connected to. model.init() only runs once
  * per process, so the indexes are built with createIndexes(). Hunt codes are no longer unique: synced hunts may have no
  * code at all (QR flow, keyed by siteKey). syncIndexes drops the old unique index.
  */
@@ -243,153 +284,95 @@ async function maintainIndexes() {
   }
 }
 
-/** Only the default connection is closed: mongoose.disconnect() would also close the DemoState connection. */
-async function connectReal() {
-  const { uri } = requireInit();
+/**
+ * Point the default connection at `edition`. Editions on their own database get the users and push subscriptions of
+ * the control database (the master copy; see auth/user-store.ts), replacing what they had. Only the default connection
+ * is closed: mongoose.disconnect() would also close the control connection.
+ */
+async function connectEdition(edition: Edition, target: EditionsDoc) {
+  const { uri, store: control } = requireInit();
+  const controlDb = mongoUriDbName(uri);
   await mongoose.connection.close();
-  await mongoose.connect(uri);
-  if (mongoose.connection.name !== mongoUriDbName(uri)) {
+  await mongoose.connect(uri, edition.dbName === controlDb ? {} : dbConnectOptions(uri, edition.dbName));
+  if (mongoose.connection.name !== edition.dbName) {
     await mongoose.connection.close();
     throw new Error("Connected to an unexpected database");
   }
-  setArchiveFlag(false);
+  if (edition.dbName !== controlDb) {
+    for (const collection of ["users", "pushsubscriptions"]) {
+      const docs = await control.connection.collection(collection).find().toArray();
+      await mongoose.connection.collection(collection).deleteMany({});
+      if (docs.length > 0) await mongoose.connection.collection(collection).insertMany(docs);
+    }
+  }
+  setArchiveFlag(isArchive(target));
   await maintainIndexes();
 }
 
-/** Connect the default connection to the existing demo database again (a failed switch-off), without dropping it. */
-async function reconnectDemo() {
-  const { uri } = requireInit();
-  const demoName = demoDbName(uri);
-  await mongoose.connection.close();
-  await mongoose.connect(uri, dbConnectOptions(uri, demoName));
-  if (mongoose.connection.name !== demoName) {
-    await mongoose.connection.close();
-    throw new Error("Connected to an unexpected database");
-  }
-  setArchiveFlag(true);
-}
-
-/**
- * Drop the demo database through the DemoState connection, so it works whatever the default connection is doing.
- * Never drops anything but `<realDbName>-demo`.
- */
-async function dropDemoDatabase() {
-  const { uri, store: stateStore } = requireInit();
-  const demoName = demoDbName(uri);
-  if (demoName === stateStore.connection.name || demoName === mongoUriDbName(uri)) throw new Error("Refusing to drop a database that is not the demo database");
-  await stateStore.connection.useDb(demoName, { useCache: false }).dropDatabase();
-}
-
-/** Connect the default connection to a fresh demo database, copy the users and generate the demo world. */
-async function enterDemo(): Promise<Date> {
-  const { uri, store: stateStore } = requireInit();
-  const demoName = demoDbName(uri);
-  await mongoose.connection.close();
-  await mongoose.connect(uri, dbConnectOptions(uri, demoName));
-  const connection = mongoose.connection;
-  // Never drop anything but the demo database
-  if (connection.name !== demoName || demoName === stateStore.connection.name) {
-    await connection.close();
-    throw new Error("Refusing to drop a database that is not the demo database");
-  }
-  setArchiveFlag(true);
-  await connection.dropDatabase();
-  // model.init() only runs once per process, so build the indexes of the fresh database explicitly
-  await Promise.all(Object.values(mongoose.models).map((model) => model.createIndexes()));
-  const users = await stateStore.connection.collection("users").find().toArray();
-  if (users.length > 0) await connection.collection("users").insertMany(users);
-  // Push endpoints too, so notifications of the demo world reach the devices that were subscribed
-  const pushSubscriptions = await stateStore.connection.collection("pushsubscriptions").find().toArray();
-  if (pushSubscriptions.length > 0) await connection.collection("pushsubscriptions").insertMany(pushSubscriptions);
-  const now = new Date();
-  await generator(now);
-  log.info(`Demo database ${demoName} ready (${users.length} users copied)`);
-  return now;
-}
-
-/**
- * After a failed switch-on: back to the real database and drop the half-built demo database. When even the real
- * database is unreachable, the default connection stays closed (never serving the demo database as if it were real).
- */
-async function fallbackToReal() {
-  state = DISABLED_STATE;
-  try {
-    await connectReal();
-  } catch (error) {
-    log.error("Could not reconnect to the real database", error);
-    await mongoose.connection.close().catch(() => undefined);
-    setArchiveFlag(false);
-  }
-  await dropDemoDatabase().catch((error) => log.error("Could not drop the demo database", error));
-}
-
-async function switchOn(stateStore: ControlStore, user?: { _id: unknown } | null) {
-  let startedAt: Date;
-  try {
-    startedAt = await enterDemo();
-  } catch (error) {
-    log.error("Could not switch to demo mode, back to the real database", error);
-    await fallbackToReal();
-    throw error;
-  }
-  state = { enabled: true, enabledAt: new Date(), startedAt };
-  await stateStore.write({ enabled: true, enabledAt: state.enabledAt, enabledBy: user?._id ? String(user._id) : null, startedAt });
-}
-
-async function switchOff(stateStore: ControlStore) {
-  try {
-    await connectReal();
-  } catch (error) {
-    // The demo database still exists (it is dropped only after the real one is connected): stay in demo mode
-    log.error("Could not reconnect to the real database, staying in demo mode", error);
-    await reconnectDemo().catch(async (demoError) => {
-      log.error("Could not reconnect to the demo database either", demoError);
-      await mongoose.connection.close().catch(() => undefined);
-    });
-    throw error;
-  }
-  state = DISABLED_STATE;
-  await dropDemoDatabase().catch((error) => log.error("Could not drop the demo database (dropped at the next start)", error));
-  await stateStore.write({ ...DISABLED_STATE, enabledBy: null });
-}
-
-async function notifyListeners(enabled: boolean) {
+async function notifyListeners(current: EditionsDoc) {
   for (const listener of listeners) {
     try {
-      await listener(enabled);
+      await listener(current);
     } catch (error) {
-      log.error("Demo switch listener failed", error);
+      log.error("Edition switch listener failed", error);
     }
   }
 }
 
-async function performSwitch(enabled: boolean, user?: { _id: unknown } | null): Promise<DemoState> {
-  const { store: stateStore } = requireInit();
-  if (enabled === isArchiveShown()) return getDemoState();
+/**
+ * Drain, connect to the planned edition, run its `prepare` on the new connection, persist. On failure: back to the
+ * previous edition. `plan` runs on the current registry before the drain (fail fast; null = nothing to do) and again
+ * after it, so hunt times saved by a request the drain waited for are not overwritten by a stale copy.
+ */
+async function performSwitch(plan: (current: EditionsDoc) => SwitchPlan | null): Promise<EditionsDoc> {
+  if (!plan(requireInit().registry)) return getRegistry();
 
   // From here on tracked jobs are skipped; wait for the running requests and jobs, or refuse the switch
   setSwitchInProgress(true);
   if (!(await waitForIdleWork(drainTimeoutMs))) {
-    log.warn(`Demo switch refused: ${activeWorkCount()} request(s)/job(s) still running after ${drainTimeoutMs / 1000} s`);
+    log.warn(`Edition switch refused: ${activeWorkCount()} request(s)/job(s) still running after ${drainTimeoutMs / 1000} s`);
     setSwitchInProgress(false);
     // Nothing changed, but jobs were skipped while waiting (e.g. the AI jobs): let the listeners pick them up
-    await notifyListeners(isArchiveShown());
+    await notifyListeners(requireInit().registry);
     throw new SwitchBusyError();
   }
+
+  const { registry: previous, store: control } = requireInit();
+  let planned: SwitchPlan | null;
+  try {
+    planned = plan(previous);
+  } catch (error) {
+    setSwitchInProgress(false);
+    await notifyListeners(previous);
+    throw error;
+  }
+  if (!planned) {
+    setSwitchInProgress(false);
+    await notifyListeners(previous);
+    return getRegistry();
+  }
+  const { next, prepare } = planned;
 
   nextGeneration();
   let failure: unknown = null;
   try {
-    if (enabled) await switchOn(stateStore, user);
-    else await switchOff(stateStore);
+    await connectEdition(editionOf(next, next.shownYear)!, next);
+    await prepare?.();
+    await control.writeRegistry(next);
+    registry = next;
   } catch (error) {
     failure = error;
+    log.error("Edition switch failed, back to the previous edition", error);
+    await connectEdition(editionOf(previous, previous.shownYear)!, previous).catch(async (backError) => {
+      log.error("Could not reconnect to the previous edition either", backError);
+      await mongoose.connection.close().catch(() => undefined);
+    });
   } finally {
     setSwitchInProgress(false);
   }
   // Listeners may start tracked work (e.g. the AI jobs), so they run after the switch is marked done
-  await notifyListeners(isArchiveShown());
+  await notifyListeners(requireInit().registry);
   if (failure) throw failure;
-  log.info(`Demo mode ${enabled ? "on" : "off"}`);
-  return getDemoState();
+  log.info(`Showing Jotihunt ${next.shownYear}${isArchive(next) ? " (archive)" : ""}`);
+  return getRegistry();
 }

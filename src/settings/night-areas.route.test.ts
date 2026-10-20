@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { validationResult } from "express-validator";
-import { openControlStore, type ControlStore } from "../editions/control-store";
+import { openTestSettingsStore, type TestSettingsStore } from "../test/settings-store";
 
 mock.module("../logger", () => ({ logger: { info() {}, error() {}, warn() {}, debug() {} } }));
 const { getNightAreasSetting, putNightAreasSetting } = await import("./settings.controller");
@@ -8,7 +8,7 @@ const { initNightAreas, nightAreasHash, resetNightAreas, getRoutesSetting } = aw
 const { nightAreasValidation } = await import("./night-areas.validation");
 
 const URI = process.env.MONGO_URI_TEST ?? "mongodb://localhost:27017/jotihunt-test";
-let store: ControlStore;
+let store: TestSettingsStore;
 function fakeRes() {
   const res = { statusCode: 0, body: undefined as unknown, status(code: number) { res.statusCode = code; return res; }, json(body: unknown) { res.body = body; return res; } };
   return res;
@@ -21,7 +21,7 @@ async function check(body: unknown) {
   return validationResult(req).isEmpty();
 }
 
-beforeAll(async () => { store = await openControlStore(URI); });
+beforeAll(async () => { store = await openTestSettingsStore(URI); });
 beforeEach(async () => { await store.connection.collection("settings").deleteMany({}); resetNightAreas(); await initNightAreas(store); });
 afterAll(async () => { await store.connection.collection("settings").deleteMany({}); resetNightAreas(); await store.close(); });
 

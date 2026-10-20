@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { Request, Response } from "express";
-import { openControlStore, type ControlStore } from "../editions/control-store";
+import { openTestSettingsStore, type TestSettingsStore } from "../test/settings-store";
 import { validate } from "../middleware/validate.middleware";
 import { initHuntableAreas, resetHuntableAreas } from "./huntable-areas-setting";
 import { huntableAreasValidation } from "./huntable-areas.validation";
@@ -11,10 +11,10 @@ mock.module("../logger", () => ({ logger: { info: (message: string) => infoLogs.
 const { getHuntableAreasSetting, putHuntableAreasSetting } = await import("./settings.controller");
 
 const uri = process.env.MONGO_URI_TEST ?? "mongodb://localhost:27017/jotihunt-test";
-let store: ControlStore;
+let store: TestSettingsStore;
 
 beforeAll(async () => {
-  store = await openControlStore(uri);
+  store = await openTestSettingsStore(uri);
 });
 beforeEach(async () => {
   await store.connection.collection("settings").deleteMany({});

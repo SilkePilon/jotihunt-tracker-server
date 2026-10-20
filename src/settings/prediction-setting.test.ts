@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { Request, Response } from "express";
-import { openControlStore, type ControlStore } from "../editions/control-store";
+import { openTestSettingsStore, type TestSettingsStore } from "../test/settings-store";
 import { initPredictionSetting, isPredictionEnabled, resetPredictionSetting, setPredictionEnabled } from "./prediction-setting";
 
 // The controllers and the cron import the logger from the app entry point, which would start the server
@@ -14,10 +14,10 @@ const { putPredictionSetting, getPredictionSetting } = await import("./settings.
 const { default: recomputePredictions } = await import("../crons/prediction.cron");
 
 const uri = process.env.MONGO_URI_TEST ?? "mongodb://localhost:27017/jotihunt-test";
-let store: ControlStore;
+let store: TestSettingsStore;
 
 beforeAll(async () => {
-  store = await openControlStore(uri);
+  store = await openTestSettingsStore(uri);
 });
 beforeEach(async () => {
   await store.connection.collection("settings").deleteMany({});
@@ -62,11 +62,11 @@ describe("prediction setting store and cache", () => {
     expect(isPredictionEnabled()).toBe(false);
   });
 
-  test("does not touch the demo document", async () => {
-    await store.write({ enabled: true, enabledAt: null, enabledBy: null, startedAt: null });
+  test("does not touch the other settings documents", async () => {
+    await store.connection.collection("settings").insertOne({ key: "app-config", general: { groupName: "X" } });
     await initPredictionSetting(store);
     await setPredictionEnabled(false, null);
-    expect((await store.read())?.enabled).toBe(true);
+    expect((await store.connection.collection("settings").findOne({ key: "app-config" }))?.general).toEqual({ groupName: "X" });
   });
 
   test("writing without init throws", async () => {

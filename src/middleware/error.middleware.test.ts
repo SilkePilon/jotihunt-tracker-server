@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import type { Request, Response } from "express";
+import { EditionRequestError, SwitchBusyError } from "../editions/database-switch";
 import { logger } from "../logger";
 import { isDatabaseUnavailable } from "../utils/database-errors";
 import { errorHandler } from "./error.middleware";
@@ -67,6 +68,13 @@ describe("errorHandler", () => {
     expect(warn.mock.calls[0]).toEqual(["Unhandled error on POST /api/locations", err]);
     expect(res.statusCode).toBe(400);
     expect(res.body).toEqual({ message: "Bad JSON" });
+  });
+
+  test("edition switch refusals reach the client with their status and message", () => {
+    expect(handle(new EditionRequestError(404, "Die editie bestaat niet"))).toMatchObject({ statusCode: 404, body: { message: "Die editie bestaat niet" } });
+    expect(handle(new EditionRequestError(409, "Archief kan niet tijdens de hunt"))).toMatchObject({ statusCode: 409, body: { message: "Archief kan niet tijdens de hunt" } });
+    expect(handle(new SwitchBusyError())).toMatchObject({ statusCode: 409, body: { message: "Er lopen nog taken; probeer het zo opnieuw." } });
+    expect(error).not.toHaveBeenCalled();
   });
 
   test("a 413 from body-parser is a warning too", () => {

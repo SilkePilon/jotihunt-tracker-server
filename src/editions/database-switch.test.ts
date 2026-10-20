@@ -1,84 +1,77 @@
-import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import type { NextFunction, Request, Response } from "express";
+import express from "express";
 import mongoose from "mongoose";
 import { Area } from "../models/area.model";
-import { User } from "../models/user.model";
 import {
-  closeDemoMode,
-  dbConnectOptions,
-  demoDbName,
+  closeEditions,
+  createEdition,
+  EditionRequestError,
   editionGate,
-  SwitchBusyError,
-  getDemoState,
-  initDemoMode,
-  mongoUriDbName,
+  getControlStore,
+  getRegistry,
+  initEditions,
+  onEditionSwitch,
+  readControlCollection,
   releaseSwitchWork,
-  setDemoWorldGenerator,
-  switchDemoMode,
+  showEdition,
+  SwitchBusyError,
+  updateEditionHuntTimes,
 } from "./database-switch";
-import express from "express";
-import { activeWorkCount, currentGeneration, isArchiveShown, runTracked, skipWhenArchive } from "./work-tracking";
+import { dbConnectOptions, mongoUriDbName } from "./mongo-uri";
+import { activeWorkCount, beginWork, currentGeneration, isArchiveShown, runTracked, skipWhenArchive } from "./work-tracking";
 
 /**
- * Switching on builds a fresh demo database with the indexes of every model registered in this process (~0.15 s per
- * model on the test Mongo; ~5 s in a full run, where every model is imported), so bun's 5 s default is too tight.
+ * A switch builds the indexes of every model registered in this process on the edition database (~0.15 s per model
+ * on the test Mongo; ~5 s in a full run, where every model is imported), so bun's 5 s default is too tight.
  */
-const SWITCH_TIMEOUT_MS = 30_000;
-setDefaultTimeout(SWITCH_TIMEOUT_MS);
+setDefaultTimeout(30_000);
 
-describe("demo database name", () => {
-  test("appends -demo to the database name", () => {
+describe("mongo uri helpers", () => {
+  test("database name of a connection string", () => {
     expect(mongoUriDbName("mongodb://mongodb:27017/jotihunt")).toBe("jotihunt");
-    expect(demoDbName("mongodb://mongodb:27017/jotihunt")).toBe("jotihunt-demo");
+    expect(mongoUriDbName("mongodb://user:p%40ss@a:27017,b:27017/jotihunt?authSource=admin&replicaSet=rs0")).toBe("jotihunt");
+    expect(mongoUriDbName("mongodb+srv://cluster.example.net/jotihunt?retryWrites=true")).toBe("jotihunt");
+    expect(mongoUriDbName("mongodb://mongodb:27017")).toBe("test");
+    expect(mongoUriDbName("mongodb://mongodb:27017/?retryWrites=true")).toBe("test");
+    expect(() => mongoUriDbName("postgres://localhost/jotihunt")).toThrow();
   });
 
-  test("ignores query strings, credentials and multiple hosts", () => {
-    expect(demoDbName("mongodb://user:p%40ss@a:27017,b:27017/jotihunt?authSource=admin&replicaSet=rs0")).toBe("jotihunt-demo");
-    expect(demoDbName("mongodb+srv://cluster.example.net/jotihunt?retryWrites=true")).toBe("jotihunt-demo");
-  });
-
-  test("uses the driver default when the URI has no database", () => {
-    expect(demoDbName("mongodb://mongodb:27017")).toBe("test-demo");
-    expect(demoDbName("mongodb://mongodb:27017/?retryWrites=true")).toBe("test-demo");
-  });
-
-  test("refuses invalid connection strings", () => {
-    expect(() => demoDbName("postgres://localhost/jotihunt")).toThrow();
+  test("connect options for another database on the same server", () => {
+    expect(dbConnectOptions("mongodb://mongodb:27017/jotihunt", "jotihunt-2027")).toEqual({ dbName: "jotihunt-2027" });
+    expect(dbConnectOptions("mongodb://u:p@mongodb:27017/jotihunt", "jotihunt-2027")).toEqual({ dbName: "jotihunt-2027", authSource: "jotihunt" });
+    expect(dbConnectOptions("mongodb://u:p@mongodb:27017", "test-2027")).toEqual({ dbName: "test-2027", authSource: "admin" });
+    expect(dbConnectOptions("mongodb://u:p@a:27017,b:27017/jotihunt?replicaSet=rs0&authSource=admin", "jotihunt-2027")).toEqual({ dbName: "jotihunt-2027" });
+    expect(dbConnectOptions("mongodb+srv://u:p@cluster.example.net/jotihunt?retryWrites=true", "jotihunt-2027")).toEqual({ dbName: "jotihunt-2027" });
   });
 });
 
-describe("demo connect options", () => {
-  test("without credentials only the database name is set", () => {
-    expect(dbConnectOptions("mongodb://mongodb:27017/jotihunt", "jotihunt-demo")).toEqual({ dbName: "jotihunt-demo" });
-  });
-
-  test("with credentials keeps authenticating against the real database (or admin)", () => {
-    expect(dbConnectOptions("mongodb://u:p@mongodb:27017/jotihunt", "jotihunt-demo")).toEqual({ dbName: "jotihunt-demo", authSource: "jotihunt" });
-    expect(dbConnectOptions("mongodb://u:p@mongodb:27017", "test-demo")).toEqual({ dbName: "test-demo", authSource: "admin" });
-  });
-
-  test("an explicit authSource in the URI is left to the driver", () => {
-    expect(dbConnectOptions("mongodb://u:p@a:27017,b:27017/jotihunt?replicaSet=rs0&authSource=admin", "jotihunt-demo")).toEqual({ dbName: "jotihunt-demo" });
-  });
-
-  test("mongodb+srv URIs are left to the driver (authSource from DNS)", () => {
-    expect(dbConnectOptions("mongodb+srv://u:p@cluster.example.net/jotihunt?retryWrites=true", "jotihunt-demo")).toEqual({ dbName: "jotihunt-demo" });
-  });
-});
-
-/** A test-only "real" database next to MONGO_URI_TEST, so this file does not collide with the other tests. */
+/** A throwaway control database next to MONGO_URI_TEST per test, so this file does not collide with the other tests. */
 const baseUri = process.env.MONGO_URI_TEST ?? "mongodb://localhost:27017/jotihunt-test";
-const realName = `${mongoUriDbName(baseUri)}-demoswitch`;
-const realUri = baseUri.replace(/^(mongodb(?:\+srv)?:\/\/[^/?#]*)(?:\/[^?#]*)?/, `$1/${realName}`);
-const demoName = demoDbName(realUri);
+let name: string;
+let uri: string;
 
-async function dropTestDatabases() {
+const warnings: string[] = [];
+const testLogger = { info() {}, warn: (message: string) => void warnings.push(message), error() {} };
+
+beforeAll(async () => {
+  if (mongoose.connection.readyState !== mongoose.ConnectionStates.disconnected) await mongoose.disconnect();
+});
+
+beforeEach(() => {
+  name = `jh-editions-test-${Math.random().toString(36).slice(2, 8)}`;
+  uri = baseUri.replace(/^(mongodb(?:\+srv)?:\/\/[^/?#]*)(?:\/[^?#]*)?/, `$1/${name}`);
+  expect(mongoUriDbName(uri)).toBe(name);
+  warnings.length = 0;
+});
+
+afterEach(async () => {
+  await closeEditions();
   const admin = await mongoose.createConnection(baseUri).asPromise();
-  await admin.useDb(realName, { useCache: false }).dropDatabase();
-  await admin.useDb(demoName, { useCache: false }).dropDatabase();
+  for (const db of [name, `${name}-2027`, `${name}-2028`, `${name}-demo`]) await admin.useDb(db, { useCache: false }).dropDatabase();
   await admin.close();
-}
+});
 
 async function countIn(dbName: string, collection: string) {
   const conn = await mongoose.createConnection(baseUri).asPromise();
@@ -86,6 +79,154 @@ async function countIn(dbName: string, collection: string) {
   await conn.close();
   return count;
 }
+
+describe("initEditions", () => {
+  test("first boot registers 2026 on the control database, hunt times from app-config", async () => {
+    const seed = await mongoose.createConnection(uri).asPromise();
+    await seed.collection("settings").insertMany([
+      { key: "app-config", general: { huntStart: "2026-10-17T08:00:00.000Z", huntEnd: "2026-10-18T10:00:00.000Z" } },
+      { key: "demo", enabled: false },
+    ]);
+    await seed.useDb(`${name}-demo`, { useCache: false }).collection("areas").insertOne({ name: "Leftover" });
+    await seed.close();
+    const registry = await initEditions(uri, { now: () => new Date("2026-10-20T12:00:00Z") });
+    expect(registry.liveYear).toBe(2026);
+    expect(registry.shownYear).toBe(2026);
+    expect(registry.editions[0]).toMatchObject({ year: 2026, dbName: name, huntStart: "2026-10-17T08:00:00.000Z", huntEnd: "2026-10-18T10:00:00.000Z" });
+    expect(mongoose.connection.name).toBe(name);
+    expect(isArchiveShown()).toBe(false);
+    expect(await getControlStore().connection.collection("settings").findOne({ key: "demo" })).toBeNull();
+    expect(await countIn(`${name}-demo`, "areas")).toBe(0);
+    expect((await getControlStore().readRegistry())?.liveYear).toBe(2026);
+  });
+
+  test("a saved registry is used as is: the shown archive is connected again", async () => {
+    await initEditions(uri);
+    await createEdition();
+    await showEdition(2026);
+    await closeEditions();
+    const registry = await initEditions(uri);
+    expect(registry).toMatchObject({ liveYear: 2027, shownYear: 2026 });
+    expect(mongoose.connection.name).toBe(name);
+    expect(isArchiveShown()).toBe(true);
+  });
+
+  test("getRegistry returns a copy", async () => {
+    await initEditions(uri);
+    getRegistry().editions[0].huntStart = "mutated";
+    expect(getRegistry().editions[0].huntStart).toBeNull();
+  });
+
+  test("readControlCollection reads the control database whichever edition is shown", async () => {
+    await initEditions(uri);
+    await mongoose.connection.collection("teams").insertOne({ name: "Alpha" });
+    await createEdition();
+    expect(await mongoose.connection.collection("teams").countDocuments()).toBe(0);
+    expect((await readControlCollection<{ name: string }>("teams")).map((team) => team.name)).toEqual(["Alpha"]);
+  });
+});
+
+describe("createEdition + showEdition", () => {
+  test("new edition gets its own database with users copied; old one becomes a viewable archive", async () => {
+    await initEditions(uri, { now: () => new Date("2026-10-20T12:00:00Z") });
+    await mongoose.connection.collection("users").insertOne({ name: "silke" });
+    await mongoose.connection.collection("pushsubscriptions").insertOne({ endpoint: "https://push.example/1" });
+    await mongoose.connection.collection("hunts").insertOne({ code: "x" });
+    const switches: number[] = [];
+    onEditionSwitch((r) => void switches.push(r.shownYear));
+
+    const created = await createEdition();
+    expect(created.liveYear).toBe(2027);
+    expect(created.editions[1]).toMatchObject({ year: 2027, dbName: `${name}-2027`, huntStart: null, huntEnd: null });
+    expect(mongoose.connection.name).toBe(`${name}-2027`);
+    expect(isArchiveShown()).toBe(false);
+    expect(await mongoose.connection.collection("users").countDocuments()).toBe(1);
+    expect(await mongoose.connection.collection("pushsubscriptions").countDocuments()).toBe(1);
+    expect(await mongoose.connection.collection("hunts").countDocuments()).toBe(0);
+
+    const shown = await showEdition(2026);
+    expect(shown.shownYear).toBe(2026);
+    expect(isArchiveShown()).toBe(true);
+    expect(mongoose.connection.name).toBe(name);
+    expect(await mongoose.connection.collection("hunts").countDocuments()).toBe(1);
+    expect(switches).toEqual([2027, 2026]);
+    expect((await getControlStore().readRegistry())?.shownYear).toBe(2026);
+  });
+
+  test("night areas are copied into the new edition", async () => {
+    await initEditions(uri);
+    await mongoose.connection.collection("settings").insertOne({ key: "night-areas", enabled: true, areas: [{ id: "a", name: "Posbank", kind: "closed", polygon: [] }] });
+    await createEdition();
+    const copied = await mongoose.connection.collection("settings").findOne({ key: "night-areas" });
+    expect(copied?.areas).toHaveLength(1);
+  });
+
+  test("showing the shown edition is a no-op", async () => {
+    await initEditions(uri);
+    let calls = 0;
+    onEditionSwitch(() => void calls++);
+    await showEdition(2026);
+    expect(calls).toBe(0);
+  });
+
+  test("showing an unknown edition is refused with 404", async () => {
+    await initEditions(uri);
+    const error = await showEdition(2030).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(EditionRequestError);
+    expect(error).toMatchObject({ status: 404, message: "Die editie bestaat niet" });
+  });
+
+  test("busy work refuses the switch with SwitchBusyError and nothing changes", async () => {
+    await initEditions(uri, { drainTimeoutMs: 100 });
+    await createEdition();
+    const finish = beginWork();
+    await expect(showEdition(2026)).rejects.toBeInstanceOf(SwitchBusyError);
+    finish();
+    expect(getRegistry().shownYear).toBe(2027);
+    expect(mongoose.connection.name).toBe(`${name}-2027`);
+    expect((await getControlStore().readRegistry())?.shownYear).toBe(2027);
+  });
+
+  test("showing an archive during the live hunt is refused with 409", async () => {
+    await initEditions(uri, { now: () => new Date("2027-10-16T20:00:00Z") });
+    await createEdition();
+    await updateEditionHuntTimes(2027, { huntStart: "2027-10-16T08:00:00.000Z", huntEnd: "2027-10-17T10:00:00.000Z" });
+    await expect(showEdition(2026)).rejects.toMatchObject({ status: 409, message: "Archief kan niet tijdens de hunt" });
+    await expect(createEdition()).rejects.toMatchObject({ status: 409 });
+    expect(mongoose.connection.name).toBe(`${name}-2027`);
+  });
+
+  test("hunt times saved while a switch drains survive the switch", async () => {
+    await initEditions(uri, { drainTimeoutMs: 5_000 });
+    const finish = beginWork(); // the request that edits the hunt times
+    const switched = createEdition();
+    await Bun.sleep(50);
+    await updateEditionHuntTimes(2026, { huntStart: "2026-10-17T08:00:00.000Z" });
+    finish();
+    await switched;
+    expect(getRegistry().editions[0].huntStart).toBe("2026-10-17T08:00:00.000Z");
+    expect((await getControlStore().readRegistry())?.editions[0].huntStart).toBe("2026-10-17T08:00:00.000Z");
+  });
+
+  test("updateEditionHuntTimes persists, 404 for an unknown edition", async () => {
+    await initEditions(uri);
+    const updated = await updateEditionHuntTimes(2026, { huntEnd: "2026-10-18T10:00:00.000Z" });
+    expect(updated.editions[0].huntEnd).toBe("2026-10-18T10:00:00.000Z");
+    expect((await getControlStore().readRegistry())?.editions[0].huntEnd).toBe("2026-10-18T10:00:00.000Z");
+    await expect(updateEditionHuntTimes(2031, { huntEnd: null })).rejects.toMatchObject({ status: 404 });
+  });
+
+  test("the jotihunt.nl cron guard skips runs only while an archive is shown", async () => {
+    await initEditions(uri);
+    const messages: string[] = [];
+    expect(skipWhenArchive("jotihunt-areas", (message) => messages.push(message))).toBe(false);
+    await createEdition();
+    expect(skipWhenArchive("jotihunt-areas", (message) => messages.push(message))).toBe(false);
+    await showEdition(2026);
+    expect(skipWhenArchive("jotihunt-areas", (message) => messages.push(message))).toBe(true);
+    expect(messages).toEqual(["(CRON) Skipping jotihunt-areas: archive is shown"]);
+  });
+});
 
 function fakeRes() {
   return new EventEmitter() as unknown as Response;
@@ -103,72 +244,14 @@ function fakeResWithEnd() {
   return res;
 }
 
-const warnings: string[] = [];
-const testLogger = { info() {}, warn: (message: string) => void warnings.push(message), error() {} };
-
-describe("switching between the real and the demo database", () => {
-  beforeAll(async () => {
-    expect(realName).not.toBe("jotihunt");
-    if (mongoose.connection.readyState !== mongoose.ConnectionStates.disconnected) await mongoose.disconnect();
-    await dropTestDatabases();
-    await initDemoMode(realUri, { drainTimeoutMs: 1_000, abandonedRequestMs: 300, logger: testLogger });
-    expect(mongoose.connection.name).toBe(realName);
-  }, SWITCH_TIMEOUT_MS);
-
-  afterAll(async () => {
-    await closeDemoMode();
-    await dropTestDatabases();
-  }, SWITCH_TIMEOUT_MS);
-
-  test("real data survives an on/off cycle, users are copied and demo data is gone after off", async () => {
-    const user = await User.create({ name: "HQ", admin: true });
-    await Area.create({ name: "Alpha", status: "green", updatedAt: new Date() });
-    let generatedAt: Date | null = null;
-    setDemoWorldGenerator(async (now) => {
-      generatedAt = now;
-      await Area.create({ name: "Demo", status: "red", updatedAt: now });
-    });
-
-    const on = await switchDemoMode(true, user);
-    expect(on.enabled).toBe(true);
-    expect(on.startedAt).toEqual(generatedAt!);
-    expect(isArchiveShown()).toBe(true);
-    expect(mongoose.connection.name).toBe(demoName);
-    const copied = await User.findById(user._id).lean();
-    expect(copied?.name).toBe("HQ");
-    expect((await Area.find().lean()).map((area) => area.name)).toEqual(["Demo"]);
-
-    // Switching to the current state is a no-op
-    expect((await switchDemoMode(true, user)).startedAt).toEqual(on.startedAt);
-
-    const off = await switchDemoMode(false, user);
-    expect(off).toEqual({ enabled: false, enabledAt: null, startedAt: null });
-    expect(isArchiveShown()).toBe(false);
-    expect(mongoose.connection.name).toBe(realName);
-    expect((await Area.find().lean()).map((area) => area.name)).toEqual(["Alpha"]);
-    expect(await User.countDocuments()).toBe(1);
-    expect(await countIn(demoName, "areas")).toBe(0);
-    expect(await countIn(demoName, "users")).toBe(0);
-    expect(await countIn(realName, "settings")).toBe(1);
-  });
-
-  test("the jotihunt.nl cron guard skips runs only in demo mode", async () => {
-    const messages: string[] = [];
-    expect(skipWhenArchive("jotihunt-areas", (message) => messages.push(message))).toBe(false);
-    setDemoWorldGenerator(async () => {});
-    await switchDemoMode(true);
-    expect(skipWhenArchive("jotihunt-areas", (message) => messages.push(message))).toBe(true);
-    expect(messages).toEqual(["(CRON) Skipping jotihunt-areas: archive is shown"]);
-    await switchDemoMode(false);
-    expect(getDemoState().enabled).toBe(false);
+describe("the edition gate and draining", () => {
+  beforeEach(async () => {
+    await initEditions(uri, { drainTimeoutMs: 1_000, abandonedRequestMs: 300, logger: testLogger });
   });
 
   test("the gate makes a request wait for a running switch", async () => {
-    let release!: () => void;
-    const blocked = new Promise<void>((resolve) => (release = resolve));
-    setDemoWorldGenerator(() => blocked);
-
-    const switched = switchDemoMode(true);
+    const busy = beginWork(); // keeps the switch draining
+    const switched = createEdition();
     await Bun.sleep(50);
     let passed = false;
     const next: NextFunction = () => {
@@ -179,60 +262,54 @@ describe("switching between the real and the demo database", () => {
     await Bun.sleep(50);
     expect(passed).toBe(false);
 
-    release();
+    busy();
     await switched;
     await Bun.sleep(0);
     expect(passed).toBe(true);
-    expect(isArchiveShown()).toBe(true);
+    expect(mongoose.connection.name).toBe(`${name}-2027`);
     (waiting as unknown as EventEmitter).emit("finish");
 
     // A counted request in flight delays the next switch until it finishes
     const res = fakeRes();
     editionGate({} as Request, res, () => {});
-    let off = false;
-    const switchingOff = switchDemoMode(false).then(() => (off = true));
+    let shown = false;
+    const showing = showEdition(2026).then(() => (shown = true));
     await Bun.sleep(50);
-    expect(off).toBe(false);
+    expect(shown).toBe(false);
     (res as unknown as EventEmitter).emit("finish");
-    await switchingOff;
-    expect(isArchiveShown()).toBe(false);
+    await showing;
+    expect(isArchiveShown()).toBe(true);
   });
 
   test("a request the client aborted still delays a switch until its handler responds", async () => {
-    setDemoWorldGenerator(async () => {});
     const res = fakeResWithEnd();
     editionGate({ method: "POST", originalUrl: "/admin/users" } as Request, res as unknown as Response, () => {});
     const counted = activeWorkCount();
     res.emit("close"); // client gone, handler still working
     expect(activeWorkCount()).toBe(counted);
-    let on = false;
-    const switchingOn = switchDemoMode(true).then(() => (on = true));
+    let created = false;
+    const creating = createEdition().then(() => (created = true));
     await Bun.sleep(100);
-    expect(on).toBe(false);
+    expect(created).toBe(false);
     res.end(); // the handler responds (into the void)
-    await switchingOn;
-    expect(isArchiveShown()).toBe(true);
-    await switchDemoMode(false);
+    await creating;
+    expect(getRegistry().liveYear).toBe(2027);
   });
 
   test("an aborted request whose handler never responds stops counting after a while (logged)", async () => {
-    setDemoWorldGenerator(async () => {});
-    warnings.length = 0;
     const res = fakeResWithEnd();
     editionGate({ method: "PUT", originalUrl: "/hangs" } as Request, res as unknown as Response, () => {});
     res.emit("close");
     const started = Date.now();
-    await switchDemoMode(true);
+    await createEdition();
     expect(Date.now() - started).toBeGreaterThanOrEqual(250);
-    expect(warnings).toEqual(["PUT /hangs (client gone) still running after 0.3 s; no longer delays a demo switch"]);
+    expect(warnings).toEqual(["PUT /hangs (client gone) still running after 0.3 s; no longer delays a switch"]);
     res.end(); // a late response does not count twice
-    await switchDemoMode(false);
-    expect(isArchiveShown()).toBe(false);
+    await showEdition(2026);
+    expect(isArchiveShown()).toBe(true);
   });
 
   test("an aborted GET or HEAD stops counting right away: reads can't write into the wrong database", async () => {
-    setDemoWorldGenerator(async () => {});
-    warnings.length = 0;
     for (const method of ["GET", "HEAD"]) {
       const before = activeWorkCount();
       const res = fakeResWithEnd();
@@ -243,9 +320,8 @@ describe("switching between the real and the demo database", () => {
       res.end(); // a late response does not count twice
       expect(activeWorkCount()).toBe(before);
     }
-    await switchDemoMode(true);
+    await createEdition();
     expect(warnings).toEqual([]);
-    await switchDemoMode(false);
   });
 
   test("over real HTTP: an aborted request is counted until the handler finishes", async () => {
@@ -298,47 +374,42 @@ describe("switching between the real and the demo database", () => {
       const reader = res.body!.getReader();
       await reader.read();
       expect(activeWorkCount()).toBe(before);
-      setDemoWorldGenerator(async () => {});
-      await switchDemoMode(true);
-      expect(isArchiveShown()).toBe(true);
+      await createEdition();
+      expect(getRegistry().liveYear).toBe(2027);
       endStream();
       while (!(await reader.read()).done);
       expect(activeWorkCount()).toBe(before);
-      await switchDemoMode(false);
     } finally {
       endStream();
       server.close();
     }
   });
 
-  test("a slow tracked job started in demo mode delays switch-off; its writes stay in the demo database", async () => {
-    setDemoWorldGenerator(async () => {});
-    await switchDemoMode(true);
+  test("a slow tracked job delays the switch; its writes stay in the edition it started in", async () => {
+    await createEdition();
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
     const job = runTracked(async () => {
       await gate;
-      await Area.create({ name: "SlowDemoJob", status: "green", updatedAt: new Date() });
+      await Area.create({ name: "SlowJob", status: "green", updatedAt: new Date() });
       return "done";
     });
-    let off = false;
-    const switchingOff = switchDemoMode(false).then(() => (off = true));
+    let shown = false;
+    const showing = showEdition(2026).then(() => (shown = true));
     await Bun.sleep(100);
-    expect(off).toBe(false);
-    expect(isArchiveShown()).toBe(true);
+    expect(shown).toBe(false);
+    expect(mongoose.connection.name).toBe(`${name}-2027`);
     release();
     expect(await job).toBe("done");
-    await switchingOff;
-    expect(isArchiveShown()).toBe(false);
-    expect(await Area.countDocuments({ name: "SlowDemoJob" })).toBe(0);
-    expect(await countIn(demoName, "areas")).toBe(0);
+    await showing;
+    expect(mongoose.connection.name).toBe(name);
+    expect(await Area.countDocuments({ name: "SlowJob" })).toBe(0);
+    expect(await countIn(`${name}-2027`, "areas")).toBe(1);
   });
 
   test("a tracked job started while a switch runs is skipped", async () => {
-    let release!: () => void;
-    const blocked = new Promise<void>((resolve) => (release = resolve));
-    setDemoWorldGenerator(() => blocked);
-    const switched = switchDemoMode(true);
+    const busy = beginWork();
+    const switched = createEdition();
     await Bun.sleep(50);
     let ran = false;
     expect(
@@ -348,16 +419,14 @@ describe("switching between the real and the demo database", () => {
       }),
     ).toBeUndefined();
     expect(ran).toBe(false);
-    release();
+    busy();
     await switched;
     expect(await runTracked(async () => 2)).toBe(2);
-    await switchDemoMode(false);
   });
 
   test("the generation check prevents a write after a switch", async () => {
     const generation = currentGeneration();
-    setDemoWorldGenerator(async () => {});
-    await switchDemoMode(true);
+    await createEdition();
     expect(currentGeneration()).not.toBe(generation);
     let wrote = false;
     const result = await runTracked(
@@ -369,34 +438,23 @@ describe("switching between the real and the demo database", () => {
     );
     expect(result).toBeUndefined();
     expect(wrote).toBe(false);
-    await switchDemoMode(false);
+    await showEdition(2026);
     expect(await Area.countDocuments({ name: "Stale" })).toBe(0);
   });
 
   test("a switch is refused (409) when work keeps running past the drain timeout; nothing changes", async () => {
     let release!: () => void;
     const job = runTracked(() => new Promise<void>((resolve) => (release = resolve)));
-    const error = await switchDemoMode(true).catch((caught: unknown) => caught);
+    const error = await createEdition().catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(SwitchBusyError);
     expect((error as SwitchBusyError).status).toBe(409);
     expect((error as Error).message).toBe("Er lopen nog taken; probeer het zo opnieuw.");
-    expect(isArchiveShown()).toBe(false);
-    expect(mongoose.connection.name).toBe(realName);
-    expect(getDemoState().enabled).toBe(false);
+    expect(mongoose.connection.name).toBe(name);
+    expect(getRegistry()).toMatchObject({ liveYear: 2026, shownYear: 2026 });
+    expect(getRegistry().editions).toHaveLength(1);
     // Tracked work runs again once the refused switch is over
     expect(await runTracked(async () => 3)).toBe(3);
     release();
     await job;
-  });
-
-  test("a leftover demo database is dropped at startup", async () => {
-    await closeDemoMode();
-    const conn = await mongoose.createConnection(baseUri).asPromise();
-    await conn.useDb(demoName, { useCache: false }).collection("areas").insertOne({ name: "Leftover" });
-    await conn.close();
-    expect(await countIn(demoName, "areas")).toBe(1);
-    await initDemoMode(realUri, { drainTimeoutMs: 1_000 });
-    expect(await countIn(demoName, "areas")).toBe(0);
-    expect(mongoose.connection.name).toBe(realName);
   });
 });
