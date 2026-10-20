@@ -31,6 +31,7 @@ TZ = ZoneInfo("Europe/Amsterdam")
 state = {"building": False, "swapping": False, "builtAt": None, "report": None, "lastError": None}
 lock = threading.Lock()  # guards starting a rebuild
 state_lock = threading.Lock()  # guards reads/writes of state
+server_lock = threading.Lock()  # guards starting/stopping GraphHopper (never held while taking another lock)
 RETRY_DELAYS = [300, 900, 1800, 3600]  # first-build retries, then hourly
 server_proc = None
 
@@ -114,21 +115,26 @@ def snapshot_config(graph_dir):
 
 
 def start_server():
+    """Start GraphHopper unless it is already running; safe to call from several threads at once."""
     global server_proc
-    log("starting GraphHopper")
-    server_proc = subprocess.Popen(["java", f"-Xmx{SERVE_HEAP}", f"-Ddw.graphhopper.graph.location={path('graph-cache')}", "-jar", JAR, "server", served_config()])
+    with server_lock:
+        if server_proc is not None and server_proc.poll() is None:
+            return
+        log("starting GraphHopper")
+        server_proc = subprocess.Popen(["java", f"-Xmx{SERVE_HEAP}", f"-Ddw.graphhopper.graph.location={path('graph-cache')}", "-jar", JAR, "server", served_config()])
 
 
 def stop_server():
     global server_proc
-    if server_proc and server_proc.poll() is None:
-        log("stopping GraphHopper")
-        server_proc.terminate()
-        try:
-            server_proc.wait(60)
-        except subprocess.TimeoutExpired:
-            server_proc.kill()
-    server_proc = None
+    with server_lock:
+        if server_proc and server_proc.poll() is None:
+            log("stopping GraphHopper")
+            server_proc.terminate()
+            try:
+                server_proc.wait(60)
+            except subprocess.TimeoutExpired:
+                server_proc.kill()
+        server_proc = None
 
 
 def set_state(**values):

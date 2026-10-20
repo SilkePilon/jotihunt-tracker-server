@@ -128,5 +128,32 @@ class RestartDecision(unittest.TestCase):
         self.assertFalse(supervisor.needs_restart(None, swapping=False, has_graph=False))
 
 
+class StartServer(unittest.TestCase):
+    def setUp(self):
+        self.patches = [
+            mock.patch.object(supervisor, "server_proc", None),
+            mock.patch.object(supervisor, "served_config", return_value="config.yml"),
+            mock.patch.object(supervisor, "log"),
+        ]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+
+    def test_start_is_idempotent_while_running_and_restarts_after_exit(self):
+        first = FakeProc(None)
+        with mock.patch.object(supervisor.subprocess, "Popen", side_effect=[first, FakeProc(None)]) as popen:
+            supervisor.start_server()
+            supervisor.start_server()
+            self.assertEqual(popen.call_count, 1)
+            self.assertIs(supervisor.server_proc, first)
+            first.code = 1
+            supervisor.start_server()
+            self.assertEqual(popen.call_count, 2)
+            self.assertIsNot(supervisor.server_proc, first)
+
+
 if __name__ == "__main__":
     unittest.main()
