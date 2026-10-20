@@ -5,10 +5,13 @@ import {
   buildCounterHuntNotification,
   COUNTER_HUNT_DIRECTIONS,
   buildFoxStatusNotification,
+  buildHuntCooldownNotification,
   buildHuntSyncNotification,
   diffAreaStatus,
+  huntCooldownReady,
   isTypeEnabled,
   newArticles,
+  OPTIONAL_NOTIFICATION_TYPES,
 } from "./notifier.helpers";
 
 describe("diffAreaStatus", () => {
@@ -96,4 +99,79 @@ test("isTypeEnabled: broadcast always on", () => {
   expect(isTypeEnabled("broadcast", ["broadcast"])).toBe(true);
   expect(isTypeEnabled("hint", ["hint"])).toBe(false);
   expect(isTypeEnabled("hint", [])).toBe(true);
+});
+
+describe("huntCooldownReady", () => {
+  const now = new Date("2026-10-17T20:00:00Z");
+  const ago = (minutes: number) => new Date(now.getTime() - minutes * 60_000);
+  const hunt = (area: string, minutesAgo: number) => ({ area, huntTime: ago(minutesAgo) });
+
+  test("not seeded: records every last hunt, announces nothing", () => {
+    const result = huntCooldownReady({ lastHunts: [hunt("alpha", 70)], status: { Alpha: "green" }, notified: undefined, now });
+    expect(result.ready).toEqual([]);
+    expect(result.notified).toEqual({ alpha: ago(70).toISOString() });
+  });
+
+  test("announces once the hour is over and the fox is green or orange", () => {
+    const result = huntCooldownReady({ lastHunts: [hunt("alpha", 61), hunt("bravo", 65)], status: { Alpha: "green", Bravo: "orange" }, notified: {}, now });
+    expect(result.ready).toEqual([
+      { area: "alpha", status: "green", huntTime: ago(61) },
+      { area: "bravo", status: "orange", huntTime: ago(65) },
+    ]);
+    expect(result.notified).toEqual({ alpha: ago(61).toISOString(), bravo: ago(65).toISOString() });
+  });
+
+  test("still in cooldown: nothing, not recorded", () => {
+    const result = huntCooldownReady({ lastHunts: [hunt("alpha", 59)], status: { Alpha: "green" }, notified: {}, now });
+    expect(result.ready).toEqual([]);
+    expect(result.notified).toEqual({});
+  });
+
+  test("red or blue: waits without recording", () => {
+    for (const status of ["red", "blue"]) {
+      const result = huntCooldownReady({ lastHunts: [hunt("alpha", 90)], status: { Alpha: status }, notified: {}, now });
+      expect(result.ready).toEqual([]);
+      expect(result.notified).toEqual({});
+    }
+  });
+
+  test("already announced for this hunt: nothing", () => {
+    const result = huntCooldownReady({ lastHunts: [hunt("alpha", 90)], status: { Alpha: "green" }, notified: { alpha: ago(90).toISOString() }, now });
+    expect(result.ready).toEqual([]);
+  });
+
+  test("a newer hunt re-arms the area", () => {
+    const result = huntCooldownReady({ lastHunts: [hunt("alpha", 61)], status: { Alpha: "green" }, notified: { alpha: ago(200).toISOString() }, now });
+    expect(result.ready).toHaveLength(1);
+  });
+
+  test("cooldown ended more than 2 hours ago: recorded without announcing", () => {
+    const result = huntCooldownReady({ lastHunts: [hunt("alpha", 181)], status: { Alpha: "green" }, notified: {}, now });
+    expect(result.ready).toEqual([]);
+    expect(result.notified).toEqual({ alpha: ago(181).toISOString() });
+  });
+
+  test("keeps entries of areas without a last hunt; unknown status waits", () => {
+    const result = huntCooldownReady({ lastHunts: [hunt("charlie", 70)], status: {}, notified: { alpha: "2026-10-17T10:00:00.000Z" }, now });
+    expect(result.ready).toEqual([]);
+    expect(result.notified).toEqual({ alpha: "2026-10-17T10:00:00.000Z" });
+  });
+});
+
+describe("buildHuntCooldownNotification", () => {
+  test("title, body, quiet", () => {
+    const notification = buildHuntCooldownNotification({ area: "alpha", status: "green", huntTime: new Date("2026-10-17T12:05:00Z") });
+    expect(notification).toEqual({
+      type: "hunt-cooldown",
+      title: "Alpha mag weer gehunt worden",
+      body: "Groen · laatste hunt 14:05",
+      urgent: false,
+      data: { area: "alpha", status: "green", huntTime: "2026-10-17T12:05:00.000Z" },
+    });
+    expect(buildHuntCooldownNotification({ area: "bravo", status: "orange", huntTime: new Date("2026-10-17T12:05:00Z") }).body).toBe("Oranje · laatste hunt 14:05");
+  });
+
+  test("hunt-cooldown can be switched off", () => {
+    expect(OPTIONAL_NOTIFICATION_TYPES).toContain("hunt-cooldown");
+  });
 });

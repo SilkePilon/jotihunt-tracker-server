@@ -1,4 +1,4 @@
-export const NOTIFICATION_TYPES = ["fox-status", "hint", "article", "hunt-new", "hunt-approved", "hunt-rejected", "broadcast", "counter-hunt", "happy-hour"] as const;
+export const NOTIFICATION_TYPES = ["fox-status", "hint", "article", "hunt-new", "hunt-approved", "hunt-rejected", "broadcast", "counter-hunt", "happy-hour", "hunt-cooldown"] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 /** Types a user can switch off; broadcasts from HQ always come through. */
 export const OPTIONAL_NOTIFICATION_TYPES = NOTIFICATION_TYPES.filter((type) => type !== "broadcast");
@@ -131,5 +131,70 @@ export function buildCounterHuntNotification(direction: CounterHuntDirection, fr
     body: `Zoek de sticker binnen 500 m van het clubhuis, richting ${name}.`,
     urgent: true,
     data: { direction, from },
+  };
+}
+
+/** Rules: after a hunt on a fox we may hunt it again after an hour */
+export const HUNT_COOLDOWN_MS = 60 * 60 * 1000;
+/** A cooldown that ended longer ago than this is recorded without a push (downtime, late sync of an old hunt) */
+export const HUNT_COOLDOWN_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+
+/** Newest synced hunt per area that starts a cooldown (no tegenhunts); area lowercase */
+export interface LastHunt {
+  area: string;
+  huntTime: Date;
+}
+
+export interface CooldownReady {
+  area: string;
+  status: "green" | "orange";
+  huntTime: Date;
+}
+
+/**
+ * Areas whose hunt cooldown is over while they are green or orange, each hunt once. `notified` maps a lowercase area
+ * to the ISO hunt time already handled; without it (first run, or the first run after this shipped) every last hunt
+ * is only recorded. Red/blue areas wait unrecorded so they fire when they turn green/orange; a cooldown that ended
+ * more than HUNT_COOLDOWN_MAX_AGE_MS ago is recorded without a push.
+ */
+export function huntCooldownReady(input: {
+  lastHunts: readonly LastHunt[];
+  status: Record<string, string>;
+  notified: Record<string, string> | null | undefined;
+  now: Date;
+}): { ready: CooldownReady[]; notified: Record<string, string> } {
+  const statusByArea = new Map(Object.entries(input.status).map(([name, status]) => [name.toLowerCase(), status]));
+  const notified: Record<string, string> = { ...(input.notified ?? {}) };
+  const ready: CooldownReady[] = [];
+  for (const { area: rawArea, huntTime } of input.lastHunts) {
+    const area = rawArea.toLowerCase();
+    const iso = huntTime.toISOString();
+    if (!input.notified) {
+      notified[area] = iso;
+      continue;
+    }
+    const handled = notified[area] ? Date.parse(notified[area]) : -Infinity;
+    if (huntTime.getTime() <= handled) continue;
+    const endsAt = huntTime.getTime() + HUNT_COOLDOWN_MS;
+    if (endsAt > input.now.getTime()) continue;
+    if (input.now.getTime() - endsAt > HUNT_COOLDOWN_MAX_AGE_MS) {
+      notified[area] = iso;
+      continue;
+    }
+    const status = statusByArea.get(area);
+    if (status !== "green" && status !== "orange") continue;
+    ready.push({ area, status, huntTime });
+    notified[area] = iso;
+  }
+  return { ready, notified };
+}
+
+export function buildHuntCooldownNotification(ready: CooldownReady): NotificationInput {
+  return {
+    type: "hunt-cooldown",
+    title: `${capitalize(ready.area)} mag weer gehunt worden`,
+    body: `${capitalize(statusNl(ready.status))} · laatste hunt ${clock(ready.huntTime)}`,
+    urgent: false,
+    data: { area: ready.area, status: ready.status, huntTime: ready.huntTime.toISOString() },
   };
 }
