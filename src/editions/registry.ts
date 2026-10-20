@@ -3,7 +3,7 @@ export interface Edition {
   year: number;
   dbName: string;
   createdAt: Date;
-  /** ISO strings; null = not set (the live edition then falls back to HUNT_START_TIME/HUNT_END_TIME) */
+  /** ISO strings; null = not set (HUNT_START_TIME/HUNT_END_TIME only seed 2026 on the first boot with editions) */
   huntStart: string | null;
   huntEnd: string | null;
 }

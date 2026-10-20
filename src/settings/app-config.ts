@@ -102,9 +102,12 @@ let env: Env = process.env;
 let doc: AppConfigDoc = { key: DOC_KEY };
 const events = new EventEmitter();
 
-/** Hunt times belong to an edition (registry entry); env HUNT_START_TIME/HUNT_END_TIME only back up the live one. */
+/**
+ * Hunt times belong to an edition (registry entry). With a source set they come only from it: no env fallback
+ * (HUNT_START_TIME/HUNT_END_TIME only seed the registry once, see editions/database-switch.ts).
+ */
 export interface HuntTimesSource {
-  read(): { huntStart: string | null; huntEnd: string | null; live: boolean };
+  read(): { huntStart: string | null; huntEnd: string | null };
   write(patch: { huntStart?: string | null; huntEnd?: string | null }): Promise<void>;
 }
 let huntTimes: HuntTimesSource | null = null;
@@ -161,8 +164,7 @@ export function general<K extends keyof GeneralValues>(key: K): Sourced<GeneralV
       const hunt = key as "huntStart" | "huntEnd";
       const envName = hunt === "huntStart" ? "HUNT_START_TIME" : "HUNT_END_TIME";
       if (!huntTimes) return pick(isoDate(g[hunt]), isoDate(env[envName]), null) as Sourced<GeneralValues[K]>;
-      const times = huntTimes.read();
-      return pick(isoDate(times[hunt]), times.live ? isoDate(env[envName]) : null, null) as Sourced<GeneralValues[K]>;
+      return pick(isoDate(huntTimes.read()[hunt]), null, null) as Sourced<GeneralValues[K]>;
     }
     case "homeTeamApiId":
       return pick(positiveInt(g.homeTeamApiId), positiveInt(env.HOME_TEAM_API_ID), null) as Sourced<GeneralValues[K]>;

@@ -187,17 +187,16 @@ describe("vehicle groups sync", () => {
   });
 });
 
-test("hunt times come from the hunt times source; env only for the live edition", async () => {
+test("with a hunt times source set, hunt times come only from it (no env fallback)", async () => {
   const env = { HUNT_START_TIME: "2026-10-17T08:00:00Z", HUNT_END_TIME: "2026-10-18T10:00:00Z" };
   await initAppConfig(connection, env);
-  let times = { huntStart: null as string | null, huntEnd: null as string | null, live: false };
+  let times = { huntStart: null as string | null, huntEnd: null as string | null };
   const writes: unknown[] = [];
   setHuntTimesSource({ read: () => times, write: async (patch) => void writes.push(patch) });
   try {
     expect(general("huntStart")).toEqual({ value: null, source: "default" });
-    times = { ...times, live: true };
-    expect(general("huntStart")).toEqual({ value: "2026-10-17T08:00:00.000Z", source: "env" });
-    times = { huntStart: "2027-10-16T08:00:00.000Z", huntEnd: null, live: true };
+    expect(general("huntEnd")).toEqual({ value: null, source: "default" });
+    times = { huntStart: "2027-10-16T08:00:00.000Z", huntEnd: null };
     expect(general("huntStart")).toEqual({ value: "2027-10-16T08:00:00.000Z", source: "db" });
     await setGeneral({ huntStart: "2027-10-16T09:00:00Z", groupName: "X" }, null);
     expect(writes).toEqual([{ huntStart: "2027-10-16T09:00:00.000Z" }]);

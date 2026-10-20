@@ -45,5 +45,7 @@ export async function postEdition(req: Request, res: Response) {
 export async function postShowEdition(req: Request, res: Response) {
   const year = Number(req.body.year);
   logger.info(`Show edition ${year} requested by user ${req.user?._id} (db ${mongoose.connection.name})`);
-  return res.status(200).json(await editionsView(await showEdition(year)));
+  const registry = await showEdition(year);
+  counts.clear();
+  return res.status(200).json(await editionsView(registry));
 }

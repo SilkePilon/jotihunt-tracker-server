@@ -4,14 +4,19 @@ import type { NextFunction, Request, Response } from "express";
 import express from "express";
 import mongoose from "mongoose";
 import { Area } from "../models/area.model";
+import { createAccount, updateAccounts } from "../auth/user-store";
+import { User } from "../models/user.model";
+import { general, initAppConfig, resetAppConfig, setGeneral, setHuntTimesSource } from "../settings/app-config";
 import {
   closeEditions,
   createEdition,
+  editionHuntTimesSource,
   EditionRequestError,
   editionGate,
   getControlStore,
   getRegistry,
   initEditions,
+  liveConnection,
   onEditionSwitch,
   readControlCollection,
   releaseSwitchWork,
@@ -101,6 +106,26 @@ describe("initEditions", () => {
     expect((await getControlStore().readRegistry())?.liveYear).toBe(2026);
   });
 
+  test("first boot without hunt times in Beheer takes them from HUNT_START_TIME/HUNT_END_TIME (ISO, invalid skipped)", async () => {
+    const registry = await initEditions(uri, { env: { HUNT_START_TIME: "2026-10-17T10:00+02:00", HUNT_END_TIME: "not a date" } });
+    expect(registry.editions[0]).toMatchObject({ huntStart: "2026-10-17T08:00:00.000Z", huntEnd: null });
+  });
+
+  test("first boot prefers the Beheer hunt times over env", async () => {
+    const seed = await mongoose.createConnection(uri).asPromise();
+    await seed.collection("settings").insertOne({ key: "app-config", general: { huntStart: "2026-10-17T08:00:00.000Z" } });
+    await seed.close();
+    const registry = await initEditions(uri, { env: { HUNT_START_TIME: "2026-01-01T00:00:00Z", HUNT_END_TIME: "2026-10-18T10:00:00Z" } });
+    expect(registry.editions[0]).toMatchObject({ huntStart: "2026-10-17T08:00:00.000Z", huntEnd: "2026-10-18T10:00:00.000Z" });
+  });
+
+  test("env hunt times are only used on the first boot", async () => {
+    await initEditions(uri, { env: {} });
+    await closeEditions();
+    const registry = await initEditions(uri, { env: { HUNT_START_TIME: "2026-10-17T08:00:00Z" } });
+    expect(registry.editions[0].huntStart).toBeNull();
+  });
+
   test("a saved registry is used as is: the shown archive is connected again", async () => {
     await initEditions(uri);
     await createEdition();
@@ -136,6 +161,101 @@ describe("initEditions", () => {
     await createEdition();
     expect(await mongoose.connection.collection("teams").countDocuments()).toBe(0);
     expect((await readControlCollection<{ name: string }>("teams")).map((team) => team.name)).toEqual(["Alpha"]);
+  });
+});
+
+describe("users master copy (the live edition's database)", () => {
+  test("liveConnection: null before init, then the live edition's database whichever edition is shown", async () => {
+    expect(liveConnection()).toBeNull();
+    await initEditions(uri);
+    expect(liveConnection()?.name).toBe(name);
+    await createEdition();
+    expect(liveConnection()?.name).toBe(`${name}-2027`);
+    await showEdition(2026);
+    expect(liveConnection()?.name).toBe(`${name}-2027`);
+  });
+
+  test("a user change written directly in the live 2027 database survives showing 2026 and back", async () => {
+    await initEditions(uri);
+    const { insertedId } = await mongoose.connection.collection("users").insertOne({ name: "silke", lastActiveAt: new Date("2026-10-20T10:00:00Z") });
+    await createEdition();
+    // e.g. phone pairing, device tokens, notification prefs: these write the User model directly
+    await User.collection.updateOne({ _id: insertedId }, { $set: { name: "silke-2027", devices: ["phone"] } });
+    await showEdition(2026);
+    // The archive gets a copy of the live users
+    expect((await User.collection.findOne({ _id: insertedId }))?.name).toBe("silke-2027");
+    await showEdition(2027);
+    expect(await User.collection.findOne({ _id: insertedId })).toMatchObject({ name: "silke-2027", devices: ["phone"] });
+    // Also across a restart
+    await closeEditions();
+    await initEditions(uri);
+    expect((await User.collection.findOne({ _id: insertedId }))?.name).toBe("silke-2027");
+  });
+
+  test("in the archive a user-store update also reaches the live edition's database", async () => {
+    await initEditions(uri);
+    await createEdition();
+    const user = await createAccount({ name: "silke" });
+    await showEdition(2026);
+    expect(await updateAccounts({ _id: user._id }, { $set: { name: "silke-renamed" } })).toBe(true);
+    expect((await mongoose.connection.collection("users").findOne({ _id: user._id }))?.name).toBe("silke-renamed");
+    expect((await liveConnection()!.collection("users").findOne({ _id: user._id }))?.name).toBe("silke-renamed");
+    await showEdition(2027);
+    expect((await User.findById(user._id))?.name).toBe("silke-renamed");
+  });
+
+  test("booting with an archive shown copies the live users into it", async () => {
+    await initEditions(uri);
+    await createEdition();
+    await mongoose.connection.collection("users").insertOne({ name: "new-in-2027" });
+    await showEdition(2026);
+    await closeEditions();
+    await initEditions(uri);
+    expect(mongoose.connection.name).toBe(name);
+    expect((await mongoose.connection.collection("users").find().toArray()).map((user) => user.name)).toEqual(["new-in-2027"]);
+  });
+
+  test("a new edition copies users and push subscriptions from the previous live edition, not the control database", async () => {
+    await initEditions(uri);
+    await createEdition();
+    await mongoose.connection.collection("users").insertOne({ name: "from-2027" });
+    await mongoose.connection.collection("pushsubscriptions").insertOne({ endpoint: "https://push.example/2027" });
+    await showEdition(2026);
+    // Only in the archive's copy (the control database)
+    await mongoose.connection.collection("users").insertOne({ name: "archive-only" });
+    await createEdition();
+    expect(mongoose.connection.name).toBe(`${name}-2028`);
+    expect((await mongoose.connection.collection("users").find().toArray()).map((user) => user.name)).toEqual(["from-2027"]);
+    expect(await mongoose.connection.collection("pushsubscriptions").countDocuments()).toBe(1);
+  });
+});
+
+describe("edition hunt times source", () => {
+  afterEach(() => resetAppConfig());
+
+  test("app-config reads and writes the shown edition's hunt times", async () => {
+    await initEditions(uri);
+    await initAppConfig(getControlStore().connection, {});
+    setHuntTimesSource(editionHuntTimesSource());
+    await setGeneral({ huntStart: "2026-10-17T08:00:00Z" }, null);
+    expect(getRegistry().editions[0].huntStart).toBe("2026-10-17T08:00:00.000Z");
+    expect(general("huntStart")).toEqual({ value: "2026-10-17T08:00:00.000Z", source: "db" });
+  });
+
+  test("in an archive a hunt-time write fails with 423 and saves nothing; other general settings still save", async () => {
+    await initEditions(uri);
+    await createEdition();
+    await showEdition(2026);
+    await initAppConfig(getControlStore().connection, {});
+    setHuntTimesSource(editionHuntTimesSource());
+    const error = await setGeneral({ huntStart: "2026-10-17T08:00:00Z", groupName: "Scouting X" }, null).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ status: 423, message: "Archief is alleen-lezen" });
+    expect(getRegistry().editions.every((edition) => edition.huntStart === null)).toBe(true);
+    expect((await getControlStore().readRegistry())?.editions.every((edition) => edition.huntStart === null)).toBe(true);
+    const appConfig = () => getControlStore().connection.collection("settings").findOne({ key: "app-config" });
+    expect((await appConfig())?.general?.groupName).toBeUndefined();
+    await setGeneral({ groupName: "Scouting X" }, null);
+    expect((await appConfig())?.general?.groupName).toBe("Scouting X");
   });
 });
 

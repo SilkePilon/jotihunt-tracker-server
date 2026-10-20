@@ -168,7 +168,7 @@ Lokaal testen met een telefoon in hetzelfde wifi-netwerk: gebruik het LAN-adres 
 Dit zijn de inloggegevens die je normaal gebruikt om in te loggen op [jotihunt.nl](https://jotihunt.nl). De server zal deze gebruiken om automatisch de hunts op te halen (scrapen).
 
 #### `HUNT_START_TIME` en `HUNT_END_TIME`
-Stel hier de start- en eindtijd van de hunt in. Let goed op de juiste tijdzone (bijv. `+02:00` voor Nederland tijdens zomertijd).
+Start- en eindtijd van de hunt. Let goed op de juiste tijdzone (bijv. `+02:00` voor Nederland tijdens zomertijd). Worden alleen bij de eerste start met edities gebruikt (als er in Beheer nog geen tijden staan); daarna stel je de hunttijden per editie in via Beheer → Algemeen.
 
 #### `ORS_API_KEY` (optioneel)
 Wordt gebruikt door de vossenvoorspelling voor looptijden naar de groepen via [OpenRouteService](https://openrouteservice.org/).
@@ -305,7 +305,7 @@ Hunters registreren een hunt met een foto vanaf hun telefoon, plus de vossengroe
 
 De APK van de Android-app en een bestand `latest.json` (`{ "versionCode": 1, "versionName": "1.0.0", "file": "jotihunt-1.0.0.apk", "sha256": "<hex>" }`) staan in de map `app-releases` (aan te passen met `APP_DIR`; in Docker een bind mount). De server serveert ze zonder inloggen op `GET /app/latest` en `GET /app/download/<bestand>`. De site toont de downloadknop zodra `GET /app/latest` antwoordt.
 
-**Let op:** het koppelen en ontkoppelen van telefoons terwijl demomodus aan staat blijft niet bewaard nadat demomodus is uitgezet (apparaten staan op het gebruikersrecord en demo kopieert de gebruikers). Koppel en ontkoppel dus buiten demomodus.
+**Let op:** de gebruikers (met hun gekoppelde apparaten) staan in de database van de live editie. Een getoond archief krijgt daar een kopie van; wat alleen in die kopie verandert (bijv. koppelen of ontkoppelen van telefoons) blijft niet bewaard. Koppel en ontkoppel dus terwijl de live editie getoond wordt.
 
 ## 🤝 Bijdragen
 - Heb je zelf verbeteringen gemaakt? Open een Pull Request!

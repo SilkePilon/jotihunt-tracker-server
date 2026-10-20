@@ -114,7 +114,7 @@ export async function listSyncedHunts(): Promise<SyncedHuntView[]> {
   return hunts.sort((a, b) => time(b) - time(a)).map(toSyncedHuntView);
 }
 
-export async function huntSyncStatus(now = new Date()): Promise<HuntSyncStatusView> {
+export async function huntSyncStatus(): Promise<HuntSyncStatusView> {
   const hunts = (await Hunt.find().select("status statusClass points").lean()) as Pick<StoredHunt, "status" | "statusClass" | "points">[];
   const counts = { approved: 0, pending: 0, rejected: 0, total: hunts.length };
   let points = 0;
@@ -125,8 +125,8 @@ export async function huntSyncStatus(now = new Date()): Promise<HuntSyncStatusVi
     else counts.pending++;
     points += Number.isFinite(hunt.points) ? hunt.points : 0;
   }
-  // An archive is never scraped: show a healthy, just-finished sync
-  const state = isArchiveShown() ? { configured: true, running: false, lastSuccessAt: new Date(now.getTime() - 12_000).toISOString(), lastAttemptAt: new Date(now.getTime() - 12_000).toISOString(), lastError: null } : syncStateView();
+  // An archive is never scraped: no sync times (the client then shows its hunts and points without a "x s geleden")
+  const state = isArchiveShown() ? { configured: true, running: false, lastSuccessAt: null, lastAttemptAt: null, lastError: null } : syncStateView();
   return { ...state, counts, points };
 }
 

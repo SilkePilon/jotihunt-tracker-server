@@ -6,6 +6,8 @@ import { AppNotification } from "../models/notification.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import type { ScrapedHunt } from "./jotihunt-hunts.parse";
 import { notifyHuntEvents, syncHuntMarkers } from "./hunt-sync.service";
+import { huntSyncStatus } from "./hunt-sync.view";
+import { setArchiveFlag } from "../editions/work-tracking";
 
 beforeAll(connectTestDb);
 beforeEach(clearTestDb);
@@ -112,5 +114,19 @@ describe("notifyHuntEvents", () => {
     await storeHunts([scraped("qr:X"), scraped("qr:OLD", { huntTime: old })], now);
     const result = await storeHunts([scraped("qr:X"), scraped("qr:OLD", { huntTime: old, status: "rejected" })], now);
     expect((await notifyHuntEvents(result, { now, send })).map((notification) => notification.type)).toEqual(["hunt-rejected"]);
+  });
+});
+
+describe("huntSyncStatus in an archive", () => {
+  test("no faked recent sync: no sync times, counts and points still from the archive's hunts", async () => {
+    await Hunt.create({ area: "alpha", status: "Goedgekeurd", statusClass: "approved", points: 10, updatedAt: new Date() });
+    setArchiveFlag(true);
+    try {
+      const status = await huntSyncStatus();
+      expect(status).toMatchObject({ configured: true, running: false, lastSuccessAt: null, lastAttemptAt: null, lastError: null, points: 10 });
+      expect(status.counts).toEqual({ approved: 1, pending: 0, rejected: 0, total: 1 });
+    } finally {
+      setArchiveFlag(false);
+    }
   });
 });

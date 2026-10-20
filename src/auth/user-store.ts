@@ -1,6 +1,6 @@
-import mongoose, { type Model } from "mongoose";
+import mongoose, { type Connection, type Model } from "mongoose";
 import { newWebauthnUserId, User, UserSchema, type UserType } from "../models/user.model";
-import { authConnection } from "./auth-db";
+import { liveConnection } from "../editions/database-switch";
 
 export interface PasskeyFields {
   credentialId: string;
@@ -11,14 +11,21 @@ export interface PasskeyFields {
 }
 
 /**
- * The users collections an account change must reach: the control database (master copy) plus the shown edition's
- * copy when that edition has its own database (edition switches copy the control users over).
+ * The users collections an account change must reach: the shown edition's, plus the live edition's (master copy) when
+ * an archive on another database is shown (showing an archive copies the live users over).
  */
+let liveOverride: Connection | null | undefined;
+
+/** Tests only: the live edition's connection without initEditions; undefined = back to liveConnection(). */
+export function setLiveUsersConnection(connection: Connection | null | undefined) {
+  liveOverride = connection;
+}
+
 function userModels(): Model<unknown>[] {
-  const control = authConnection();
-  if (control === mongoose.connection || control.name === mongoose.connection.name) return [User as unknown as Model<unknown>];
-  const controlUser = (control.models.User ?? control.model("User", UserSchema)) as unknown as Model<unknown>;
-  return [User as unknown as Model<unknown>, controlUser];
+  const live = liveOverride === undefined ? liveConnection() : liveOverride;
+  if (!live || live.name === mongoose.connection.name) return [User as unknown as Model<unknown>];
+  const liveUser = (live.models.User ?? live.model("User", UserSchema)) as unknown as Model<unknown>;
+  return [User as unknown as Model<unknown>, liveUser];
 }
 
 export async function createAccount(fields: { name: string; admin?: boolean; invite?: unknown; webauthnUserId?: string; passkey?: PasskeyFields }): Promise<UserType> {
@@ -32,15 +39,15 @@ export async function createAccount(fields: { name: string; admin?: boolean; inv
     passkeys: fields.passkey ? [{ ...fields.passkey, createdAt: now, lastUsedAt: now }] : [],
     lastActiveAt: now,
   };
-  // Control database first: when that fails (e.g. duplicate passkey) nothing is left half-created in the edition database
+  // Live database first: when that fails (e.g. duplicate passkey) nothing is left half-created in the archive's copy
   for (const model of userModels().reverse()) await model.create(doc);
   return (await User.findById(doc._id))!;
 }
 
 /**
- * Update the account in the current database, then (when the shown edition has its own database) the same in the
- * control one. When the current database matched nothing the control one is left alone, so a conditional filter (e.g. "a second passkey exists")
- * decides once and both databases stay in step. Resolves to whether the current database matched.
+ * Update the account in the shown edition's database, then (when an archive on another database is shown) the same in
+ * the live one. When the shown database matched nothing the live one is left alone, so a conditional filter (e.g. "a
+ * second passkey exists") decides once and both databases stay in step. Resolves to whether the shown database matched.
  */
 export async function updateAccounts(filter: Record<string, unknown>, update: Record<string, unknown>): Promise<boolean> {
   const [current, ...others] = userModels();

@@ -1,11 +1,13 @@
 import type { NextFunction, Request, Response } from "express";
-import mongoose from "mongoose";
+import mongoose, { type Connection } from "mongoose";
 import { redactPath } from "../sentry";
 import { activeWorkCount, beginWork, nextGeneration, setArchiveFlag, setSwitchInProgress, waitForIdleWork } from "./work-tracking";
 import { openControlStore, type ControlStore } from "./control-store";
 import { dbConnectOptions, mongoUriDbName } from "./mongo-uri";
 import { checkCreate, checkShow, editionOf, isArchive, migrateRegistry, nextEditionRegistry, type Edition, type EditionsDoc } from "./registry";
 import { errorText } from "../utils/error-text";
+import { ServiceError } from "../http/service-error";
+import type { HuntTimesSource } from "../settings/app-config";
 import { dropLegacyHuntCodeIndex } from "../models/hunt.model";
 import type { ServiceLogger } from "../utils/service-logger";
 
@@ -83,6 +85,35 @@ export async function readControlCollection<T = Record<string, unknown>>(collect
   return (await requireInit().store.connection.collection(collection).find(filter).toArray()) as T[];
 }
 
+/**
+ * The connection to the live edition's database: it holds the master copy of the users and push subscriptions (an
+ * archive gets a copy when it is shown). Null before initEditions (tests and scripts on a plain connection).
+ */
+export function liveConnection(): Connection | null {
+  if (!store || !registry) return null;
+  const live = editionOf(registry, registry.liveYear)!;
+  return live.dbName === store.connection.name ? store.connection : store.connection.useDb(live.dbName, { useCache: true });
+}
+
+/**
+ * Hunt times of the shown edition (its registry entry), for app-config. An archive is read-only: writing its hunt
+ * times fails with 423 before anything is saved.
+ */
+export function editionHuntTimesSource(): HuntTimesSource {
+  return {
+    read() {
+      const current = requireInit().registry;
+      const edition = editionOf(current, current.shownYear)!;
+      return { huntStart: edition.huntStart, huntEnd: edition.huntEnd };
+    },
+    async write(patch) {
+      const current = requireInit().registry;
+      if (isArchive(current)) throw new ServiceError(423, "Archief is alleen-lezen");
+      await updateEditionHuntTimes(current.shownYear, patch);
+    },
+  };
+}
+
 /** Register a callback that runs after every switch; returns an unsubscribe function. */
 export function onEditionSwitch(listener: EditionSwitchListener): () => void {
   listeners.add(listener);
@@ -95,7 +126,13 @@ export function onEditionSwitch(listener: EditionSwitchListener): () => void {
  */
 export async function initEditions(
   uri: string,
-  options: { logger?: ServiceLogger; /** tests only */ drainTimeoutMs?: number; /** tests only */ abandonedRequestMs?: number; /** tests only */ now?: () => Date } = {},
+  options: {
+    logger?: ServiceLogger;
+    /** tests only */ drainTimeoutMs?: number;
+    /** tests only */ abandonedRequestMs?: number;
+    /** tests only */ now?: () => Date;
+    /** tests only (default process.env) */ env?: Record<string, string | undefined>;
+  } = {},
 ): Promise<EditionsDoc> {
   if (store) throw new Error("Editions are already initialised");
   log = options.logger ?? noopLogger;
@@ -108,8 +145,14 @@ export async function initEditions(
 
   const saved = await store.readRegistry();
   if (!saved) {
+    // One-off: hunt times from Beheer (app-config), else HUNT_START_TIME/HUNT_END_TIME; after this only the registry counts
     const general = (await store.connection.collection("settings").findOne({ key: "app-config" }))?.general ?? {};
-    registry = migrateRegistry(null, controlDb, { huntStart: general.huntStart ?? null, huntEnd: general.huntEnd ?? null }, now());
+    const env = options.env ?? process.env;
+    const hunt = {
+      huntStart: isoTime(general.huntStart) ?? isoTime(env.HUNT_START_TIME),
+      huntEnd: isoTime(general.huntEnd) ?? isoTime(env.HUNT_END_TIME),
+    };
+    registry = migrateRegistry(null, controlDb, hunt, now());
     await store.writeRegistry(registry);
     log.info(`Editions: registered the existing data as Jotihunt ${registry.liveYear}`);
   } else registry = saved;
@@ -123,7 +166,7 @@ export async function initEditions(
 
   const shown = editionOf(registry, registry.shownYear);
   if (!shown) throw new Error(`The shown edition ${registry.shownYear} is not in the registry`);
-  await connectEdition(shown, registry);
+  await connectEdition(shown, registry, editionOf(registry, registry.liveYear)!.dbName);
   return getRegistry();
 }
 
@@ -248,6 +291,14 @@ export async function closeEditions() {
 
 // --- Internals --------------------------------------------------------------------------------------------------
 
+/** An ISO time, or null for a missing or invalid value. */
+function isoTime(value: unknown): string | null {
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  if (typeof value !== "string" || !value.trim()) return null;
+  const date = new Date(value.trim());
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
 function requireInit(): { uri: string; store: ControlStore; registry: EditionsDoc } {
   if (!controlUri || !store || !registry) throw new Error("Editions are not initialised");
   return { uri: controlUri, store, registry };
@@ -292,11 +343,12 @@ async function maintainIndexes() {
 }
 
 /**
- * Point the default connection at `edition`. Editions on their own database get the users and push subscriptions of
- * the control database (the master copy; see auth/user-store.ts), replacing what they had. Only the default connection
- * is closed: mongoose.disconnect() would also close the control connection.
+ * Point the default connection at `edition`. `sourceDbName` is the live edition's database before the switch: it holds
+ * the master copy of the users and push subscriptions (see auth/user-store.ts). Any other edition gets a copy of them,
+ * replacing what it had; the source itself is never overwritten. Only the default connection is closed:
+ * mongoose.disconnect() would also close the control connection.
  */
-async function connectEdition(edition: Edition, target: EditionsDoc) {
+async function connectEdition(edition: Edition, target: EditionsDoc, sourceDbName: string) {
   const { uri, store: control } = requireInit();
   const controlDb = mongoUriDbName(uri);
   await mongoose.connection.close();
@@ -305,9 +357,10 @@ async function connectEdition(edition: Edition, target: EditionsDoc) {
     await mongoose.connection.close();
     throw new Error("Connected to an unexpected database");
   }
-  if (edition.dbName !== controlDb) {
+  if (edition.dbName !== sourceDbName) {
+    const source = sourceDbName === control.connection.name ? control.connection : control.connection.useDb(sourceDbName, { useCache: true });
     for (const collection of ["users", "pushsubscriptions"]) {
-      const docs = await control.connection.collection(collection).find().toArray();
+      const docs = await source.collection(collection).find().toArray();
       await mongoose.connection.collection(collection).deleteMany({});
       if (docs.length > 0) await mongoose.connection.collection(collection).insertMany(docs);
     }
@@ -360,17 +413,19 @@ async function performSwitch(plan: (current: EditionsDoc) => SwitchPlan | null):
   }
   const { next, prepare } = planned;
 
+  // The live edition before the switch has the master users (also for createEdition: the old live one)
+  const sourceDbName = editionOf(previous, previous.liveYear)!.dbName;
   nextGeneration();
   let failure: unknown = null;
   try {
-    await connectEdition(editionOf(next, next.shownYear)!, next);
+    await connectEdition(editionOf(next, next.shownYear)!, next, sourceDbName);
     await prepare?.();
     await control.writeRegistry(next);
     registry = next;
   } catch (error) {
     failure = error;
     log.error("Edition switch failed, back to the previous edition", error);
-    await connectEdition(editionOf(previous, previous.shownYear)!, previous).catch(async (backError) => {
+    await connectEdition(editionOf(previous, previous.shownYear)!, previous, sourceDbName).catch(async (backError) => {
       log.error("Could not reconnect to the previous edition either", backError);
       await mongoose.connection.close().catch(() => undefined);
     });

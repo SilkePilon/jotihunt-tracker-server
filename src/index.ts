@@ -9,7 +9,7 @@ import { setAuthConnection } from "./auth/auth-db";
 import { ensurePasswordless } from "./auth/migrate";
 import { initAppConfig, onAppConfigChange, setHuntTimesSource, settingsKeyOk } from "./settings/app-config";
 import { aiAvailable } from "./services/ai/model";
-import { getControlStore, getRegistry, initEditions, onEditionSwitch, updateEditionHuntTimes } from "./editions/database-switch";
+import { editionHuntTimesSource, getControlStore, initEditions, liveConnection, onEditionSwitch } from "./editions/database-switch";
 import { initEditionSettings } from "./editions/edition-settings-store";
 import { syncVehicleGroups } from "./services/tracker-onboarding.helpers";
 import { vehicleGroups } from "./services/tracker-onboarding.instance";
@@ -80,40 +80,11 @@ await initEditions(db, { logger: serviceLogger }).then((registry) => {
   if (debug) mongoose.set("debug", true);
 });
 
-// One-off (idempotent): HUNT_START_TIME/HUNT_END_TIME fill the live edition's missing hunt times, so the
-// "not during the hunt" guard of the edition switch knows them too. Invalid values are skipped.
-{
-  const registry = getRegistry();
-  const live = registry.editions.find((e) => e.year === registry.liveYear)!;
-  const fromEnv = (value: string | undefined) => {
-    const date = value?.trim() ? new Date(value.trim()) : null;
-    return date && !Number.isNaN(date.getTime()) ? date.toISOString() : null;
-  };
-  const patch: { huntStart?: string; huntEnd?: string } = {};
-  const envStart = fromEnv(process.env.HUNT_START_TIME);
-  const envEnd = fromEnv(process.env.HUNT_END_TIME);
-  if (live.huntStart === null && envStart) patch.huntStart = envStart;
-  if (live.huntEnd === null && envEnd) patch.huntEnd = envEnd;
-  if (Object.keys(patch).length > 0) {
-    await updateEditionHuntTimes(live.year, patch);
-    logger.info(`Jotihunt ${live.year}: hunt times taken from HUNT_START_TIME/HUNT_END_TIME`);
-  }
-}
-
 // Per-edition settings live in the shown edition's database; re-read after every switch
 await initEditionSettings();
 onEditionSwitch(() => initEditionSettings());
-// Hunt times belong to an edition (registry); env HUNT_START_TIME/HUNT_END_TIME back up the live one only
-setHuntTimesSource({
-  read: () => {
-    const registry = getRegistry();
-    const edition = registry.editions.find((e) => e.year === registry.shownYear)!;
-    return { huntStart: edition.huntStart, huntEnd: edition.huntEnd, live: registry.shownYear === registry.liveYear };
-  },
-  write: async (patch) => {
-    await updateEditionHuntTimes(getRegistry().shownYear, patch);
-  },
-});
+// Hunt times belong to the shown edition (registry entry); read-only while an archive is shown
+setHuntTimesSource(editionHuntTimesSource());
 // Settings moved from env to Beheer (env stays the fallback); secrets need SETTINGS_KEY
 const { undecryptable } = await initAppConfig(getControlStore().connection);
 // Names only, never values: these fall back to env until saved again with the current SETTINGS_KEY
@@ -122,10 +93,10 @@ syncVehicleGroups(vehicleGroups);
 if (!settingsKeyOk()) logger.warn("SETTINGS_KEY is missing or not 32 bytes (base64): keys and passwords can't be saved in Beheer. Generate one with: openssl rand -base64 32");
 // Sessions, invites and herstel-links live in the control database, whichever edition is shown
 setAuthConnection(getControlStore().connection);
-// The passwordless migration runs at every start (idempotent), so the deploy order doesn't matter. Also on the shown
-// edition's database when that is not the control database (its users were copied from the control database before this ran)
-const controlConnection = getControlStore().connection;
-for (const connection of mongoose.connection.name === controlConnection.name ? [controlConnection] : [controlConnection, mongoose.connection]) {
+// The passwordless migration runs at every start (idempotent), so the deploy order doesn't matter. On the live edition's
+// database (master copy of the users) and on the shown archive's copy when that is another database
+const live = liveConnection()!;
+for (const connection of mongoose.connection.name === live.name ? [live] : [live, mongoose.connection]) {
   await ensurePasswordless(connection)
     .then(({ cleaned, handles }) => logger.info(`Passwordless migration (${connection.name}): removed password data from ${cleaned} users, added WebAuthn handles to ${handles}`))
     .catch((error) => logger.error(`Passwordless migration of ${connection.name} failed`, error));
