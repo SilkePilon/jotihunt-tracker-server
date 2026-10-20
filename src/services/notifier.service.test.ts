@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Area } from "../models/area.model";
 import { Article } from "../models/article.model";
+import { Hunt } from "../models/hunt.model";
 import { AppNotification } from "../models/notification.model";
 import { NotifierState } from "../models/notifier-state.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
@@ -147,5 +148,59 @@ describe("runNotifier", () => {
     await Bun.sleep(100);
     expect(activeWorkCount()).toBe(before);
     expect(errors).toEqual(["Pushing a notification failed"]);
+  });
+  async function addHunt(area: string, huntTime: Date, statusText = "Goedgekeurd") {
+    await Hunt.create({ area, huntTime, status: statusText, statusText, points: 0, updatedAt: now });
+  }
+  const minutesBefore = (minutes: number) => new Date(now.getTime() - minutes * 60_000);
+
+  test("hunt cooldown: pushes once when the hour is over and the fox is green", async () => {
+    await setAreas({ Alpha: "green" });
+    await run();
+    await addHunt("alpha", minutesBefore(61));
+    // The first run with a hunt only records it when cooldownNotified did not exist yet: seed it here
+    const created = await run();
+    expect(created.map((notification) => notification.title)).toEqual(["Alpha mag weer gehunt worden"]);
+    expect(created[0].urgent).toBe(false);
+    expect(await run()).toHaveLength(0);
+  });
+
+  test("hunt cooldown: waits while red, pushes when it turns orange", async () => {
+    await setAreas({ Alpha: "red" });
+    await run();
+    await addHunt("alpha", minutesBefore(70));
+    expect((await run()).filter((n) => n.type === "hunt-cooldown")).toHaveLength(0);
+    await setAreas({ Alpha: "orange" });
+    const created = await run();
+    expect(created.map((n) => n.title)).toContain("Alpha mag weer gehunt worden");
+  });
+
+  test("hunt cooldown: tegenhunts do not count", async () => {
+    await setAreas({ Alpha: "green" });
+    await run();
+    await addHunt("alpha", minutesBefore(61), "Tegenhunt goedgekeurd");
+    expect(await run()).toHaveLength(0);
+  });
+
+  test("hunt cooldown: an existing state without cooldownNotified only records", async () => {
+    await setAreas({ Alpha: "green" });
+    await run();
+    await NotifierState.updateOne({}, { $unset: { cooldownNotified: 1 } });
+    await addHunt("alpha", minutesBefore(61));
+    expect(await run()).toHaveLength(0);
+    expect((await NotifierState.findOne().lean())?.cooldownNotified).toEqual({ alpha: minutesBefore(61).toISOString() });
+  });
+
+  test("hunt cooldown: a failed insert rolls cooldownNotified back", async () => {
+    await setAreas({ Alpha: "green" });
+    await run();
+    await addHunt("alpha", minutesBefore(61));
+    const insert = spyOn(AppNotification, "insertMany").mockRejectedValueOnce(new Error("db down"));
+    try {
+      await expect(run()).rejects.toThrow("db down");
+    } finally {
+      insert.mockRestore();
+    }
+    expect((await run()).map((n) => n.title)).toEqual(["Alpha mag weer gehunt worden"]);
   });
 });
