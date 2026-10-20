@@ -45,7 +45,10 @@ test("reads and account/admin writes still pass in the archive", async () => {
   expect((await send("POST", "/admin/broadcast")).status).toBe(423);
   // Push subscriptions would only land in the archive's copy (the live edition holds the master)
   expect((await send("POST", "/push/subscribe")).status).toBe(423);
-  expect((await send("DELETE", "/push/subscribe")).status).toBe(423);
+  expect((await send("PUT", "/push/subscribe")).status).toBe(423);
+  // Unsubscribing (logout) is allowed: exactly DELETE /push/subscribe
+  expect((await send("DELETE", "/push/subscribe")).status).toBe(200);
+  expect((await send("DELETE", "/push/subscribe/x")).status).toBe(423);
   // A prefix only matches whole path segments
   expect((await send("POST", "/authx")).status).toBe(423);
 });

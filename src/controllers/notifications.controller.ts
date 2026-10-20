@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { AppNotification, toNotificationView } from "../models/notification.model";
 import { PushSubscription } from "../models/push-subscription.model";
 import { User } from "../models/user.model";
+import { deletePushSubscriptions } from "../auth/user-store";
 import { buildBroadcastNotification, knownOptionalTypes, REMOVED_NOTIFICATION_TYPES } from "../services/notifier.helpers";
 import { counterHuntView } from "../services/telegram.helpers";
 import { currentGeneration, runTracked } from "../editions/work-tracking";
@@ -61,7 +62,8 @@ export async function subscribe(req: Request, res: Response) {
 }
 
 export async function unsubscribe(req: Request, res: Response) {
-  await PushSubscription.deleteOne({ endpoint: req.body.endpoint, user: req.user!._id });
+  // Also in the live edition's database while an archive is shown (allowed there: logout unsubscribes)
+  await deletePushSubscriptions({ endpoint: req.body.endpoint, user: req.user!._id });
   return res.status(204).end();
 }
 

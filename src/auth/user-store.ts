@@ -1,6 +1,7 @@
 import mongoose, { type Connection, type Model } from "mongoose";
 import { newWebauthnUserId, User, UserSchema, type UserType } from "../models/user.model";
 import { liveConnection } from "../editions/database-switch";
+import { PushSubscription } from "../models/push-subscription.model";
 
 export interface PasskeyFields {
   credentialId: string;
@@ -22,10 +23,15 @@ export function setLiveUsersConnection(connection: Connection | null | undefined
  * an archive on another database is shown (showing an archive copies the live users over).
  */
 function userModels(): Model<unknown>[] {
+  return modelsOf(User as unknown as Model<unknown>, UserSchema);
+}
+
+/** `model` on the shown database, plus the same model on the live edition's database when an archive on another one is shown. */
+function modelsOf(model: Model<unknown>, schema: mongoose.Schema): Model<unknown>[] {
   const live = liveOverride === undefined ? liveConnection() : liveOverride;
-  if (!live || live.name === mongoose.connection.name) return [User as unknown as Model<unknown>];
-  const liveUser = (live.models.User ?? live.model("User", UserSchema)) as unknown as Model<unknown>;
-  return [User as unknown as Model<unknown>, liveUser];
+  if (!live || live.name === mongoose.connection.name) return [model];
+  const liveModel = (live.models[model.modelName] ?? live.model(model.modelName, schema)) as unknown as Model<unknown>;
+  return [model, liveModel];
 }
 
 export async function createAccount(fields: { name: string; admin?: boolean; invite?: unknown; webauthnUserId?: string; passkey?: PasskeyFields }): Promise<UserType> {
@@ -71,4 +77,12 @@ export async function deleteAccounts(filter: Record<string, unknown>): Promise<n
     if (index === 0) shownDeleted = deletedCount;
   }
   return shownDeleted;
+}
+
+/**
+ * Delete push subscriptions in the shown edition's database and (when an archive on another database is shown) the live
+ * one, the master copy: unsubscribing in the archive (e.g. on logout) must not leave a stale subscription in live.
+ */
+export async function deletePushSubscriptions(filter: Record<string, unknown>): Promise<void> {
+  for (const model of modelsOf(PushSubscription as unknown as Model<unknown>, PushSubscription.schema)) await model.deleteMany(filter);
 }
