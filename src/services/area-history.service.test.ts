@@ -84,6 +84,7 @@ async function seedAlphaHistory() {
       cell(2, "alpha", HintCellStatus.None, at("17:00")),
       cell(3, "alpha", HintCellStatus.Solved, at("15:30"), at("16:10")),
       cell(4, "alpha", HintCellStatus.Solved, at("13:00"), at("14:00")), // solved before the window
+      cell(6, "alpha", HintCellStatus.Solved, at("16:00")), // solved, time unknown: left out
       cell(5, "alpha", HintCellStatus.Open, at("10:00")), // stale: published long before the window
       cell(1, "bravo", HintCellStatus.Open, at("17:00")),
     ]),

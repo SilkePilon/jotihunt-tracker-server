@@ -78,7 +78,8 @@ export async function areaHistory(area: AreaName, minutes: number, now = new Dat
       area,
       status: { $ne: HintCellStatus.None },
       publishAt: { $gte: new Date(from.getTime() - HINT_LEAD_MS), $lt: to },
-      $or: [{ solvedAt: { $exists: false } }, { solvedAt: null }, { solvedAt: { $gte: from } }, { status: HintCellStatus.Open }],
+      // Solved cells without a solvedAt (solved before the field existed) are left out: their time is unknown
+      $or: [{ status: HintCellStatus.Open }, { solvedAt: { $gte: from } }],
     })
       .sort({ publishAt: 1 })
       .lean(),
