@@ -11,7 +11,7 @@ import { currentGeneration } from "../editions/work-tracking";
  * Writes to a collection invalidate its entry (see the model middleware); entries are keyed by the database generation
  * and name, so an edition switch never serves the other database's data.
  */
-export type CachedList = "markers" | "articles" | "hunts";
+export type CachedList = "markers" | "articles" | "hunts" | "hunt-counts";
 
 export const RESPONSE_CACHE_TTL_MS = 1_000;
 

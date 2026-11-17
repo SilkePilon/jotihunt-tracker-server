@@ -121,6 +121,7 @@ HuntSchema.index({ siteKey: 1 }, { unique: true, partialFilterExpression: { site
 
 // GET /hunts is cached for a moment; every write clears it
 invalidateOnWrite(HuntSchema, "hunts");
+invalidateOnWrite(HuntSchema, "hunt-counts");
 
 export const Hunt = mongoose.model("Hunt", HuntSchema);
 export type HuntDoc = InferSchemaType<typeof HuntSchema> & { _id: mongoose.Types.ObjectId };

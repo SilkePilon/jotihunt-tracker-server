@@ -117,6 +117,22 @@ describe("notifyHuntEvents", () => {
   });
 });
 
+describe("huntSyncStatus totals", () => {
+  test("cached, but every hunt write shows at once", async () => {
+    await Hunt.create({ area: "alpha", status: "Goedgekeurd", statusClass: "approved", points: 10, updatedAt: new Date() });
+    expect((await huntSyncStatus()).counts).toEqual({ approved: 1, pending: 0, rejected: 0, total: 1 });
+    const hunt = await Hunt.create({ area: "bravo", status: "Wacht", statusClass: "pending", points: 0, updatedAt: new Date() });
+    expect(await huntSyncStatus()).toMatchObject({ counts: { approved: 1, pending: 1, rejected: 0, total: 2 }, points: 10 });
+    await Hunt.updateOne({ _id: hunt._id }, { $set: { statusClass: "approved", points: 5 } });
+    expect(await huntSyncStatus()).toMatchObject({ counts: { approved: 2, pending: 0, rejected: 0, total: 2 }, points: 15 });
+    await Hunt.deleteMany({});
+    expect(await huntSyncStatus()).toMatchObject({ counts: { approved: 0, pending: 0, rejected: 0, total: 0 }, points: 0 });
+    // A write that bypasses Mongoose is not seen: the totals come from the cache
+    await Hunt.collection.insertOne({ area: "charlie", status: "Wacht", points: 0, updatedAt: new Date() });
+    expect((await huntSyncStatus()).counts.total).toBe(0);
+  });
+});
+
 describe("huntSyncStatus in an archive", () => {
   test("no faked recent sync: no sync times, counts and points still from the archive's hunts", async () => {
     await Hunt.create({ area: "alpha", status: "Goedgekeurd", statusClass: "approved", points: 10, updatedAt: new Date() });
