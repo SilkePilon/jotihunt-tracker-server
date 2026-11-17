@@ -93,15 +93,22 @@ export function createTrackerOnboarding(deps: TrackerOnboardingDeps) {
     return position ?? api.getPosition(positionId);
   }
 
-  const distances = new Map<number, { at: number; from: number; distance: number | null }>();
+  /** Per device: the latest report request, also while it is still running (so concurrent polls share it). */
+  const distances = new Map<number, { at: number; from: number; distance: Promise<number | null> }>();
 
-  /** Distance driven since `from`, remembered per device for DISTANCE_CACHE_MS (failures are not remembered). */
-  async function distanceToday(api: TraccarApi, deviceId: number, from: Date, to: Date): Promise<number | null> {
+  /**
+   * Distance driven since `from`, one report per device per DISTANCE_CACHE_MS. A request replaces the entry when it
+   * starts, so an older report answering late can't overwrite a newer one; a failed report is forgotten.
+   */
+  function distanceToday(api: TraccarApi, deviceId: number, from: Date, to: Date): Promise<number | null> {
     const cached = distances.get(deviceId);
     if (cached && cached.from === from.getTime() && to.getTime() - cached.at < DISTANCE_CACHE_MS) return cached.distance;
-    const distance = await api.getDistance(deviceId, from, to);
-    distances.set(deviceId, { at: to.getTime(), from: from.getTime(), distance });
-    return distance;
+    const entry = { at: to.getTime(), from: from.getTime(), distance: api.getDistance(deviceId, from, to) };
+    distances.set(deviceId, entry);
+    entry.distance.catch(() => {
+      if (distances.get(deviceId) === entry) distances.delete(deviceId);
+    });
+    return entry.distance;
   }
 
   /**

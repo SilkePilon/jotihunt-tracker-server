@@ -245,6 +245,12 @@ describe("getMe", () => {
 });
 
 describe("getMe with shared lists", () => {
+  /** Resolves once `ready()` holds (the service awaits a few lookups before it asks for the distance). */
+  async function waitFor(ready: () => boolean) {
+    for (let i = 0; i < 100 && !ready(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(ready()).toBe(true);
+  }
+
   /** Shared lists backed by the fake Traccar's maps; counts how often each list was read. */
   function sharedLists(traccar: ReturnType<typeof fakeTraccar>) {
     const reads = { devices: 0, positions: 0 };
@@ -324,6 +330,44 @@ describe("getMe with shared lists", () => {
     now = new Date(NOW.getTime() + 61_000);
     expect(await onboarding.getMe(user)).toMatchObject({ stats: { distanceTodayM: 5000 } });
     expect(distanceCalls()).toBe(2);
+  });
+
+  test("concurrent polls share one running distance report", async () => {
+    const user = await makeUser();
+    const traccar = fakeTraccar();
+    seed(traccar, deriveUniqueId(user._id.toString()));
+    const { onboarding } = service(traccar, CLIENT_URL, { shared: sharedLists(traccar).shared });
+
+    const results = await Promise.all([onboarding.getMe(user), onboarding.getMe(user), onboarding.getMe(user)]);
+    for (const me of results) expect(me).toMatchObject({ stats: { distanceTodayM: 4321 } });
+    expect(traccar.calls.filter((call) => call.startsWith("distance"))).toHaveLength(1);
+  });
+
+  test("an older distance report answering late does not replace a newer one", async () => {
+    const user = await makeUser();
+    const traccar = fakeTraccar();
+    seed(traccar, deriveUniqueId(user._id.toString()));
+    const pending: ((distance: number) => void)[] = [];
+    traccar.api.getDistance = (deviceId, from, to) => {
+      traccar.calls.push(`distance ${deviceId} ${from.toISOString()} ${to.toISOString()}`);
+      return new Promise<number>((resolve) => pending.push(resolve));
+    };
+    let now = NOW;
+    const { onboarding } = service(traccar, CLIENT_URL, { shared: sharedLists(traccar).shared, now: () => now });
+
+    const older = onboarding.getMe(user);
+    await waitFor(() => pending.length === 1);
+    now = new Date(NOW.getTime() + 61_000);
+    const newer = onboarding.getMe(user);
+    await waitFor(() => pending.length === 2);
+    pending[1](5000);
+    expect(await newer).toMatchObject({ stats: { distanceTodayM: 5000 } });
+    pending[0](1000);
+    expect(await older).toMatchObject({ stats: { distanceTodayM: 1000 } });
+
+    now = new Date(NOW.getTime() + 62_000);
+    expect(await onboarding.getMe(user)).toMatchObject({ stats: { distanceTodayM: 5000 } });
+    expect(pending).toHaveLength(2);
   });
 
   test("a failed distance report is not cached", async () => {
