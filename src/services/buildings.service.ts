@@ -46,10 +46,6 @@ export const MAX_CONSECUTIVE_FAILURES = 10;
 /** A queued job fetch that was dropped because its job aborted */
 class JobAbortedError extends Error {}
 
-/**
- * 3D buildings from 3DBAG, cached per z15 tile as a ready vector tile. A miss is fetched on demand (map requests go
- * ahead of the queue); one background job at a time refreshes every cached tile or prefetches an area.
- */
 /** The bytes of a stored tile as a Buffer view (lean reads give the driver's Binary), without copying them. */
 export function tileBytes(value: unknown): Buffer | null {
   if (value == null) return null;
@@ -63,6 +59,10 @@ export function tileBytes(value: unknown): Buffer | null {
   return null;
 }
 
+/**
+ * 3D buildings from 3DBAG, cached per z15 tile as a ready vector tile. A miss is fetched on demand (map requests go
+ * ahead of the queue); one background job at a time refreshes every cached tile or prefetches an area.
+ */
 export class BuildingsService {
   private readonly model: Model<BuildingTileDoc>;
   private readonly maxParallel: number;
