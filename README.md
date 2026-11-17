@@ -125,9 +125,10 @@ services:
       - traccar_logs:/opt/traccar/logs
       - traccar_data:/opt/traccar/data
       - traccar_conf:/opt/traccar/conf
-  # Optioneel: routes over echte paden. De eerste build downloadt OSM-data van Nederland en duurt een tijd.
+  # Optioneel: routes over echte paden. Start alleen met `--profile router`; de eerste build downloadt OSM-data van Nederland en duurt een tijd.
   router:
     image: ghcr.io/scoutingscherpenzeel/jotihunt-router:main
+    profiles: [router]
     restart: unless-stopped
     volumes:
       - router_data:/data
@@ -159,7 +160,7 @@ TRACCAR_API_URL=http://traccar:8082
 TRACCAR_API_TOKEN=token-van-traccar
 TRACCAR_CLIENT_URL=http://tracker.jotihunt.jouwscoutinggroep.nl:5055
 
-# Optioneel, met de router-service hierboven
+# Optioneel, met de router-service hierboven (docker compose --profile router)
 ROUTER_URL=http://router:8989
 ROUTER_ADMIN_URL=http://router:8990
 
@@ -174,13 +175,19 @@ TEAMS_AREA_EDITING=false
 docker compose up -d
 ```
 
+De router start alleen als je het profiel `router` meegeeft:
+
+```bash
+docker compose --profile router up -d
+```
+
 | Service | Adres |
 | --- | --- |
 | `server` | http://localhost:3000 |
 | `client` | http://localhost:80 |
 | `traccar` | http://localhost:8082 |
 | `mongodb` | alleen intern |
-| `router` | alleen intern (`8989` routes, `8990` status/rebuild) |
+| `router` | alleen intern (`8989` routes, `8990` status/rebuild), alleen met `--profile router` |
 
 Passkeys werken alleen op `https://` of op `localhost`. Zet de server en client in productie dus achter een reverse proxy met TLS.
 
