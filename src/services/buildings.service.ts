@@ -50,6 +50,19 @@ class JobAbortedError extends Error {}
  * 3D buildings from 3DBAG, cached per z15 tile as a ready vector tile. A miss is fetched on demand (map requests go
  * ahead of the queue); one background job at a time refreshes every cached tile or prefetches an area.
  */
+/** The bytes of a stored tile as a Buffer view (lean reads give the driver's Binary), without copying them. */
+export function tileBytes(value: unknown): Buffer | null {
+  if (value == null) return null;
+  if (Buffer.isBuffer(value)) return value;
+  if (value instanceof Uint8Array) return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  const binary = value as { buffer?: Uint8Array; position?: number };
+  if (binary.buffer instanceof Uint8Array) {
+    const length = typeof binary.position === "number" ? binary.position : binary.buffer.byteLength;
+    return Buffer.from(binary.buffer.buffer, binary.buffer.byteOffset, length);
+  }
+  return null;
+}
+
 export class BuildingsService {
   private readonly model: Model<BuildingTileDoc>;
   private readonly maxParallel: number;
@@ -76,8 +89,9 @@ export class BuildingsService {
   /** The vector tile of `tile` (null: no buildings); fetched from 3DBAG on a miss. Throws BuildingsUpstreamError. */
   async getTile(tile: TileXY): Promise<Buffer | null> {
     if (!inNetherlands(tile)) return null;
-    const doc = await this.model.findById(tileId(tile));
-    if (doc) return doc.mvt ? Buffer.from(doc.mvt) : null;
+    // Lean: no document to hydrate and no copy of the tile bytes
+    const doc = await this.model.findById(tileId(tile), { mvt: 1 }).lean();
+    if (doc) return tileBytes(doc.mvt);
     return this.fetchAndStore(tile, true);
   }
 
