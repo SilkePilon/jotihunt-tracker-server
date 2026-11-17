@@ -8,6 +8,9 @@ import type mongoose from "mongoose";
  * (save, update*, delete*, findOneAnd*, replaceOne, bulkWrite) drops the affected entries via the schema hooks in
  * `invalidateOnWrites`, an edition switch clears everything, and an entry never outlives its session's expiresAt.
  * The TTL only bounds writes that bypass Mongoose (raw collection access, another server process).
+ *
+ * The cache is per process: run the API as a single replica (as the k3s deployment does). With more replicas a
+ * logout or role change on one would keep authenticating on another for up to this TTL; lower it before scaling out.
  */
 export const SESSION_CACHE_TTL_MS = 15_000;
 /** Bounds memory when many tokens are presented (the oldest entries go first). */

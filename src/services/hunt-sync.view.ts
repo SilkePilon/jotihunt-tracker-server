@@ -132,8 +132,11 @@ async function huntTotals(): Promise<HuntTotals> {
   return { counts, points };
 }
 
-/** Totals only change with a hunt write, which clears them (model middleware); the TTL is only a safety net. */
-export const HUNT_TOTALS_TTL_MS = 60_000;
+/**
+ * Totals only change with a hunt write, which clears them (model middleware); the TTL is only a safety net, kept short
+ * for writes whose post hooks never ran (a write that Mongo applied but that rejected on our side).
+ */
+export const HUNT_TOTALS_TTL_MS = 10_000;
 
 export async function huntSyncStatus(): Promise<HuntSyncStatusView> {
   const { counts, points } = JSON.parse(await cachedJson("hunt-counts", huntTotals, HUNT_TOTALS_TTL_MS)) as HuntTotals;
