@@ -45,12 +45,19 @@ export async function revokeSession(sessionId: string): Promise<void> {
   if (!isObjectIdString(sessionId)) return;
   // The Session schema hooks invalidate the session cache too; explicit here so a revoke never depends on them
   invalidateSession(sessionId);
-  await sessions().deleteOne({ _id: sessionId });
-  invalidateSession(sessionId);
+  try {
+    await sessions().deleteOne({ _id: sessionId });
+  } finally {
+    // Also when the delete rejects after Mongo applied it (timeout): never keep an entry built in between
+    invalidateSession(sessionId);
+  }
 }
 
 export async function revokeUserSessions(userId: unknown): Promise<void> {
   invalidateUserSessions(userId);
-  await sessions().deleteMany({ user: userId as mongoose.Types.ObjectId });
-  invalidateUserSessions(userId);
+  try {
+    await sessions().deleteMany({ user: userId as mongoose.Types.ObjectId });
+  } finally {
+    invalidateUserSessions(userId);
+  }
 }
