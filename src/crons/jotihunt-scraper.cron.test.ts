@@ -119,7 +119,7 @@ describe("storeHunts", () => {
     expect(await dropLegacyHuntCodeIndex()).toBe(true);
     expect(await dropLegacyHuntCodeIndex()).toBe(false);
     await Hunt.syncIndexes();
-    expect((await Hunt.collection.indexes()).map((index) => index.name).sort()).toEqual(["_id_", "siteKey_1"]);
+    expect((await Hunt.collection.indexes()).map((index) => index.name).sort()).toEqual(["_id_", "huntTime_1", "siteKey_1"]);
 
     expect(await storeHunts([web("A", { statusText: "Afgekeurd" }), web("B"), web(null), web(null, { area: "Charlie" })])).toMatchObject({ deleted: true });
     expect(await Hunt.countDocuments()).toBe(4);
