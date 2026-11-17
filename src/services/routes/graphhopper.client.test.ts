@@ -61,6 +61,8 @@ describe("createGraphHopperRouter", () => {
     }
     const noPoints = createGraphHopperRouter("http://gh:8989", { post: async () => ({ status: 200, json: { paths: [{ distance: 1, time: 1000 }] } }) });
     await expect(noPoints.route(req)).rejects.toMatchObject({ kind: "temporary" });
+    const emptyPoints = createGraphHopperRouter("http://gh:8989", { post: async () => ({ status: 200, json: { paths: [{ distance: 1, time: 1000, points: { coordinates: [] } }] } }) });
+    await expect(emptyPoints.route(req)).rejects.toMatchObject({ kind: "temporary" });
   });
 });
 
@@ -119,6 +121,11 @@ describe("compactLine", () => {
 
   test("a line whose ends round to the same spot still has two points", () => {
     expect(compactLine([[5.8, 52], [5.800001, 52.000001]])).toEqual([[5.8, 52], [5.8, 52]]);
+  });
+
+  test("a single point becomes a two-point line; no points stay none", () => {
+    expect(compactLine([[5.8000012, 52.0000012]])).toEqual([[5.8, 52], [5.8, 52]]);
+    expect(compactLine([])).toEqual([]);
   });
 
   test("the router returns the compacted line", async () => {

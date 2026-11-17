@@ -20,10 +20,14 @@ const round5 = (value: number) => Math.round(value * 1e5) / 1e5;
 
 /**
  * Smaller route lines for storage (RouteLeg) and the polled trails JSON: Douglas-Peucker simplified, coordinates
- * rounded to 5 decimals (~1 m), repeated points dropped. The first and last points stay.
+ * rounded to 5 decimals (~1 m), repeated points dropped. The first and last points stay, and any non-empty input
+ * gives at least two points (a single point is doubled) so the result is always a valid LineString.
  */
 export function compactLine(coordinates: [number, number][]): [number, number][] {
-  if (coordinates.length < 2) return coordinates.map(([lng, lat]) => [round5(lng), round5(lat)]);
+  if (coordinates.length < 2) {
+    const rounded = coordinates.map(([lng, lat]): [number, number] => [round5(lng), round5(lat)]);
+    return rounded.length === 1 ? [rounded[0], [...rounded[0]]] : rounded;
+  }
   const simplified =
     coordinates.length > 2
       ? (simplify(lineString(coordinates), { tolerance: ROUTE_SIMPLIFY_TOLERANCE, highQuality: false }).geometry.coordinates as [number, number][])
@@ -100,7 +104,7 @@ export function createGraphHopperRouter(baseUrl: string | undefined, deps: { pos
       if (isRequestError(res.status)) throw new RoutingUnavailableError(json.message ?? `Router answered ${res.status}`, { kind: "request" });
       const path = json.paths?.[0];
       if (res.status !== 200 || !path) throw new RoutingUnavailableError(json.message ?? `Router answered ${res.status}`, { kind: "temporary" });
-      if (!Array.isArray(path.points?.coordinates)) throw new RoutingUnavailableError("Router answered without route points", { kind: "temporary" });
+      if (!Array.isArray(path.points?.coordinates) || !path.points.coordinates.length) throw new RoutingUnavailableError("Router answered without route points", { kind: "temporary" });
       return { coordinates: compactLine(path.points.coordinates), distanceM: path.distance, durationS: Math.round(path.time / 1000) };
     },
     /** The area reachable within `distanceM` along the profile's ways (one bucket). */
