@@ -157,7 +157,10 @@ describe("sendPreparedJson", () => {
     expect(res.headers["content-type"]).toBe("application/json; charset=utf-8");
     expect(res.headers.vary).toContain("Accept-Encoding");
     expect(res.headers.etag).toMatch(/^W\/"/);
-    expect(gunzipSync(res.body).toString()).toBe(big);
+    // One gunzip gives the JSON back: gzipped twice it would still be gzip bytes here
+    const once = gunzipSync(res.body);
+    expect(once.subarray(0, 2).equals(Buffer.from([0x1f, 0x8b]))).toBe(false);
+    expect(once.toString()).toBe(big);
   });
 
   test("plain body without Accept-Encoding gzip; same ETag", async () => {
