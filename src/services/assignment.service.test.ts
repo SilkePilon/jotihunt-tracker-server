@@ -95,6 +95,27 @@ describe("notes, list, members", () => {
     expect(unchecked).toMatchObject({ articleId: 8, site: null });
   });
 
+  test("listAssignments sends the same JSON as the hydrated documents did, also for documents from before the defaults", async () => {
+    const [user] = await Promise.all([makeUser("sanne"), makeArticle()]);
+    await setAssignmentOwner(7, String(user._id), user._id);
+    await addAssignmentNote(7, user._id, "klaar");
+    // An old document: written before status/notes/site existed
+    await Assignment.collection.insertOne({ articleId: 9, createdAt: new Date(), updatedAt: new Date() });
+
+    const hydrated = JSON.parse(JSON.stringify(await Assignment.find().populate(["owner", "ownerBy", "statusBy", "notes.user"].map((path) => ({ path, select: "name" })))));
+    // A populated user's toJSON added passkeyCount (always 0 with only the name selected); the client never reads it
+    const withoutPasskeyCount = (value: unknown): unknown =>
+      Array.isArray(value)
+        ? value.map(withoutPasskeyCount)
+        : value && typeof value === "object"
+          ? Object.fromEntries(Object.entries(value).filter(([key]) => key !== "passkeyCount").map(([key, inner]) => [key, withoutPasskeyCount(inner)]))
+          : value;
+    const sorted = (list: Record<string, unknown>[]) => list.map((doc) => Object.fromEntries(Object.entries(doc).sort(([a], [b]) => a.localeCompare(b))));
+    const lean = JSON.parse(JSON.stringify(await listAssignments()));
+    expect(sorted(lean)).toEqual(sorted(withoutPasskeyCount(hydrated) as Record<string, unknown>[]));
+    expect(lean[1]).toMatchObject({ articleId: 9, status: "open", notes: [], site: null, siteAttemptAt: null });
+  });
+
   test("listMembers returns only ids and names, sorted by name", async () => {
     await Promise.all([makeUser("sanne"), makeUser("daan")]);
     const members = await listMembers();

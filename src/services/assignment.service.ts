@@ -32,9 +32,19 @@ async function view(articleId: number) {
 
 export type AssignmentView = Awaited<ReturnType<typeof view>>;
 
-/** Every assignment that has bookkeeping; articles without a document are open and unowned */
-export function listAssignments() {
-  return Assignment.find().populate(populateUsers).exec();
+/**
+ * Every assignment that has bookkeeping; articles without a document are open and unowned. Lean (polled by every
+ * hunter): the schema defaults a hydrated document would add are filled in for documents from before those fields.
+ */
+export async function listAssignments() {
+  const docs = await Assignment.find().populate(populateUsers).lean();
+  return docs.map((doc) => ({
+    ...doc,
+    status: doc.status ?? AssignmentStatus.Open,
+    notes: doc.notes ?? [],
+    site: doc.site ?? null,
+    siteAttemptAt: doc.siteAttemptAt ?? null,
+  }));
 }
 
 /** Set how far an assignment is; the last write wins */
