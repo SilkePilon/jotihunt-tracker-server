@@ -160,9 +160,10 @@ TRACCAR_API_URL=http://traccar:8082
 TRACCAR_API_TOKEN=token-van-traccar
 TRACCAR_CLIENT_URL=http://tracker.jotihunt.jouwscoutinggroep.nl:5055
 
-# Optioneel, met de router-service hierboven (docker compose --profile router)
-ROUTER_URL=http://router:8989
-ROUTER_ADMIN_URL=http://router:8990
+# Optioneel: alleen aanzetten als je de router-service start (docker compose --profile router up -d).
+# Zonder router laat je ze uit; dan tekent de server rechte lijnen.
+# ROUTER_URL=http://router:8989
+# ROUTER_ADMIN_URL=http://router:8990
 
 # Client
 API_BASE_URL=https://api.jotihunt.jouwscoutinggroep.nl
