@@ -1,11 +1,12 @@
 import type { Request, Response } from "express";
+import { sendPreparedJson } from "../services/response-cache";
 import { Marker } from "../models/marker.model";
 import { trailsService } from "../services/routes/instance";
 
-export async function getTrails(_req: Request, res: Response) {
+export async function getTrails(req: Request, res: Response) {
   // Serialised once per memo, like the cached list endpoints
   const body = await trailsService.trailsJson();
-  return res.status(200).set("Content-Type", "application/json; charset=utf-8").send(body);
+  return sendPreparedJson(req, res, "trails", body);
 }
 
 export async function setLegMode(req: Request, res: Response) {

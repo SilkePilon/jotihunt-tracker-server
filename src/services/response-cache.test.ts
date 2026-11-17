@@ -1,9 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import compression from "compression";
+import express from "express";
+import http, { type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { gunzipSync } from "node:zlib";
 import { nextGeneration } from "../editions/work-tracking";
 import { Hunt } from "../models/hunt.model";
 import { Marker, MarkerType } from "../models/marker.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
-import { cachedJson, invalidateResponseCache, type CachedList } from "./response-cache";
+import { cachedJson, invalidateResponseCache, sendPreparedJson, type CachedList } from "./response-cache";
 
 let builds = 0;
 /** Read the list through the cache with a long TTL; `builds` counts the real builds */
@@ -109,5 +114,79 @@ describe("hunt writes clear the cached hunts", () => {
     const hunt = { siteKey: "qr:A", area: "alpha", status: "Wacht", points: 0, updatedAt: new Date() };
     expect(await invalidates(() => Hunt.bulkWrite([{ updateOne: { filter: { siteKey: "qr:A" }, update: { $set: hunt }, upsert: true } }]), "hunts")).toBe(true);
     expect(await invalidates(() => Hunt.deleteMany({}), "hunts")).toBe(true);
+  });
+});
+
+describe("sendPreparedJson", () => {
+  const big = JSON.stringify(Array.from({ length: 200 }, (_, index) => ({ id: index, name: `Vos ${index}` })));
+  let body = big;
+  let server: Server;
+  let port = 0;
+
+  beforeAll(async () => {
+    const app = express();
+    // Same setup as the app: the compression middleware in front
+    app.use(compression());
+    app.get("/list", (req, res) => sendPreparedJson(req, res, "test-list", body));
+    server = app.listen(0);
+    await new Promise((resolve) => server.once("listening", resolve));
+    port = (server.address() as AddressInfo).port;
+  });
+  afterAll(() => {
+    server.close();
+  });
+
+  /** Raw response (no automatic decompression) */
+  function get(headers: Record<string, string> = {}) {
+    return new Promise<{ status: number; headers: http.IncomingHttpHeaders; body: Buffer }>((resolve, reject) => {
+      http
+        .get({ port, path: "/list", headers }, (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (chunk: Buffer) => chunks.push(chunk));
+          res.on("end", () => resolve({ status: res.statusCode!, headers: res.headers, body: Buffer.concat(chunks) }));
+        })
+        .on("error", reject);
+    });
+  }
+
+  test("gzips once (not twice) when the client accepts gzip, with Vary and an ETag", async () => {
+    body = big;
+    const res = await get({ "Accept-Encoding": "gzip, deflate, br" });
+    expect(res.status).toBe(200);
+    expect(res.headers["content-encoding"]).toBe("gzip");
+    expect(res.headers["content-type"]).toBe("application/json; charset=utf-8");
+    expect(res.headers.vary).toContain("Accept-Encoding");
+    expect(res.headers.etag).toMatch(/^W\/"/);
+    expect(gunzipSync(res.body).toString()).toBe(big);
+  });
+
+  test("plain body without Accept-Encoding gzip; same ETag", async () => {
+    body = big;
+    const zipped = await get({ "Accept-Encoding": "gzip" });
+    const plain = await get({ "Accept-Encoding": "identity" });
+    expect(plain.headers["content-encoding"]).toBeUndefined();
+    expect(plain.body.toString()).toBe(big);
+    expect(plain.headers.etag).toBe(zipped.headers.etag);
+  });
+
+  test("304 without a body when the ETag matches; a new body gets a new ETag", async () => {
+    body = big;
+    const first = await get({ "Accept-Encoding": "gzip" });
+    const again = await get({ "Accept-Encoding": "gzip", "If-None-Match": first.headers.etag! });
+    expect(again.status).toBe(304);
+    expect(again.body.length).toBe(0);
+
+    body = JSON.stringify([{ id: 1 }, ...JSON.parse(big)]);
+    const changed = await get({ "Accept-Encoding": "gzip", "If-None-Match": first.headers.etag! });
+    expect(changed.status).toBe(200);
+    expect(changed.headers.etag).not.toBe(first.headers.etag);
+    expect(gunzipSync(changed.body).toString()).toBe(body);
+  });
+
+  test("small bodies are sent as is", async () => {
+    body = "[]";
+    const res = await get({ "Accept-Encoding": "gzip" });
+    expect(res.headers["content-encoding"]).toBeUndefined();
+    expect(res.body.toString()).toBe("[]");
   });
 });

@@ -4,12 +4,12 @@ import { respond } from "../http/service-error";
 import { getReadState, markArticleRead } from "../services/article-read.service";
 import { sendCachedJson } from "../services/response-cache";
 
-export async function getArticles(_req: Request, res: Response) {
+export async function getArticles(req: Request, res: Response) {
   // Articles are upserted in place (never wiped/reinserted), so natural insertion order
   // no longer reflects publish order. Sort explicitly so clients that assume the newest
   // article is first (e.g. NextHintTimeCard) keep working.
   // Polled by every hunter: one shared body for a moment (articles are only written by the sync cron)
-  return sendCachedJson(res, "articles", () => Article.find(publicArticlesFilter()).sort({ publishAt: -1 }).lean());
+  return sendCachedJson(req, res, "articles", () => Article.find(publicArticlesFilter()).sort({ publishAt: -1 }).lean());
 }
 
 /** The articles the caller read, per article who read it */
