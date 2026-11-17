@@ -422,7 +422,9 @@ In Docker: `docker compose exec server bun run <script>`.
 
 ## API-overzicht
 
-Alle endpoints spreken JSON. Behalve inloggen, uitnodigingen, herstel-links, `/config` en `/app` is een `Authorization: Bearer <token>`-header nodig; beheer-endpoints vereisen een beheerder.
+De meeste endpoints spreken JSON. Uitzonderingen: `/intel-chat` streamt de antwoorden als UI-berichten (AI SDK), `/buildings` geeft vectortegels (`.pbf`), `/branding/logo` en `/life360/avatar/:id` geven een afbeelding, `/app/download` de APK, en `/sentry-tunnel` neemt Sentry-envelopes aan.
+
+Zonder inloggen bereikbaar: inloggen en koppelen, uitnodigingen, herstel-links, `/config`, `/branding/logo`, `/app` en `/sentry-tunnel`. Al het andere vraagt een `Authorization: Bearer <token>`-header; beheer-endpoints vereisen een beheerder.
 
 ### Authenticatie
 
