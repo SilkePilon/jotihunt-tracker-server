@@ -23,7 +23,7 @@ let service: TelegramService;
 const logs: string[] = [];
 const logger = { info: (message: string) => logs.push(message), warn: (message: string) => logs.push(message), error: (message: string) => logs.push(message) };
 
-function createService(config: TelegramConfig | null = CONFIG) {
+function createService(config: TelegramConfig | null = CONFIG, now?: () => Date) {
   return new TelegramService({
     config,
     connection: realDb,
@@ -37,6 +37,7 @@ function createService(config: TelegramConfig | null = CONFIG) {
     retryInitialMs: 5,
     retryMaxMs: 20,
     alertRetryMs: 5,
+    now,
   });
 }
 
@@ -291,6 +292,12 @@ describe("listening", () => {
 });
 
 describe("bot messages", () => {
+  // Bot messages are dated 2026-10-17 19:14: a clock a few minutes later keeps a tegenhunt inside its 30-minute window
+  beforeEach(() => {
+    service.stop();
+    service = createService(CONFIG, () => new Date("2026-10-17T19:20:00Z"));
+  });
+
   test("only the bot's messages are stored, newest first, with their kind", async () => {
     await service.handleMessage(botMessage(1, "Je hunt is goedgekeurd"));
     await service.handleMessage({ ...botMessage(2, "Hoi"), senderUsername: "iemand" });
