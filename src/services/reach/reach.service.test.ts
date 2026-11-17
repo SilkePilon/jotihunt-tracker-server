@@ -94,6 +94,21 @@ describe("reach service", () => {
     expect(calls).toHaveLength(1);
   });
 
+  test("an edition switch (new database generation) never serves the memo of the other database", async () => {
+    await Area.create([{ name: "Alpha", status: "green", updatedAt: t("09:00") }]);
+    await Marker.create([{ area: "alpha", time: t("13:00"), location: point(start), type: MarkerType.Hint }]);
+    const { router } = fakeRouter(async () => square);
+    let generation = 1;
+    const service = createReachService({ router, trails: noTrails, now: () => t("14:00"), configured: () => true, visits: async () => [], dbGeneration: () => generation });
+    expect((await service.reach()).areas).toHaveLength(1);
+    // The other edition's database has no markers
+    await Marker.deleteMany({});
+    expect((await service.reach()).areas).toHaveLength(1);
+    generation = 2;
+    expect((await service.reach()).areas).toHaveLength(0);
+    expect(await service.reachJson()).toBe(JSON.stringify({ enabled: true, areas: [] }));
+  });
+
   describe("spots between hints", () => {
     async function setup(secondMode: "walk" | "car") {
       await Area.create([{ name: "Alpha", status: "green", updatedAt: t("09:00") }]);

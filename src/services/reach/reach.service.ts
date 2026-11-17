@@ -1,3 +1,4 @@
+import { currentGeneration } from "../../editions/work-tracking";
 import { logger } from "../../logger";
 import { Area } from "../../models/area.model";
 import { AreaStatusEvent } from "../../models/area-status-event.model";
@@ -60,6 +61,8 @@ export function createReachService(deps: {
   configured?: () => boolean;
   /** Geometry helpers, replaceable in tests */
   shapes?: Partial<Shapes>;
+  /** Database generation (edition switches); tests only */
+  dbGeneration?: () => number;
 }) {
   const { coneIn, nearestUnvisited, reachCircle, roundGeometry, simplifyArea }: Shapes = { ...shapeFns, ...deps.shapes };
   const now = deps.now ?? (() => new Date());
@@ -67,8 +70,10 @@ export function createReachService(deps: {
   const visits = deps.visits ?? listCurrentVisits;
   const isoCache = new Map<string, AreaGeometry>();
   let cooldownUntil = 0;
-  let memo: { at: number; value: ReachResponse; body: string } | null = null;
-  let inflight: Promise<{ at: number; value: ReachResponse; body: string }> | null = null;
+  const dbGeneration = deps.dbGeneration ?? currentGeneration;
+  type Memo = { at: number; generation: number; value: ReachResponse; body: string };
+  let memo: Memo | null = null;
+  let inflight: { generation: number; promise: Promise<Memo> } | null = null;
   const logged = new Set<string>();
 
   /** Logs a per-area failure once per area + fix + kind, not on every compute. */
@@ -207,13 +212,18 @@ export function createReachService(deps: {
     return { enabled: true, areas: result.filter((r): r is AreaReach => r !== null) };
   }
 
-  async function current() {
-    if (memo && now().getTime() - memo.at < MEMO_MS) return memo;
-    if (inflight) return inflight;
-    inflight = compute()
-      .then((value) => (memo = { at: now().getTime(), value, body: JSON.stringify(value) }))
-      .finally(() => { inflight = null; });
-    return inflight;
+  /** Memo and computation belong to one database generation: after an edition switch the other database is never served. */
+  async function current(): Promise<Memo> {
+    const generation = dbGeneration();
+    if (memo && memo.generation === generation && now().getTime() - memo.at < MEMO_MS) return memo;
+    if (inflight && inflight.generation === generation) return inflight.promise;
+    const promise = compute()
+      .then((value): Memo => ({ at: now().getTime(), generation, value, body: JSON.stringify(value) }))
+      .finally(() => { if (inflight?.promise === promise) inflight = null; });
+    inflight = { generation, promise };
+    const result = await promise;
+    if (dbGeneration() === generation) memo = result;
+    return result;
   }
 
   return {
