@@ -33,7 +33,7 @@ async function view(articleId: number) {
 export type AssignmentView = Awaited<ReturnType<typeof view>>;
 
 /** Schema defaults of SiteSubmission fields that older documents may lack */
-const SITE_DEFAULTS = { imageUrl: null, answerText: null, rating: null, judgement: null, judged: false, points: null };
+const SITE_DEFAULTS = { submitted: false, imageUrl: null, answerText: null, rating: null, judgement: null, judged: false, points: null };
 
 /**
  * Every assignment that has bookkeeping; articles without a document are open and unowned. Lean (polled by every
