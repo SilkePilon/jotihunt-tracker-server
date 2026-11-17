@@ -113,6 +113,18 @@ describe("session cache", () => {
     expect((await authenticate(token)).status).toBe(401);
   });
 
+  test("deleting a session or user document (doc.deleteOne) logs out at once", async () => {
+    // Mongoose runs the deleteOne query hooks (filter { _id }) for a document delete too, before and after it
+    const { user, token, sessionId } = await login();
+    const other = await createSession(user._id, { label: "Ander", via: "passkey" });
+    await authenticate(token);
+    await authenticate(other.token);
+    await (await sessions().findById(sessionId))!.deleteOne();
+    expect((await authenticate(token)).status).toBe(401);
+    await (await User.findById(user._id))!.deleteOne();
+    expect((await authenticate(other.token)).status).toBe(401);
+  });
+
   test("role, name and passkey changes show on the next request", async () => {
     const { user, token } = await login();
     await authenticate(token);
