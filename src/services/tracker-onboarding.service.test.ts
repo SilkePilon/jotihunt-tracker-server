@@ -74,13 +74,18 @@ async function makeUser() {
 }
 
 /** `clientUrl: null` simulates an unset TRACCAR_CLIENT_URL. */
-function service(traccar: ReturnType<typeof fakeTraccar> | null, clientUrl: string | null = CLIENT_URL) {
+function service(
+  traccar: ReturnType<typeof fakeTraccar> | null,
+  clientUrl: string | null = CLIENT_URL,
+  extra: { now?: () => Date; shared?: Parameters<typeof createTrackerOnboarding>[0]["shared"] } = {},
+) {
   const errors: unknown[] = [];
   const onboarding = createTrackerOnboarding({
     api: traccar?.api ?? null,
     clientUrl: clientUrl ?? undefined,
     groups: GROUPS,
-    now: () => NOW,
+    now: extra.now ?? (() => NOW),
+    shared: extra.shared,
     onError: (error) => errors.push(error),
   });
   return { onboarding, errors };
@@ -236,6 +241,113 @@ describe("getMe", () => {
     const me = await service(traccar).onboarding.getMe(user);
     expect(me).toMatchObject({ connected: false, stats: { lastUpdate: "2026-10-17T11:54:00.000Z", speedKmh: 0, accuracyM: 12 } });
     expect(me.configured && me.stats.distanceTodayM).toBeUndefined();
+  });
+});
+
+describe("getMe with shared lists", () => {
+  /** Shared lists backed by the fake Traccar's maps; counts how often each list was read. */
+  function sharedLists(traccar: ReturnType<typeof fakeTraccar>) {
+    const reads = { devices: 0, positions: 0 };
+    return {
+      reads,
+      shared: {
+        devices: async () => {
+          reads.devices++;
+          return [...traccar.devices.values()];
+        },
+        positions: async () => {
+          reads.positions++;
+          return [...traccar.positions.values()];
+        },
+      },
+    };
+  }
+
+  function seed(traccar: ReturnType<typeof fakeTraccar>, uniqueId: string) {
+    traccar.devices.set(7, { id: 7, name: "Hunter Een", uniqueId, groupId: 3, positionId: 70, lastUpdate: "2026-10-17T11:58:00.000Z" });
+    traccar.positions.set(70, { id: 70, deviceId: 7, speed: 2.5, accuracy: 6.2, attributes: { batteryLevel: 76 } });
+    traccar.distances.set(7, 4321.4);
+  }
+
+  test("reads device and position from the shared lists: only the distance report hits Traccar", async () => {
+    const user = await makeUser();
+    const traccar = fakeTraccar();
+    seed(traccar, deriveUniqueId(user._id.toString()));
+    const { shared, reads } = sharedLists(traccar);
+
+    const me = await service(traccar, CLIENT_URL, { shared }).onboarding.getMe(user);
+    expect(me).toMatchObject({ configured: true, connected: true, stats: { speedKmh: 4.6, battery: 76, distanceTodayM: 4321 } });
+    expect(traccar.calls.map((call) => call.split(" ")[0])).toEqual(["distance"]);
+    expect(reads).toEqual({ devices: 1, positions: 1 });
+  });
+
+  test("falls back to Traccar when the shared lists miss the entry or fail", async () => {
+    const user = await makeUser();
+    const uniqueId = deriveUniqueId(user._id.toString());
+    const traccar = fakeTraccar();
+    seed(traccar, uniqueId);
+    const failing = {
+      devices: async () => {
+        throw new Error("down");
+      },
+      positions: async () => [],
+    };
+
+    const me = await service(traccar, CLIENT_URL, { shared: failing }).onboarding.getMe(user);
+    expect(me).toMatchObject({ configured: true, stats: { battery: 76 } });
+    expect(traccar.calls).toContain(`find ${uniqueId}`);
+    expect(traccar.calls).toContain("position 70");
+  });
+
+  test("a new device that the shared list does not know yet is still found or created via Traccar", async () => {
+    const user = await makeUser();
+    const traccar = fakeTraccar();
+    const me = await service(traccar, CLIENT_URL, { shared: { devices: async () => [], positions: async () => [] } }).onboarding.getMe(user);
+    expect(me).toMatchObject({ configured: true, vehicle: "walking" });
+    expect(traccar.calls.filter((call) => call.startsWith("create"))).toHaveLength(1);
+  });
+
+  test("the distance report is cached per device for a minute and refreshed after", async () => {
+    const user = await makeUser();
+    const traccar = fakeTraccar();
+    seed(traccar, deriveUniqueId(user._id.toString()));
+    let now = NOW;
+    const { onboarding } = service(traccar, CLIENT_URL, { shared: sharedLists(traccar).shared, now: () => now });
+    const distanceCalls = () => traccar.calls.filter((call) => call.startsWith("distance")).length;
+
+    await onboarding.getMe(user);
+    traccar.distances.set(7, 5000);
+    now = new Date(NOW.getTime() + 30_000);
+    expect(await onboarding.getMe(user)).toMatchObject({ stats: { distanceTodayM: 4321 } });
+    expect(distanceCalls()).toBe(1);
+
+    now = new Date(NOW.getTime() + 61_000);
+    expect(await onboarding.getMe(user)).toMatchObject({ stats: { distanceTodayM: 5000 } });
+    expect(distanceCalls()).toBe(2);
+  });
+
+  test("a failed distance report is not cached", async () => {
+    const user = await makeUser();
+    const traccar = fakeTraccar();
+    seed(traccar, deriveUniqueId(user._id.toString()));
+    traccar.distances.delete(7);
+    const { onboarding } = service(traccar, CLIENT_URL, { shared: sharedLists(traccar).shared });
+
+    const first = await onboarding.getMe(user);
+    expect(first.configured && first.stats.distanceTodayM).toBeUndefined();
+    traccar.distances.set(7, 100);
+    expect(await onboarding.getMe(user)).toMatchObject({ stats: { distanceTodayM: 100 } });
+  });
+
+  test("setVehicle reads the device fresh from Traccar, not from the shared list", async () => {
+    const user = await makeUser();
+    const uniqueId = deriveUniqueId(user._id.toString());
+    const traccar = fakeTraccar();
+    seed(traccar, uniqueId);
+    const { onboarding } = service(traccar, CLIENT_URL, { shared: sharedLists(traccar).shared });
+    await onboarding.setVehicle(user, "bike");
+    expect(traccar.calls).toContain(`find ${uniqueId}`);
+    expect(traccar.devices.get(7)?.groupId).toBe(5);
   });
 });
 
