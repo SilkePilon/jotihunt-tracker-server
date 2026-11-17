@@ -56,17 +56,17 @@ Backend van de Jotihunt Tracker: één Express-API (op [Bun](https://bun.sh/), m
 
 ```mermaid
 flowchart LR
-  client[Webapp / Android-app] -->|REST + SSE| server[Server<br/>Express op Bun]
-  server --> mongo[(MongoDB)]
-  server --> traccar[Traccar]
-  server --> jh[jotihunt.nl<br/>API + website]
-  server --> tg[Telegram<br/>@Jotihunt_bot]
-  server --> l360[Life360]
-  server --> jb[Jotiboard]
-  server --> router[GraphHopper-router]
-  server --> gemini[Google Gemini]
-  server --> push[Web Push]
-  server --> sentry[Sentry]
+  client["Webapp / Android-app"] -->|"REST + SSE"| server["Server<br/>Express op Bun"]
+  server --> mongo[("MongoDB")]
+  server --> traccar["Traccar"]
+  server --> jh["jotihunt.nl<br/>API + website"]
+  server --> tg["Telegram<br/>@Jotihunt_bot"]
+  server --> l360["Life360"]
+  server --> jb["Jotiboard"]
+  server --> router["GraphHopper-router"]
+  server --> gemini["Google Gemini"]
+  server --> push["Web Push"]
+  server --> sentry["Sentry"]
 ```
 
 | Onderdeel | Rol | Nodig? |
