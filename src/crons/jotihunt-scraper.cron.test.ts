@@ -3,6 +3,7 @@ import { dropLegacyHuntCodeIndex, Hunt } from "../models/hunt.model";
 import { clearTestDb, connectTestDb, disconnectTestDb } from "../test/db";
 import { assignSiteKeys, type ScrapedHunt } from "../services/jotihunt-hunts.parse";
 import { HuntSyncEvent } from "../models/hunt-sync-event.model";
+import { cachedJson } from "../services/response-cache";
 import { keepStoredDates, storeHunts } from "./jotihunt-scraper.cron";
 
 const time = new Date("2026-10-17T19:03:00Z");
@@ -123,6 +124,54 @@ describe("storeHunts", () => {
     expect(await storeHunts([web("A", { statusText: "Afgekeurd" }), web("B"), web(null), web(null, { area: "Charlie" })])).toMatchObject({ deleted: true });
     expect(await Hunt.countDocuments()).toBe(4);
     expect(await Hunt.findById(old.insertedId).lean()).toMatchObject({ siteKey: "code:A", status: "Afgekeurd" });
+  });
+});
+
+describe("storeHunts: unchanged hunts are not written", () => {
+  /** Builds of the cached hunt list: a hunt write clears it, so the next read builds again */
+  let builds = 0;
+  const readList = () =>
+    cachedJson(
+      "hunts",
+      async () => {
+        builds++;
+        return [];
+      },
+      60_000,
+    );
+
+  test("the same scrape again writes nothing: updatedAt and the cached lists stay", async () => {
+    const first = new Date("2026-10-17T19:05:00Z");
+    await storeHunts(["A", "B"].map(hunt), first);
+    await readList();
+    const before = builds;
+    await storeHunts(["A", "B"].map(hunt), new Date(first.getTime() + 60_000));
+    await readList();
+    expect(builds).toBe(before);
+    expect((await Hunt.find().lean()).map((stored) => stored.updatedAt.getTime())).toEqual([first.getTime(), first.getTime()]);
+  });
+
+  test("a changed field writes that hunt only", async () => {
+    const first = new Date("2026-10-17T19:05:00Z");
+    const later = new Date(first.getTime() + 60_000);
+    await storeHunts([hunt("A"), web("B", { status: "pending", statusText: "Wacht", points: 0 })], first);
+    await readList();
+    const before = builds;
+    await storeHunts([hunt("A"), web("B")], later);
+    await readList();
+    expect(builds).toBe(before + 1);
+    const byCode = new Map((await Hunt.find().lean()).map((stored) => [stored.huntCode, stored]));
+    expect(byCode.get("A")!.updatedAt.getTime()).toBe(first.getTime());
+    expect(byCode.get("B")).toMatchObject({ status: "Goedgekeurd", statusClass: "approved", points: 1 });
+    expect(byCode.get("B")!.updatedAt.getTime()).toBe(later.getTime());
+  });
+
+  test("an old document missing a field the scrape sets is written once", async () => {
+    await Hunt.create({ siteKey: "code:A", area: "Alpha", huntCode: "A", status: "Goedgekeurd", points: 1, huntTime: time, updatedAt: time });
+    const now = new Date("2026-10-17T19:05:00Z");
+    await storeHunts([hunt("A")], now);
+    expect(await Hunt.findOne().lean()).toMatchObject({ statusClass: "approved", statusText: "Goedgekeurd", huntTimeText: "21:03" });
+    expect((await Hunt.findOne().lean())!.updatedAt.getTime()).toBe(now.getTime());
   });
 });
 
