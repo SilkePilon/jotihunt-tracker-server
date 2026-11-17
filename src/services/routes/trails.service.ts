@@ -194,6 +194,8 @@ export function createTrailsService(deps: {
       }
       if (!wanted.length) return;
       for (const doc of await RouteLeg.find({ key: { $in: wanted } }).lean()) {
+        // An empty stored leg is no route: leave it to routing or the straight-line fallback
+        if (!(doc.coordinates as unknown as Coord[] | undefined)?.length) continue;
         // Legs stored before routes were compacted stay in Mongo for CACHE_DAYS: compact them here (once per process)
         const route = { coordinates: compactLine(doc.coordinates as unknown as Coord[]), distanceM: doc.distanceM, durationS: doc.durationS, nightFallback: doc.nightFallback ?? false };
         cache.set(doc.key, route);

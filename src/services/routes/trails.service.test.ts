@@ -268,6 +268,21 @@ describe("trails service", () => {
     expect(trails.features[0].geometry.coordinates).toEqual([[5.9, 52], [5.95, 52]]);
   });
 
+  test("an empty cached route leg is routed again, not drawn as an empty line", async () => {
+    await Marker.create([
+      { area: "alpha", time: t("10:00"), location: point(5.9, 52.0), type: MarkerType.Hint },
+      { area: "alpha", time: t("11:00"), location: point(5.95, 52.0), type: MarkerType.Hint },
+    ]);
+    const first = fakeRouter(30);
+    await createTrailsService({ router: first.router, now: () => t("12:00") }).trails();
+    await RouteLeg.updateMany({}, { $set: { coordinates: [] } });
+
+    const { router, calls } = fakeRouter(30);
+    const { trails } = await createTrailsService({ router, now: () => t("12:00") }).trails();
+    expect(calls).toHaveLength(1);
+    expect(trails.features[0].geometry.coordinates.length).toBeGreaterThanOrEqual(2);
+  });
+
   test("resolved routes are reused from memory without querying Mongo", async () => {
     await Marker.create([
       { area: "alpha", time: t("10:00"), location: point(5.9, 52.0), type: MarkerType.Hint },
