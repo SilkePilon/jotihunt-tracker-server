@@ -89,7 +89,7 @@ export async function sendPreparedJson(req: Request, res: Response, endpoint: st
   const entry = prepare(endpoint, body);
   res.set("Content-Type", "application/json; charset=utf-8");
   res.set("ETag", entry.etag);
-  res.set("Vary", "Accept-Encoding");
+  res.vary("Accept-Encoding");
   res.status(200);
   if (req.fresh) return res.status(304).end();
   if (Buffer.byteLength(body) < GZIP_THRESHOLD_BYTES || !acceptsGzip(req)) return res.send(body);
