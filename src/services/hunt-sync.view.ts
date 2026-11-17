@@ -3,6 +3,7 @@ import { Hunt } from "../models/hunt.model";
 import { HuntSyncEvent } from "../models/hunt-sync-event.model";
 import { isArchiveShown } from "../editions/work-tracking";
 import { syncStateView } from "./hunt-sync-state";
+import { cachedJson } from "./response-cache";
 import { classifyStatus, type HuntStatusClass } from "./jotihunt-hunts.parse";
 import type { HuntSyncEventType } from "./hunt-sync-diff";
 
@@ -114,7 +115,10 @@ export async function listSyncedHunts(): Promise<SyncedHuntView[]> {
   return hunts.sort((a, b) => time(b) - time(a)).map(toSyncedHuntView);
 }
 
-export async function huntSyncStatus(): Promise<HuntSyncStatusView> {
+type HuntTotals = Pick<HuntSyncStatusView, "counts" | "points">;
+
+/** Counts per status class and the points sum of all synced hunts */
+async function huntTotals(): Promise<HuntTotals> {
   const hunts = (await Hunt.find().select("status statusClass points").lean()) as Pick<StoredHunt, "status" | "statusClass" | "points">[];
   const counts = { approved: 0, pending: 0, rejected: 0, total: hunts.length };
   let points = 0;
@@ -125,6 +129,17 @@ export async function huntSyncStatus(): Promise<HuntSyncStatusView> {
     else counts.pending++;
     points += Number.isFinite(hunt.points) ? hunt.points : 0;
   }
+  return { counts, points };
+}
+
+/**
+ * Totals only change with a hunt write, which clears them (model middleware); the TTL is only a safety net, kept short
+ * for writes whose post hooks never ran (a write that Mongo applied but that rejected on our side).
+ */
+export const HUNT_TOTALS_TTL_MS = 10_000;
+
+export async function huntSyncStatus(): Promise<HuntSyncStatusView> {
+  const { counts, points } = JSON.parse(await cachedJson("hunt-counts", huntTotals, HUNT_TOTALS_TTL_MS)) as HuntTotals;
   // An archive is never scraped: no sync times (the client then shows its hunts and points without a "x s geleden")
   const state = isArchiveShown() ? { configured: true, running: false, lastSuccessAt: null, lastAttemptAt: null, lastError: null } : syncStateView();
   return { ...state, counts, points };

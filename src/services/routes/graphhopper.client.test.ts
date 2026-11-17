@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { RoutingUnavailableError } from "../prediction/routing";
-import { buildNightCustomModel, createGraphHopperRouter, type GetFn, type NightArea } from "./graphhopper.client";
+import { buildNightCustomModel, compactLine, createGraphHopperRouter, type GetFn, type NightArea } from "./graphhopper.client";
 
 const square: GeoJSON.Polygon = { type: "Polygon", coordinates: [[[5.8, 52], [5.81, 52], [5.81, 52.01], [5.8, 52.01], [5.8, 52]]] };
 const areas: NightArea[] = [
@@ -61,6 +61,8 @@ describe("createGraphHopperRouter", () => {
     }
     const noPoints = createGraphHopperRouter("http://gh:8989", { post: async () => ({ status: 200, json: { paths: [{ distance: 1, time: 1000 }] } }) });
     await expect(noPoints.route(req)).rejects.toMatchObject({ kind: "temporary" });
+    const emptyPoints = createGraphHopperRouter("http://gh:8989", { post: async () => ({ status: 200, json: { paths: [{ distance: 1, time: 1000, points: { coordinates: [] } }] } }) });
+    await expect(emptyPoints.route(req)).rejects.toMatchObject({ kind: "temporary" });
   });
 });
 
@@ -89,5 +91,49 @@ describe("isochrone", () => {
     expect(await kindFor(async () => ({ status: 429, json: null }))).toBe("temporary");
     expect(await kindFor(async () => ({ status: 200, json: { polygons: [] } }))).toBe("temporary");
     expect(await kindFor(async () => { throw new Error("ECONNREFUSED"); })).toBe("temporary");
+  });
+});
+
+describe("compactLine", () => {
+  test("drops points on a straight stretch, keeps both ends and the corner", () => {
+    const line: [number, number][] = [];
+    for (let i = 0; i <= 20; i++) line.push([5.8 + i * 0.0001, 52]);
+    for (let i = 1; i <= 20; i++) line.push([5.802, 52 + i * 0.0001]);
+    expect(compactLine(line)).toEqual([
+      [5.8, 52],
+      [5.802, 52],
+      [5.802, 52.002],
+    ]);
+  });
+
+  test("rounds to 5 decimals and drops repeated points", () => {
+    expect(
+      compactLine([
+        [5.8123456, 52.1234561],
+        [5.8123459, 52.1234564],
+        [5.9, 52.2],
+      ]),
+    ).toEqual([
+      [5.81235, 52.12346],
+      [5.9, 52.2],
+    ]);
+  });
+
+  test("a line whose ends round to the same spot still has two points", () => {
+    expect(compactLine([[5.8, 52], [5.800001, 52.000001]])).toEqual([[5.8, 52], [5.8, 52]]);
+  });
+
+  test("a single point becomes a two-point line; no points stay none", () => {
+    expect(compactLine([[5.8000012, 52.0000012]])).toEqual([[5.8, 52], [5.8, 52]]);
+    expect(compactLine([])).toEqual([]);
+  });
+
+  test("the router returns the compacted line", async () => {
+    const coordinates: [number, number][] = [[5.8, 52], [5.80001, 52.0000001], [5.80002, 52], [5.81, 52.01]];
+    const router = createGraphHopperRouter("http://gh.test", {
+      post: async () => ({ status: 200, json: { paths: [{ distance: 1, time: 1000, points: { coordinates } }] } }),
+    });
+    const result = await router.route({ profile: "foot", from: [5.8, 52], to: [5.81, 52.01], night: false, nightAreas: [] });
+    expect(result.coordinates).toEqual([[5.8, 52], [5.81, 52.01]]);
   });
 });

@@ -9,6 +9,7 @@ import { setAuthConnection } from "./auth/auth-db";
 import { ensurePasswordless } from "./auth/migrate";
 import { initAppConfig, onAppConfigChange, setHuntTimesSource, settingsKeyOk } from "./settings/app-config";
 import { aiAvailable } from "./services/ai/model";
+import { clearSessionCache } from "./auth/session-cache";
 import { editionHuntTimesSource, getControlStore, initEditions, liveConnection, onEditionSwitch } from "./editions/database-switch";
 import { initEditionSettings } from "./editions/edition-settings-store";
 import { syncVehicleGroups } from "./services/tracker-onboarding.helpers";
@@ -101,6 +102,9 @@ for (const connection of mongoose.connection.name === live.name ? [live] : [live
     .then(({ cleaned, handles }) => logger.info(`Passwordless migration (${connection.name}): removed password data from ${cleaned} users, added WebAuthn handles to ${handles}`))
     .catch((error) => logger.error(`Passwordless migration of ${connection.name} failed`, error));
 }
+// The migration writes users without Mongoose; a switch shows another database's users
+clearSessionCache();
+onEditionSwitch(() => clearSessionCache());
 
 // Summaries (v3) and AI hint splits (s2) are keyed on the article's text (textHash): give older articles their textHash
 // and re-key their still-current v2 summaries and raw-HTML hint splits, so none is made again (idempotent; game data,

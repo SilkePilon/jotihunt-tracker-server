@@ -246,6 +246,43 @@ describe("trails service", () => {
     expect(JSON.parse(switched).trails.features).toHaveLength(2);
   });
 
+  test("route legs cached before compaction come back compacted", async () => {
+    await Marker.create([
+      { area: "alpha", time: t("10:00"), location: point(5.9, 52.0), type: MarkerType.Hint },
+      { area: "alpha", time: t("11:00"), location: point(5.95, 52.0), type: MarkerType.Hint },
+    ]);
+    // A dense, unrounded line straight from the router, stored like before compaction existed
+    const dense: Router = {
+      async route(request) {
+        const coordinates: [number, number][] = [];
+        for (let i = 0; i <= 50; i++) coordinates.push([request.from[0] + ((request.to[0] - request.from[0]) * i) / 50 + 1e-9, request.from[1]]);
+        return { coordinates, distanceM: 3500, durationS: 2400 };
+      },
+    };
+    await createTrailsService({ router: dense, now: () => t("12:00") }).trails();
+    expect((await RouteLeg.findOne().lean())!.coordinates).toHaveLength(51);
+
+    const { router, calls } = fakeRouter(30);
+    const { trails } = await createTrailsService({ router, now: () => t("12:00") }).trails();
+    expect(calls).toHaveLength(0);
+    expect(trails.features[0].geometry.coordinates).toEqual([[5.9, 52], [5.95, 52]]);
+  });
+
+  test("an empty cached route leg is routed again, not drawn as an empty line", async () => {
+    await Marker.create([
+      { area: "alpha", time: t("10:00"), location: point(5.9, 52.0), type: MarkerType.Hint },
+      { area: "alpha", time: t("11:00"), location: point(5.95, 52.0), type: MarkerType.Hint },
+    ]);
+    const first = fakeRouter(30);
+    await createTrailsService({ router: first.router, now: () => t("12:00") }).trails();
+    await RouteLeg.updateMany({}, { $set: { coordinates: [] } });
+
+    const { router, calls } = fakeRouter(30);
+    const { trails } = await createTrailsService({ router, now: () => t("12:00") }).trails();
+    expect(calls).toHaveLength(1);
+    expect(trails.features[0].geometry.coordinates.length).toBeGreaterThanOrEqual(2);
+  });
+
   test("resolved routes are reused from memory without querying Mongo", async () => {
     await Marker.create([
       { area: "alpha", time: t("10:00"), location: point(5.9, 52.0), type: MarkerType.Hint },

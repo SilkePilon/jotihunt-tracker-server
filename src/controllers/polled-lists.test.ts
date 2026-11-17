@@ -29,6 +29,11 @@ function fakeRes() {
       res.headers[name.toLowerCase()] = value;
       return res;
     },
+    vary(field: string) {
+      const current = res.headers.vary;
+      res.headers.vary = current ? `${current}, ${field}` : field;
+      return res;
+    },
     setHeader(name: string, value: string) {
       return res.set(name, value);
     },

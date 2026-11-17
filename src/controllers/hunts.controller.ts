@@ -3,8 +3,8 @@ import { sendCachedJson } from "../services/response-cache";
 import { huntSyncStatus, listHuntSyncEvents, listSyncedHunts } from "../services/hunt-sync.view";
 
 /** Polled by every hunter: one shared body for a moment (hunts are only written by the scraper cron) */
-export async function getHunts(_req: Request, res: Response) {
-  return sendCachedJson(res, "hunts", listSyncedHunts);
+export async function getHunts(req: Request, res: Response) {
+  return sendCachedJson(req, res, "hunts", listSyncedHunts);
 }
 
 /** The sync with jotihunt.nl: state, counts and points (the Hunts card) */

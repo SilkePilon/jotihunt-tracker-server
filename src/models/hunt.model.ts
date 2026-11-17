@@ -118,9 +118,12 @@ const HuntSchema = new mongoose.Schema({
 // Upserted by this key; a duplicate would make the upsert update only one of them. Partial: old hunts without a key
 // don't collide until they are backfilled
 HuntSchema.index({ siteKey: 1 }, { unique: true, partialFilterExpression: { siteKey: { $type: "string" } } });
+// The scraper's delete window and re-key lookup (every minute), clock-only re-dating and the fox history: by hunt time
+HuntSchema.index({ huntTime: 1 });
 
 // GET /hunts is cached for a moment; every write clears it
 invalidateOnWrite(HuntSchema, "hunts");
+invalidateOnWrite(HuntSchema, "hunt-counts");
 
 export const Hunt = mongoose.model("Hunt", HuntSchema);
 export type HuntDoc = InferSchemaType<typeof HuntSchema> & { _id: mongoose.Types.ObjectId };

@@ -2,15 +2,15 @@ import { Request, Response } from "express";
 import * as board from "../services/hint-board.service";
 import { respond } from "../http/service-error";
 import { parseRdAnswer } from "../services/rd-answer";
+import { sendPreparedJson } from "../services/response-cache";
 
 function cellKey(req: Request) {
   return { articleId: Number(req.params.articleId), area: String(req.params.area).toLowerCase() };
 }
 
 /** Sent as prebuilt JSON (shared between users for ~1.5 s); same body and headers as res.json(board). */
-export async function getBoard(_req: Request, res: Response) {
-  const json = await board.getBoardJson();
-  return res.status(200).type("json").send(json);
+export async function getBoard(req: Request, res: Response) {
+  return sendPreparedJson(req, res, "hint-board", await board.getBoardJson());
 }
 
 export function parseAnswer(req: Request, res: Response) {

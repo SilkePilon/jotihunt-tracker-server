@@ -1,8 +1,9 @@
 import { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
-import { User } from "../models/user.model";
+import { User, type UserType } from "../models/user.model";
 import { logger } from "../logger";
 import { useSession } from "../auth/sessions";
+import { cacheSession, getCachedSession, sessionCacheEpoch } from "../auth/session-cache";
 import { updateAccounts } from "../auth/user-store";
 import { isObjectIdString } from "../utils/mongo";
 
@@ -36,10 +37,7 @@ export default async function verifyToken(req: Request, res: Response, next: Nex
 
   if (decoded.sid !== undefined) {
     if (!isObjectIdString(decoded.sid)) return denied(res);
-    // Database errors reject: Express 5 passes them to the error handler
-    const session = await useSession(decoded.sid);
-    if (!session) return denied(res);
-    const user = await User.findById(session.user, WITHOUT_READ_STATE);
+    const user = await sessionUser(decoded.sid);
     if (!user) return denied(res);
     req.user = user;
     res.locals.sessionId = decoded.sid;
@@ -59,6 +57,23 @@ export default async function verifyToken(req: Request, res: Response, next: Nex
   res.locals.deviceId = device.id;
   req.user = user;
   next();
+}
+
+/**
+ * The user of a live web session, from the session cache when possible (the cache is invalidated by every session or
+ * user write). Each request gets its own freshly hydrated document, so changes to req.user never leak between requests.
+ * Database errors reject: Express 5 passes them to the error handler.
+ */
+async function sessionUser(sessionId: string): Promise<UserType | null> {
+  const cached = getCachedSession(sessionId);
+  if (cached) return User.hydrate(cached.user, WITHOUT_READ_STATE) as UserType;
+  const epoch = sessionCacheEpoch();
+  const session = await useSession(sessionId);
+  if (!session) return null;
+  const lean = await User.findById(session.user, WITHOUT_READ_STATE).lean<Record<string, unknown> & { _id: unknown }>();
+  if (!lean) return null;
+  cacheSession(sessionId, lean, session.expiresAt, epoch);
+  return User.hydrate(lean, WITHOUT_READ_STATE) as UserType;
 }
 
 /** lastSeenAt of a device is written at most this often (every request would be a database write). */

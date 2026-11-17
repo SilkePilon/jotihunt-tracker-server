@@ -41,6 +41,8 @@ const MarkerSchema = new mongoose.Schema({
 });
 
 MarkerSchema.index({ area: 1, time: 1 }, { unique: true, partialFilterExpression: { type: "hint" } });
+// Synced markers by origin (hunt sync each minute, Jotiboard import, re-keyed hunts); markers without a source stay out
+MarkerSchema.index({ source: 1, externalId: 1 }, { partialFilterExpression: { source: { $exists: true } } });
 
 // GET /markers is cached for a moment; every write clears it
 invalidateOnWrite(MarkerSchema, "markers");

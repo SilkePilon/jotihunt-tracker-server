@@ -26,6 +26,9 @@ const HuntSyncEventSchema = new mongoose.Schema({
 
 // Newest first, paged by `at`
 HuntSyncEventSchema.index({ at: -1, _id: -1 });
+// Location updates per hunt (estimate, re-key) and per site key (dismissed location)
+HuntSyncEventSchema.index({ huntId: 1 });
+HuntSyncEventSchema.index({ siteKey: 1 });
 
 export const HuntSyncEvent = mongoose.model("HuntSyncEvent", HuntSyncEventSchema);
 export type HuntSyncEventDoc = InferSchemaType<typeof HuntSyncEventSchema> & { _id: mongoose.Types.ObjectId };

@@ -1,3 +1,5 @@
+import { lineString } from "@turf/helpers";
+import simplify from "@turf/simplify";
 import { RoutingUnavailableError } from "../prediction/routing";
 
 export type NightAreaKind = "closed" | "open";
@@ -11,6 +13,35 @@ export type ReachProfile = "foot" | "foot_night";
 export interface IsochroneRequest { profile: ReachProfile; point: [number, number]; distanceM: number }
 export interface IsochroneRouter { isochrone(request: IsochroneRequest): Promise<GeoJSON.Polygon | GeoJSON.MultiPolygon> }
 export type GetFn = (url: string, timeoutMs: number) => Promise<{ status: number; json: unknown }>;
+
+/** ~5 m: invisible on the map, drops most of GraphHopper's points on straight stretches */
+export const ROUTE_SIMPLIFY_TOLERANCE = 5e-5;
+const round5 = (value: number) => Math.round(value * 1e5) / 1e5;
+
+/**
+ * Smaller route lines for storage (RouteLeg) and the polled trails JSON: Douglas-Peucker simplified, coordinates
+ * rounded to 5 decimals (~1 m), repeated points dropped. The first and last points stay, and any non-empty input
+ * gives at least two points (a single point is doubled) so the result is always a valid LineString.
+ */
+export function compactLine(coordinates: [number, number][]): [number, number][] {
+  if (coordinates.length < 2) {
+    const rounded = coordinates.map(([lng, lat]): [number, number] => [round5(lng), round5(lat)]);
+    return rounded.length === 1 ? [rounded[0], [...rounded[0]]] : rounded;
+  }
+  const simplified =
+    coordinates.length > 2
+      ? (simplify(lineString(coordinates), { tolerance: ROUTE_SIMPLIFY_TOLERANCE, highQuality: false }).geometry.coordinates as [number, number][])
+      : coordinates;
+  const out: [number, number][] = [];
+  for (const [lng, lat] of simplified) {
+    const point: [number, number] = [round5(lng), round5(lat)];
+    const last = out[out.length - 1];
+    if (!last || last[0] !== point[0] || last[1] !== point[1]) out.push(point);
+  }
+  // A line needs two points, also when both ends round to the same spot
+  if (out.length === 1) out.push([...out[0]]);
+  return out;
+}
 
 const UNPAVED = "(road_class == PATH || road_class == FOOTWAY || road_class == TRACK || road_class == BRIDLEWAY)";
 const NIGHT_BLOCK = "foot_temporal_access == NO";
@@ -73,8 +104,8 @@ export function createGraphHopperRouter(baseUrl: string | undefined, deps: { pos
       if (isRequestError(res.status)) throw new RoutingUnavailableError(json.message ?? `Router answered ${res.status}`, { kind: "request" });
       const path = json.paths?.[0];
       if (res.status !== 200 || !path) throw new RoutingUnavailableError(json.message ?? `Router answered ${res.status}`, { kind: "temporary" });
-      if (!Array.isArray(path.points?.coordinates)) throw new RoutingUnavailableError("Router answered without route points", { kind: "temporary" });
-      return { coordinates: path.points.coordinates, distanceM: path.distance, durationS: Math.round(path.time / 1000) };
+      if (!Array.isArray(path.points?.coordinates) || !path.points.coordinates.length) throw new RoutingUnavailableError("Router answered without route points", { kind: "temporary" });
+      return { coordinates: compactLine(path.points.coordinates), distanceM: path.distance, durationS: Math.round(path.time / 1000) };
     },
     /** The area reachable within `distanceM` along the profile's ways (one bucket). */
     async isochrone({ profile, point, distanceM }) {

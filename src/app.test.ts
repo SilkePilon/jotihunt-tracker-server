@@ -76,7 +76,8 @@ describe("auth middleware", () => {
   test("a database error is a 503, not a 401 (clients sign out on 401)", async () => {
     const user = await createUser();
     const error = Object.assign(new Error("connection refused"), { name: "MongoNetworkError" });
-    const spy = spyOn(User, "findById").mockImplementation((() => Promise.reject(error)) as never);
+    // The middleware reads the user lean (findById(...).lean())
+    const spy = spyOn(User, "findById").mockImplementation((() => ({ lean: () => Promise.reject(error) })) as never);
     try {
       const res = await request("/markers", { token: tokenFor(user) });
       expect(res.status).toBe(503);
@@ -88,7 +89,7 @@ describe("auth middleware", () => {
 
   test("other errors are a 500, not a 401", async () => {
     const user = await createUser();
-    const spy = spyOn(User, "findById").mockImplementation((() => Promise.reject(new Error("bug"))) as never);
+    const spy = spyOn(User, "findById").mockImplementation((() => ({ lean: () => Promise.reject(new Error("bug")) })) as never);
     try {
       expect((await request("/markers", { token: tokenFor(user) })).status).toBe(500);
     } finally {

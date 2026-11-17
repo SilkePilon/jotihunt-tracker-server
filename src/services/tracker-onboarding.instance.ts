@@ -1,5 +1,5 @@
 import { logger } from "../logger";
-import { createTraccarApi } from "./traccar-api";
+import { createTraccarApi, type TraccarDeviceDto, type TraccarPositionDto } from "./traccar-api";
 import { describeTraccarError, traccarHttp } from "./traccar-http";
 import * as traccarService from "./traccar.service";
 import { onAppConfigChange } from "../settings/app-config";
@@ -17,4 +17,8 @@ export const onboarding = createTrackerOnboarding({
   clientUrl: process.env.TRACCAR_CLIENT_URL,
   groups: vehicleGroups,
   onError: (error) => logger.warn(`Traccar onboarding: ${describeTraccarError(error)}`),
+  shared: {
+    devices: () => traccarService.getDevices() as unknown as Promise<TraccarDeviceDto[]>,
+    positions: () => traccarService.getPositions() as unknown as Promise<TraccarPositionDto[]>,
+  },
 });

@@ -3,6 +3,7 @@ import type mongoose from "mongoose";
 import { logger } from "../logger";
 import { isObjectIdString } from "../utils/mongo";
 import { sessions, type SessionDoc, type SessionVia } from "./models";
+import { invalidateSession, invalidateUserSessions } from "./session-cache";
 
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /** lastUsedAt/expiresAt are written at most this often (every request would be a database write) */
@@ -42,9 +43,21 @@ export async function useSession(sessionId: string, now = new Date()): Promise<S
 
 export async function revokeSession(sessionId: string): Promise<void> {
   if (!isObjectIdString(sessionId)) return;
-  await sessions().deleteOne({ _id: sessionId });
+  // The Session schema hooks invalidate the session cache too; explicit here so a revoke never depends on them
+  invalidateSession(sessionId);
+  try {
+    await sessions().deleteOne({ _id: sessionId });
+  } finally {
+    // Also when the delete rejects after Mongo applied it (timeout): never keep an entry built in between
+    invalidateSession(sessionId);
+  }
 }
 
 export async function revokeUserSessions(userId: unknown): Promise<void> {
-  await sessions().deleteMany({ user: userId as mongoose.Types.ObjectId });
+  invalidateUserSessions(userId);
+  try {
+    await sessions().deleteMany({ user: userId as mongoose.Types.ObjectId });
+  } finally {
+    invalidateUserSessions(userId);
+  }
 }

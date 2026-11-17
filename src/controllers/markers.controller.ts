@@ -10,8 +10,8 @@ import { forgetDeletedMarker } from "../services/jotiboard.import";
 import { dismissHuntLocation, HUNT_MARKER_SOURCE } from "../services/hunt-sync.service";
 
 /** Polled by every hunter: one shared body for a moment (cleared by every marker write) */
-export async function getMarkers(_req: Request, res: Response) {
-  return sendCachedJson(res, "markers", () => Marker.find().lean());
+export async function getMarkers(req: Request, res: Response) {
+  return sendCachedJson(req, res, "markers", () => Marker.find().lean());
 }
 
 /** Body is validated by markers.route.ts */

@@ -1,48 +1,100 @@
-![GitHub License](https://img.shields.io/github/license/ScoutingScherpenzeel/jotihunt-tracker-server) 
+![GitHub License](https://img.shields.io/github/license/ScoutingScherpenzeel/jotihunt-tracker-server)
 ![GitHub branch status](https://img.shields.io/github/checks-status/ScoutingScherpenzeel/jotihunt-tracker-server/main)
 ![GitHub Release](https://img.shields.io/github/v/release/ScoutingScherpenzeel/jotihunt-tracker-server)
 
----
-
-<img width="978" height="618" alt="Jotihunt Tracker (2)" src="https://github.com/user-attachments/assets/b8efdac6-1beb-40f7-b627-4ec540a4a0d2" />
-
 # 🦊 Jotihunt Tracker - Server
-Volg met gemak de locaties van vossenteams, hunts, hints en hunters tijdens de Jotihunt!
-Met deze server-app heb je een kant-en-klare backend om de voortgang live te volgen en direct op de hoogte te blijven van alle ontwikkelingen.
+
+Backend van de Jotihunt Tracker: één Express-API (op [Bun](https://bun.sh/), met MongoDB) die de vossen, hints, hunts, hunters en berichten van de [Jotihunt](https://jotihunt.nl) bijhoudt. De server haalt zelf gegevens op bij jotihunt.nl, Traccar, Telegram, Life360 en Jotiboard en levert alles aan de webapp en de Android-app.
 
 > [!NOTE]
-> Werkt het beste in combinatie met de [Jotihunt Tracker Client](https://github.com/ScoutingScherpenzeel/jotihunt-tracker-client).
+> Bedoeld voor gebruik met de [Jotihunt Tracker Client](https://github.com/ScoutingScherpenzeel/jotihunt-tracker-client). Zonder client werkt de API wel, maar er is geen andere frontend.
 
-## Features:
-- Real-time locaties van hunters.
-- Registreren van hints.
-- Aanmaken van spots en hunt locaties.
-- Status updates van vossenteams (rood, oranje, groen).
-- Ophalen en opslaan van teams vanuit Jotihunt API.
-- Ophalen en opslaan van gepubliceerde hints en opdrachten vanuit Jotihunt API.
-- Integratie met Traccar GPS tracking server.
-- Eenvoudige authenticatie.
-- Gebruikersbeheer met verschillende rollen (admin, gebruiker).
+<p align="center">
+  <img src="docs/screenshots/desktop-light.webp" alt="De webapp op een laptop: kaart met vossen, groepen en hunters, zijbalk met vossenstatus, hints en hunts" width="820">
+</p>
 
-## 🚀 Gebruik
-Je bent volledig vrij om deze tracker te gebruiken (het is ten slotte open-source). We zouden het echter enorm waarderen als je ons als bron vermeldt wanneer je dat doet.
-Laat het ons vooral weten als je de tracker inzet tijdens jullie Jotihunt, we vinden het superleuk om te horen hoe hij in het veld wordt gebruikt! 😄
+## Inhoud
 
-> [!TIP]
-> Bekijk ook de [Jotihunt Discord Notifier](https://github.com/ScoutingScherpenzeel/jotihunt-discord-notifier) en [Jotihunt Telegram Forwarder](https://github.com/ScoutingScherpenzeel/jotihunt-telegram-forwarder) voor het automatisch ophalen en sturen van hints en opdrachten én het doorsturen van berichten uit Telegram in een Discord-server.
+- [Wat de server doet](#wat-de-server-doet)
+- [Architectuur](#architectuur)
+- [Installatie met Docker Compose](#installatie-met-docker-compose)
+- [Omgevingsvariabelen](#omgevingsvariabelen)
+- [Eerste keer opstarten](#eerste-keer-opstarten)
+- [GPS-tracking](#gps-tracking)
+- [Koppelingen](#koppelingen)
+- [Lokaal ontwikkelen](#lokaal-ontwikkelen)
+- [Scripts](#scripts)
+- [API-overzicht](#api-overzicht)
+- [Prestaties](#prestaties)
+- [Deployment](#deployment)
+- [Bijdragen](#bijdragen)
+- [Licentie](#licentie)
 
-## 🛠️ Installatie
-Deze backend werkt het beste in combinatie met de [Jotihunt Tracker Client](https://github.com/ScoutingScherpenzeel/jotihunt-tracker-client. De client niet gebruiken kan, maar wordt niet aanbevolen en is geen rekening mee gehouden in de code.
-Om de complete app te gebruiken, kun je het beste gebruik maken van [Docker](https://www.docker.com/). Onderstaande installatie zorgt ook voor een [Traccar](https://www.traccar.org/) server, welke je later zelf nog dient te configureren.
-Traccar is de GPS tracker die gebruikt wordt op de telefoons van de hunters.
+## Wat de server doet
 
-### Docker compose
-1. Maak een bestand `docker-compose.yml` aan met de volgende inhoud:
+- **Vossen en gebieden**: deelgebieden en vossenstatus (groen/oranje/rood, plus blauw: Oscar met het OV) uit de Jotihunt-API, met een statusgeschiedenis per vos (`/areas`).
+- **Hints en opdrachten**: nieuws, hints en opdrachten uit de Jotihunt-API. Hints worden per deelgebied gesplitst (regels, en met Gemini nagekeken) en hunters kunnen per vak een antwoord invullen (`/hints`). Wat er per opdracht is ingeleverd en beoordeeld, komt van jotihunt.nl.
+- **Hunts en punten**: de website-scraper logt in op jotihunt.nl en synchroniseert de hunts van de groep (QR-hunts) en de voorlopige score. Hunts met een locatie worden markers op de kaart.
+- **Markers**: hints, hunts en spots die hunters zelf op de kaart zetten, per speelhelft.
+- **Hunters**: live posities uit Traccar, plus koppelen van telefoons (Android-app met koppelcode, iPhone via Traccar Client).
+- **Kaartlagen**: 3D-gebouwen (3DBAG-vectortegels), fastfood (McDonald's, KFC, Burger King uit OpenStreetMap), routes tussen vossenlocaties over echte paden (GraphHopper, 's nachts zonder gesloten bossen) en het bereik van elke vos.
+- **AI (Gemini, optioneel)**: vossenvoorspelling, samenvattingen van nieuws en opdrachten, hint-splitsing en de Intel-chat met eigen tools (app-data, kaart, OV/NS, plaatsen uit OpenStreetMap, luchtfoto's, optioneel zoeken op het web). De AI stelt alleen voor; opslaan doet altijd een mens.
+- **Meldingen**: web push en een meldingenfeed (vossenstatus, hints, nieuws, nieuwe hunts, tegenhunt, happy hour, cooldown, berichten van HQ).
+- **Inloggen zonder wachtwoord**: passkeys, uitnodigingen, herstel-links, inloggen met QR-code en koppelcodes voor de app.
+- **Edities**: elk jaar een eigen database; oude edities blijven als archief (alleen-lezen) te bekijken.
+- **Beheer**: instellingen, gebruikers, invites, koppelingen en AI-modellen via de API in plaats van `.env`.
+
+| Intel (nieuws, hints, opdrachten) | Beheer |
+| --- | --- |
+| <img src="docs/screenshots/intel.webp" alt="Intel-venster met tijdlijn van nieuws en opdrachten en statuskaarten" width="400"> | <img src="docs/screenshots/beheer.webp" alt="Beheer-venster, pagina Algemeen met edities en huntbare vossen" width="400"> |
+
+| HQ-scherm (`/hq`) | Telefoon |
+| --- | --- |
+| <img src="docs/screenshots/hq-wall.webp" alt="HQ-scherm voor de beamer: kaart, klok en status per vos" width="400"> | <img src="docs/screenshots/phone-map.webp" alt="Telefoonweergave met kaart en vossenstatus onderin" width="150"> |
+
+## Architectuur
+
+```mermaid
+flowchart LR
+  client[Webapp / Android-app] -->|REST + SSE| server[Server<br/>Express op Bun]
+  server --> mongo[(MongoDB)]
+  server --> traccar[Traccar]
+  server --> jh[jotihunt.nl<br/>API + website]
+  server --> tg[Telegram<br/>@Jotihunt_bot]
+  server --> l360[Life360]
+  server --> jb[Jotiboard]
+  server --> router[GraphHopper-router]
+  server --> gemini[Google Gemini]
+  server --> push[Web Push]
+  server --> sentry[Sentry]
+```
+
+| Onderdeel | Rol | Nodig? |
+| --- | --- | --- |
+| **MongoDB** | Alle gegevens. Een controledatabase (gebruikers, sessies, instellingen, koppelingen, caches) en per editie een database met spelgegevens. | Ja |
+| **Traccar** | Ontvangt de GPS-posities van de hunters (poort `5055`) en levert ze via de API. | Voor live tracking |
+| **Jotihunt-API** | Deelgebieden, vossenstatus en artikelen, elke 10 seconden. | Ja |
+| **Jotihunt-website** | Scraper met het account van de groep: hunts (elke minuut), voorlopige score en ingeleverde opdrachten. | Optioneel |
+| **Telegram** | Leest de berichten van @Jotihunt_bot aan het groepsaccount: tegenhunts en happy hours worden meldingen. | Optioneel |
+| **Life360** | Posities van teamleden in een Life360-kring, als extra kaartlaag (onofficiële API, alleen in het geheugen). | Optioneel |
+| **Jotiboard** | Neemt pins en hint-oplossingen over van [Jotiboard](https://jotiboard.nl) (alleen lezen). | Optioneel |
+| **GraphHopper-router** | Eigen container (map [`router/`](router/)): looproutes en autoroutes voor de vossensporen. | Optioneel |
+| **Google Gemini** | Vossenvoorspelling, samenvattingen, hint-splitsing, Intel-chat. | Optioneel |
+| **Web Push (VAPID)** | Pushmeldingen naar browsers en de geïnstalleerde PWA. | Optioneel |
+| **Sentry** | Foutmeldingen van server en website (via `/sentry-tunnel`). | Optioneel |
+
+Ontbreekt een optioneel onderdeel, dan logt de server bij het starten een waarschuwing en staat alleen die functie uit.
+
+## Installatie met Docker Compose
+
+Deze installatie start de server, de client, MongoDB en [Traccar](https://www.traccar.org/). Traccar stel je daarna nog zelf in.
+
+1. Maak een `docker-compose.yml`:
+
 ```yaml
-version: "3.9"
 services:
   server:
-    image: ghcr.io/scoutingscherpenzeel/jotihunt-tracker-server:latest # of ":main" voor de laatste ontwikkelversie.
+    image: ghcr.io/scoutingscherpenzeel/jotihunt-tracker-server:latest # of ":main" voor de laatste ontwikkelversie
     restart: unless-stopped
     env_file:
       - .env
@@ -50,270 +102,401 @@ services:
       - "3000:3000"
     volumes:
       - uploads:/usr/src/app/uploads
+      - ./app-releases:/usr/src/app/app-releases # optioneel: APK van de Android-app
   client:
     image: ghcr.io/scoutingscherpenzeel/jotihunt-tracker-client:latest
     restart: unless-stopped
-    ports:
-      - "80:80"
     env_file:
       - .env
+    ports:
+      - "80:80"
   mongodb:
     image: mongo:latest
     restart: unless-stopped
-    env_file:
-      - .env
     volumes:
       - mongodb:/data/db
   traccar:
     image: traccar/traccar:ubuntu
     restart: unless-stopped
     ports:
-      - 5055:5055 # UDP poort voor GPS trackers
-      - 8082:8082 # Webinterface en API
+      - 5055:5055 # posities van de telefoons
+      - 8082:8082 # webinterface en API
     volumes:
       - traccar_logs:/opt/traccar/logs
       - traccar_data:/opt/traccar/data
       - traccar_conf:/opt/traccar/conf
-      
+  # Optioneel: routes over echte paden. Start alleen met `--profile router`; de eerste build downloadt OSM-data van Nederland en duurt een tijd.
+  router:
+    image: ghcr.io/scoutingscherpenzeel/jotihunt-router:main
+    profiles: [router]
+    restart: unless-stopped
+    volumes:
+      - router_data:/data
+
 volumes:
   mongodb:
   traccar_logs:
   traccar_data:
   traccar_conf:
   uploads:
+  router_data:
 ```
-2. Maak in dezelfde folder een `.env` bestand aan met de volgende inhoud (zie ook: configuratie):
+
+2. Maak in dezelfde map een `.env` (zie [Omgevingsvariabelen](#omgevingsvariabelen)). Minimaal:
+
 ```env
-DEBUG=false
 TZ=Europe/Amsterdam
-
-# Database
 MONGO_URI=mongodb://mongodb:27017/jotihunt
-MONGO_INITDB_DATABASE=jotihunt
+JWT_SECRET=een-lange-willekeurige-string-van-minimaal-32-tekens
+WEBAUTHN_RP_ID=jotihunt.jouwscoutinggroep.nl
+WEBAUTHN_ORIGINS=https://jotihunt.jouwscoutinggroep.nl
+PUBLIC_APP_URL=https://jotihunt.jouwscoutinggroep.nl
+SETTINGS_KEY= # openssl rand -base64 32
 
-# Traccar
+JOTIHUNT_API_URL=https://jotihunt.nl/api/2.0
+JOTIHUNT_WEB_URL=https://jotihunt.nl
+
 TRACCAR_API_URL=http://traccar:8082
 TRACCAR_API_TOKEN=token-van-traccar
-TRACCAR_CLIENT_URL=http://tracker.jotihunt.jouwscoutinggroep.nl:5055 # Adres voor de Traccar Client-app (QR-code in "Mijn tracker")
-JOTIHUNT_API_URL=https://jotihunt.nl/api/2.0
+TRACCAR_CLIENT_URL=http://tracker.jotihunt.jouwscoutinggroep.nl:5055
 
-# Jotihunt
-JOTIHUNT_WEB_URL=https://jotihunt.nl
-JOTIHUNT_WEB_USERNAME=naam@jouwscoutinggroep.nl
-JOTIHUNT_WEB_PASSWORD=password123
-HUNT_START_TIME=2025-10-18T10:00+02:00 # Pas dit aan naar de starttijd van de hunt van dat jaar.
-HUNT_END_TIME=2025-10-19T12:00+02:00 # Pas dit aan naar de eindtijd van de hunt van dat jaar.
-ORS_API_KEY= # Optioneel, voor de vossenvoorspelling (zie configuratie)
-GEMINI_API_KEY= # Optioneel, leest huntcode en tijd van de huntfoto en voorspelt de vossen (zie configuratie)
-GEMINI_MODEL=gemini-3.8-flash
-GEMINI_PREDICTION_MODEL=gemini-pro-latest
-GEMINI_CHAT_MODEL=gemini-3.8-flash
-TELEGRAM_API_ID= # Optioneel, leest de berichten van @Jotihunt_bot en meldt tegenhunts (zie configuratie)
-TELEGRAM_API_HASH=
-TELEGRAM_SESSION_KEY= # openssl rand -base64 32
-TELEGRAM_BOT_USERNAME= # Optioneel, standaard Jotihunt_bot
-LIFE360_SESSION_KEY= # Optioneel, Life360-laag (openssl rand -base64 32, zie configuratie)
-JOTIBOARD_SESSION_KEY= # Optioneel, Jotiboard-sync (openssl rand -base64 32, zie configuratie)
-
-# Inloggen (passkeys)
-WEBAUTHN_RP_ID=jotihunt.jouwscoutinggroep.nl # Hostnaam van de website, zonder https:// en poort (lokaal: localhost)
-WEBAUTHN_ORIGINS=https://jotihunt.jouwscoutinggroep.nl # Alle adressen waarop de website geopend wordt, met komma's gescheiden
-WEBAUTHN_RP_NAME=Jotihunt Tracker # Optioneel, naam in de passkey-dialoog van de browser
-PUBLIC_APP_URL=https://jotihunt.jouwscoutinggroep.nl # Adres van de website, voor uitnodigings- en herstel-links
+# Optioneel: alleen aanzetten als je de router-service start (docker compose --profile router up -d).
+# Zonder router laat je ze uit; dan tekent de server rechte lijnen.
+# ROUTER_URL=http://router:8989
+# ROUTER_ADMIN_URL=http://router:8990
 
 # Client
-JWT_SECRET=verander-dit-naar-een-veilige-random-string-van-minimaal-32-tekens
 API_BASE_URL=https://api.jotihunt.jouwscoutinggroep.nl
-MAPBOX_TOKEN=jouw-mapbox-token-hier
-HOME_TEAM_API_ID=17
-GROUP_WALKING_ID=3
-GROUP_CAR_ID=2
-GROUP_MOTORCYCLE_ID=4
-GROUP_BIKE_ID=5
-DISCORD_URL=https://discord.gg/jouw-discord-server # Optioneel
-GROUP_NAME=Jouw Scoutinggroep # Optioneel, ook de groepsnaam op de uitnodigingspagina
-LOGO_URL=https://jouwscoutinggroep.nl/logo.png # Optioneel
-TEAMS_AREA_EDITING=false # Sta toe dat gebruikers de teams-gebieden kunnen aanpassen in de client
-TRUST_PROXY= # Optioneel, zet bijvoorbeeld op 1 achter een reverse proxy, zodat de limieten per IP-adres (inloggen en app koppelen) het echte clientadres zien
-CLIENT_IP_HEADER= # Optioneel, achter Cloudflare Tunnel + Traefik: cf-connecting-ip (samen met TRUST_PROXY=1); alleen zetten als alle verzoeken via die proxy binnenkomen
+TEAMS_AREA_EDITING=false
 ```
-3. Start de applicatie met:
+
+3. Start alles:
+
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
-Er zijn nu vier services gestart:
-- `server`: De Jotihunt Tracker Server - http://localhost:3000
-- `client`: De Jotihunt Tracker Client - http://localhost:80
-- `traccar`: De Traccar GPS tracking server - http://localhost:8082
-- `mongodb`: De MongoDB database voor de server
+De router start alleen als je het profiel `router` meegeeft:
 
-## ⚙️ Configuratie
-Volg de configuratiestappen om de volledige applicatie werkend te krijgen.
-
-### Omgevingsvariabelen
-De applicatie kan worden geconfigureerd via omgevingsvariabelen. Hieronder volgt een overzicht van waar je de verschillende variabelen vandaan kunt halen.
-#### `TRACCAR_API_TOKEN`
-1. Ga naar jouw Traccar server (standaard te bereiken via `http://localhost:8082`) en log in als administrator. De token moet van een beheerder zijn: de server maakt hiermee de apparaten van de gebruikers aan.
-2. Navigeer onderin naar `Instellingen` > `Voorkeuren` > `Token`.
-3. Stel een verloopdatum in en druk op de ververs knop.
-4. Kopieer de gegenereerde token en plak deze in de `.env` file bij `TRACCAR_API_TOKEN`.
-
-#### `TRACCAR_CLIENT_URL`
-Het adres waar de Traccar Client-app op de telefoons de locaties naartoe stuurt: jouw Traccar server op poort `5055`, bijvoorbeeld `http://tracker.jotihunt.jouwscoutinggroep.nl:5055`.
-Dit adres komt in de QR-code van de kaart "Mijn tracker" in de zijbalk. Is het niet ingevuld (of ontbreken `TRACCAR_API_URL`/`TRACCAR_API_TOKEN`), dan toont de kaart "Live tracking is nog niet ingesteld".
-Lokaal testen met een telefoon in hetzelfde wifi-netwerk: gebruik het LAN-adres van je computer, bijvoorbeeld `http://192.168.1.10:5055`.
-
-#### `JOTIHUNT_WEB_USERNAME` en `JOTIHUNT_WEB_PASSWORD`
-Dit zijn de inloggegevens die je normaal gebruikt om in te loggen op [jotihunt.nl](https://jotihunt.nl). De server zal deze gebruiken om automatisch de hunts op te halen (scrapen).
-
-#### `HUNT_START_TIME` en `HUNT_END_TIME`
-Start- en eindtijd van de hunt. Let goed op de juiste tijdzone (bijv. `+02:00` voor Nederland tijdens zomertijd). Worden alleen bij de eerste start met edities gebruikt (als er in Beheer nog geen tijden staan); daarna stel je de hunttijden per editie in via Beheer → Algemeen.
-
-#### `ORS_API_KEY` (optioneel)
-Wordt gebruikt door de vossenvoorspelling voor looptijden naar de groepen via [OpenRouteService](https://openrouteservice.org/).
-1. Maak een gratis account aan op [openrouteservice.org](https://openrouteservice.org/dev/#/signup).
-2. Maak in het dashboard een (gratis) token aan.
-3. Plak de key in de `.env` file bij `ORS_API_KEY`.
-
-Zonder key gebruikt de voorspelling rechte-lijn-schattingen (rechte lijn × 1,3 bij 5 km/u). Er worden alleen coördinaten verstuurd, geen persoonsgegevens.
-
-#### `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_PREDICTION_MODEL` en `GEMINI_CHAT_MODEL` (optioneel)
-De server leest de huntcode en de handgeschreven tijd van de huntfoto met [Google Gemini](https://ai.google.dev/). Hunters hoeven dan alleen een foto te maken en de vossengroep te kiezen.
-1. Maak een API-key aan in [Google AI Studio](https://aistudio.google.com/apikey).
-2. Plak de key in de `.env` file bij `GEMINI_API_KEY`. `GEMINI_MODEL` is optioneel (standaard `gemini-3.8-flash`).
-3. De vossenvoorspelling gebruikt hetzelfde key en het model `GEMINI_PREDICTION_MODEL` (standaard `gemini-pro-latest`).
-4. De Gemini-assistent op de hintpagina gebruikt `GEMINI_CHAT_MODEL` (standaard `gemini-3.8-flash`).
-5. Nieuws en opdrachten krijgen automatisch een korte samenvatting met `GEMINI_MODEL`; de tekst van die artikelen wordt daarvoor naar Google gestuurd.
-
-Het lezen gebeurt op de achtergrond, één foto tegelijk (bij netwerkfouten of drukte tot 3 pogingen). Is de code of tijd niet (zeker) gelezen, dan krijgt de hunt het label "Controleren" en kan HQ de waarden aanpassen of opnieuw laten lezen. Zonder key worden foto's niet gelezen en vult HQ code en tijd zelf in.
-
-**Vossenvoorspelling:** Gemini krijgt per vossengebied het spoor van markers (hints, spots, hunts) en de coördinaten van de groepen, en voorspelt daaruit een pin, de ronde en een korte uitleg. Dat kost ongeveer één Gemini Pro-aanroep per actief gebied per 10 minuten (of eerder bij nieuwe gegevens), altijd na elkaar (nooit tegelijk). Zonder `GEMINI_API_KEY` staat de vossenvoorspelling uit. Een admin kan de voorspelling ook helemaal uit- en aanzetten via Instellingen > Admin tools > "AI-voorspelling" (globaal, bewaard in de `settings` collectie; uit betekent geen Gemini/ORS-aanroepen en geen voorspellingen of bezoeken in de app).
-
-**Privacy:** de huntfoto's, het markerspoor en de coördinaten van de groepen worden naar Google gestuurd. Met een gratis (free tier) key mag Google de verstuurde gegevens gebruiken om hun producten te verbeteren; gebruik een betaalde key als je dat niet wilt. De key komt nooit in de logs of in antwoorden van de server.
-
-#### `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_SESSION_KEY` en `TELEGRAM_BOT_USERNAME` (optioneel)
-De organisatie meldt een tegenhunt met een Telegram-bericht van @Jotihunt_bot aan het geregistreerde account van de groep. Met deze instellingen leest de server die berichten zelf: bij een tegenhunt krijgt iedereen automatisch een melding (met richting als die in het bericht staat), en alle berichten van de bot staan in de kaart "Jotihunt-berichten".
-1. Maak eenmalig een app aan op [my.telegram.org](https://my.telegram.org) (API development tools) en vul `TELEGRAM_API_ID` en `TELEGRAM_API_HASH` in.
-2. Zet `TELEGRAM_SESSION_KEY` op 32 willekeurige bytes in base64 (`openssl rand -base64 32`). Hiermee wordt de Telegram-sessie versleuteld opgeslagen; verander je de key, dan moet een admin opnieuw koppelen.
-3. Een admin koppelt het account in de kaart "Jotihunt-berichten" door de QR-code te scannen in Telegram (Instellingen > Apparaten > Desktop-apparaat koppelen), eventueel met het cloud-wachtwoord.
-
-De server kan alle chats van dat account lezen, maar verwerkt en bewaart alleen berichten van `TELEGRAM_BOT_USERNAME` (standaard `Jotihunt_bot`). Een happy hour van de bot (hunts tellen dubbel) geeft een melding bij het bericht, bij de start (als die later is) en stil bij het einde; `GET /happy-hour` geeft het lopende of komende happy hour. Er draait één luisteraar per serverproces, dus draai de server met één replica. Zonder API id/hash staat dit uit.
-
-#### `LIFE360_SESSION_KEY` (optioneel)
-Teamleden zonder onze app kunnen hun locatie delen via een Life360-kring. De server leest die kring via de (onofficiële) Life360-API en toont ieder lid als eigen laag op de kaart.
-1. Zet `LIFE360_SESSION_KEY` op 32 willekeurige bytes in base64 (`openssl rand -base64 32`). Hiermee wordt het Life360-token versleuteld opgeslagen; verander je de key, dan moet een admin opnieuw inloggen. Op k3s komt de key met de hand in de Secret `jotihunt-secret`, net als de Telegram-keys.
-2. Maak een apart Life360-account aan (alleen e-mail, geen persoonlijk account) en laat het lid worden van de kring van het team.
-3. Een admin koppelt het account in de kaart "Life360": e-mailadres invullen, de code uit de mail invoeren en eventueel de kring kiezen. Lukt dat niet, dan kan de cookie `LIFE360_AUTH_TOKEN` van life360.com geplakt worden.
-
-De server vraagt één keer per 30 seconden de leden van de kring op en bewaart alleen de laatste posities in het geheugen (geen geschiedenis, geen adressen). Bij een rate limit van Life360 wacht de server tot Life360 weer verzoeken toelaat (minstens 5 minuten); als het token verloopt, staat de kaart op "Uitgelogd" en moet een admin opnieuw een code laten sturen. Profielfoto's lopen via de server (`/life360/avatar/:id`), zodat browsers Life360 nooit zelf benaderen. Zonder key staat dit uit.
-
-#### `JOTIBOARD_SESSION_KEY` (optioneel)
-Hunters zetten ook pins en hint-oplossingen op [Jotiboard](https://jotiboard.nl). De server kan die automatisch overnemen.
-1. Zet `JOTIBOARD_SESSION_KEY` op 32 willekeurige bytes in base64 (`openssl rand -base64 32`). Hiermee wordt de Jotiboard-sessie versleuteld opgeslagen; verander je de key, dan moet een admin opnieuw inloggen. Op k3s komt de key met de hand in de Secret `jotihunt-secret`.
-2. Een admin koppelt het Jotiboard-account in de kaart "Jotiboard" (gebruikersnaam + wachtwoord). Het wachtwoord wordt niet bewaard, alleen het refresh-token.
-
-Zolang "Automatisch synchroniseren" aan staat, leest de server elke 20 seconden `manualLocations` en `hintSolves` (alleen lezen). Pins worden markers (hint/hunt/spot) en opgeloste hints vullen open hint-vakken; staat er al een eigen marker van hetzelfde type in hetzelfde deelgebied binnen 15 minuten en 300 meter, of is het vak al opgelost, dan wordt het overgeslagen. Een pin die van Jotiboard verdwijnt, verdwijnt ook hier. "Data verwijderen" haalt alles weg wat van Jotiboard kwam en zet de sync uit. Terwijl een archief (oude editie) getoond wordt, wordt niet gesynchroniseerd.
-
-#### `JWT_SECRET`
-Genereer een willekeurige, veilige string van minimaal 32 tekens. Deze wordt gebruikt om JWT tokens te ondertekenen voor de authenticatie.
-
-#### `WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGINS`, `WEBAUTHN_RP_NAME` en `PUBLIC_APP_URL`
-Er zijn geen wachtwoorden: iedereen logt in met een passkey (vingerafdruk, gezicht of pincode van het apparaat). Zonder `WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGINS` en `PUBLIC_APP_URL` start de server niet.
-- `WEBAUTHN_RP_ID`: de hostnaam van de website, zonder `https://`, pad of poort, bijvoorbeeld `jotihunt.jouwscoutinggroep.nl` (lokaal `localhost`). Passkeys horen bij deze naam: verander je hem, dan werken de bestaande passkeys niet meer en moet iedereen via een herstel-link een nieuwe passkey maken.
-- `WEBAUTHN_ORIGINS`: elk adres waarop de website geopend wordt (schema + host + eventueel poort), met komma's gescheiden, bijvoorbeeld `https://jotihunt.jouwscoutinggroep.nl,http://localhost:5173`.
-- `WEBAUTHN_RP_NAME` (optioneel): de naam die de browser in de passkey-dialoog toont, standaard `Jotihunt Tracker`.
-- `PUBLIC_APP_URL`: het adres van de website, gebruikt in uitnodigings- en herstel-links, bijvoorbeeld `https://jotihunt.jouwscoutinggroep.nl`.
-
-#### `MAPBOX_TOKEN`
-1. Maak een account aan op [Mapbox](https://www.mapbox.com/).
-2. Volg de instructies [hier](https://docs.mapbox.com/help/dive-deeper/access-tokens/) om een token te genereren.
-3. Standaard heeft je account 50.000 gratis kaartweergaven per maand. Tenzij je van plan bent 600 terminator AI-agents in te schakelen, zou dit voldoende moeten zijn.
-4. Kopieer de token en plak deze in de `.env` file bij `MAPBOX_TOKEN`.
-
-#### `API_BASE_URL`
-Stel dit in op de URL waar jouw Jotihunt Tracker Server bereikbaar is. Bijvoorbeeld `https://api.jotihunt.jouwscoutinggroep.nl` of `http://localhost:3000` als je lokaal werkt.
-Belangrijk: deze URL moet **publiek toegankelijk** zijn.
-
-#### `HOME_TEAM_API_ID`
-Dit is de API ID van jouw eigen team op de Jotihunt website. Deze kun je pas invullen nadat je bent aangemeld.
-1. Ga naar `https://jotihunt.nl/api/2.0/subscriptions` en zoek jouw team op in de lijst.
-2. Noteer de `id` waarde van jouw team en vul deze in bij `HOME_TEAM_API_ID` in de `.env` file.
-
-De server gebruikt `HOME_TEAM_API_ID` ook om de eigen groep (naam en logo) op de uitnodigingspagina te tonen; `GROUP_NAME` is de naam die daar staat zolang de teams nog niet zijn opgehaald.
-
-#### `GROUP_WALKING_ID`, `GROUP_CAR_ID`, `GROUP_MOTORCYCLE_ID`, `GROUP_BIKE_ID`
-Deze waarden komen overeen met de groeps-ID's die door Traccar worden gebruikt om verschillende soorten voertuigen te onderscheiden.
-1. Ga naar jouw Traccar server (standaard te bereiken via `http://localhost:8082`) en log in als administrator.
-2. Navigeer onderin naar `Instellingen` > `Groepen`.
-3. Maak hier de verschillende groepen aan: `Auto`, `Fiets`, `Motor`, `Lopend`.
-4. Voor elke groep zie je in het bewerkscherm in de URL het juiste ID staan. (bijv. bij https://traccar.jotihunt.jouwscoutinggroep.nl/settings/group/2 is het id `2`).
-5. Vul deze ID's in bij de respectievelijke omgevingsvariabelen in de `.env` file.
-
-#### `DISCORD_URL`
-Optioneel: vul hier de URL in van jouw Discord-server. Er zal dan een knop verschijnen in de client waarmee gebruikers direct kunnen joinen.
-
-#### `TEAMS_AREA_EDITING`
-In 2024 waren de deelgebieden niet voorafgaand aan de hunt bekend.
-Door deze instelling op `true` te zetten, kunnen gebruikers in de client de gebieden van teams zelf aanpassen en opslaan.
-
-### Eerste gebruiker aanmaken
-Accounts hebben geen wachtwoord. Het eerste (beheerder)account maak je vanuit de docker container; je krijgt dan een eenmalige inloglink waarmee je op je telefoon of computer een passkey aanmaakt. Daarna nodig je de rest uit met uitnodigingslinks.
-Zoek de naam van de draaiende server container op met:
 ```bash
-docker ps
+docker compose --profile router up -d
 ```
-Vervolgens voer je het volgende commando uit (vervang `jotihunt-server-1` door de naam van jouw container):
+
+| Service | Adres |
+| --- | --- |
+| `server` | http://localhost:3000 |
+| `client` | http://localhost:80 |
+| `traccar` | http://localhost:8082 |
+| `mongodb` | alleen intern |
+| `router` | alleen intern (`8989` routes, `8990` status/rebuild), alleen met `--profile router` |
+
+Passkeys werken alleen op `https://` of op `localhost`. Zet de server en client in productie dus achter een reverse proxy met TLS.
+
+## Omgevingsvariabelen
+
+Alle variabelen staan ook in [`.env.example`](.env.example). Veel instellingen die vroeger in `.env` stonden (team, hunttijden, voertuiggroepen, Gemini, Jotihunt-login, Telegram-app) stel je nu in via **Beheer** in de webapp. De oude variabelen werken nog als terugval zolang Beheer geen waarde heeft.
+
+### Basis (verplicht)
+
+| Variabele | Beschrijving |
+| --- | --- |
+| `MONGO_URI` | MongoDB-verbinding, bijvoorbeeld `mongodb://mongodb:27017/jotihunt`. De databasenaam is de controledatabase; edities krijgen er een eigen database naast. |
+| `JWT_SECRET` | Willekeurige string van minimaal 32 tekens; ondertekent de sessie- en apparaattokens. |
+| `WEBAUTHN_RP_ID` | Hostnaam van de website zonder `https://`, pad of poort (lokaal `localhost`). Passkeys horen bij deze naam: verander je hem, dan moet iedereen via een herstel-link een nieuwe passkey maken. |
+| `WEBAUTHN_ORIGINS` | Elk adres waarop de website geopend wordt, met komma's gescheiden, bijvoorbeeld `https://jotihunt.jouwscoutinggroep.nl,http://localhost:5173`. |
+| `PUBLIC_APP_URL` | Adres van de website, voor uitnodigings- en herstel-links. |
+
+Zonder `JWT_SECRET`, `MONGO_URI`, `WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGINS` of `PUBLIC_APP_URL` start de server niet.
+
+### Server
+
+| Variabele | Standaard | Beschrijving |
+| --- | --- | --- |
+| `PORT` | `3000` | Poort van de API. |
+| `TZ` | | Zet op `Europe/Amsterdam`: stickertijden en deadlines worden in lokale tijd gelezen. |
+| `DEBUG` | `false` | Extra logging, inclusief MongoDB-queries. |
+| `TRUST_PROXY` | | Achter een reverse proxy bijvoorbeeld `1`, zodat de limieten per IP-adres (inloggen, app koppelen) het echte adres zien. Ook `true`/`false` of een lijst subnetten. |
+| `CLIENT_IP_HEADER` | | Header met het echte clientadres, bijvoorbeeld `cf-connecting-ip` achter Cloudflare Tunnel (samen met `TRUST_PROXY=1`). Alleen zetten als alle verzoeken via die proxy binnenkomen. |
+| `WEBAUTHN_RP_NAME` | `Jotihunt Tracker` | Naam in de passkey-dialoog van de browser. |
+| `SETTINGS_KEY` | | 32 willekeurige bytes in base64 (`openssl rand -base64 32`). Versleutelt de sleutels en wachtwoorden die in Beheer worden opgeslagen. Zonder deze key kun je in Beheer geen geheimen opslaan. |
+| `UPLOADS_DIR` | `./uploads` | Opslag van geüploade bestanden (logo van de groep). |
+| `APP_DIR` | `./app-releases` | Map met de APK van de Android-app en `latest.json`. |
+| `TEAMS_AREA_EDITING` | `false` | `true`: gebruikers mogen deelgebieden van groepen aanpassen (beheerders kunnen het altijd). Handig als de deelgebieden pas tijdens de hunt bekend zijn. |
+
+### Jotihunt
+
+| Variabele | Beschrijving |
+| --- | --- |
+| `JOTIHUNT_API_URL` | `https://jotihunt.nl/api/2.0`. Zonder deze variabele worden gebieden en artikelen niet opgehaald. |
+| `JOTIHUNT_WEB_URL` | `https://jotihunt.nl`. Nodig voor de scraper (hunts, score, opdrachten). |
+| `JOTIHUNT_WEB_USERNAME`, `JOTIHUNT_WEB_PASSWORD` | Terugval voor de login van jotihunt.nl. Liever invullen in **Beheer → Algemeen → Jotihunt-site**. |
+
+### Traccar
+
+| Variabele | Beschrijving |
+| --- | --- |
+| `TRACCAR_API_URL` | Adres van de Traccar-API, bijvoorbeeld `http://traccar:8082`. |
+| `TRACCAR_API_TOKEN` | Token van een Traccar-**beheerder** (de server maakt hiermee apparaten aan). In Traccar: `Instellingen` → `Voorkeuren` → `Token`, kies een verloopdatum en ververs. |
+| `TRACCAR_CLIENT_URL` | Waar de Traccar Client-app de posities naartoe stuurt: jouw Traccar-server op poort `5055`. Komt in de QR-code in "Mijn tracker". Lokaal testen met een telefoon op hetzelfde wifi: het LAN-adres van je computer, bijvoorbeeld `http://192.168.1.10:5055`. |
+
+Zonder `TRACCAR_API_URL` en `TRACCAR_API_TOKEN` geven de tracker-endpoints `503`.
+
+### Optionele koppelingen
+
+| Variabele | Beschrijving |
+| --- | --- |
+| `ROUTER_URL` | GraphHopper-router voor routes over echte paden, bijvoorbeeld `http://router:8989`. Zonder: rechte lijnen tussen vossenlocaties en alleen cirkels voor het bereik. |
+| `ROUTER_ADMIN_URL` | Status- en rebuild-endpoint van de router, bijvoorbeeld `http://router:8990`. Voor de kaart "Routes" in Beheer. |
+| `ORS_API_KEY` | [OpenRouteService](https://openrouteservice.org/)-key voor looptijden in de vossenvoorspelling. Zonder: rechte lijn × 1,3 bij 5 km/u. Er gaan alleen coördinaten heen. |
+| `NS_API_KEY` | [NS Reisinformatie API](https://apiportal.ns.nl/) voor treinen in de OV-tools van de Intel-chat. Zonder: alleen bus, tram, metro en boot (OVapi, geen key nodig). |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | Web push. Maak eenmalig met `npx web-push generate-vapid-keys`; `VAPID_SUBJECT` is een `mailto:`-adres. Zonder: geen push, wel meldingen in de app. |
+| `TELEGRAM_SESSION_KEY` | 32 bytes base64. Versleutelt de Telegram-sessie. Zie [Telegram](#telegram). |
+| `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_BOT_USERNAME` | Terugval voor de Telegram-app-gegevens; liever in **Beheer → Koppelingen**. Bot standaard `Jotihunt_bot`. |
+| `LIFE360_SESSION_KEY` | 32 bytes base64. Versleutelt het Life360-token. Zonder: geen Life360-laag. |
+| `JOTIBOARD_SESSION_KEY` | 32 bytes base64. Versleutelt de Jotiboard-sessie. Zonder: geen Jotiboard-sync. |
+
+Een andere `*_SESSION_KEY` betekent dat een beheerder die koppeling opnieuw moet maken.
+
+### AI (Gemini)
+
+De Gemini-key en de modellen stel je in via **Beheer → AI** (versleuteld met `SETTINGS_KEY`). Deze variabelen zijn de terugval:
+
+| Variabele | Standaard | Gebruikt voor |
+| --- | --- | --- |
+| `GEMINI_API_KEY` | | Key uit [Google AI Studio](https://aistudio.google.com/apikey). |
+| `GEMINI_MODEL` | `gemini-3.8-flash` | Samenvattingen en hint-splitsing. |
+| `GEMINI_CHAT_MODEL` | `gemini-3.8-flash` | Intel-chat en zijn tools. |
+| `GEMINI_PREDICTION_MODEL` | `gemini-pro-latest` | Vossenvoorspelling en de stand "Denk diep" van de chat. |
+
+Zonder key staan voorspellingen en samenvattingen uit en worden hints alleen met regels gesplitst. De voorspelling is ook uit te zetten in **Beheer → Algemeen → AI-voorspelling**.
+
+**Privacy:** markerspoor, coördinaten van groepen, artikeltekst en chatvragen gaan naar Google. Met een gratis key mag Google die gegevens gebruiken om zijn producten te verbeteren; gebruik een betaalde key als je dat niet wilt. De key komt nooit in logs of antwoorden van de server.
+
+### Sentry
+
+| Variabele | Beschrijving |
+| --- | --- |
+| `SENTRY_DSN` | DSN van het serverproject. Zonder: er wordt niets verstuurd. Alleen fouten: geen tracing, geen request bodies, geen AI-prompts, geen IP-adressen. |
+| `SENTRY_ENVIRONMENT` | Standaard `NODE_ENV`. |
+| `SENTRY_SITE_DSN` | DSN van het websiteproject. `/sentry-tunnel` stuurt alleen meldingen voor dit project door (adblockers blokkeren sentry.io). |
+
+`SENTRY_RELEASE` zet het Docker-image zelf (git-commit).
+
+### Instellingen in Beheer
+
+Deze waarden staan niet meer in `.env` maar in **Beheer → Algemeen** (de server levert ze aan de client via `GET /config`):
+
+- **Jotihunt-editie** en de **start- en eindtijd** van de hunt (per editie; `HUNT_START_TIME`/`HUNT_END_TIME` vullen alleen de eerste editie).
+- **Ons team** (`HOME_TEAM_API_ID`, `GROUP_NAME`, `LOGO_URL`, `DISCORD_URL` als terugval). De API-id van je team vind je op `https://jotihunt.nl/api/2.0/subscriptions`.
+- **Voertuiggroepen**: de Traccar-groep per voertuig (`GROUP_WALKING_ID`, `GROUP_BIKE_ID`, `GROUP_CAR_ID`, `GROUP_MOTORCYCLE_ID` als terugval). Maak in Traccar eerst de groepen `Lopend`, `Fiets`, `Auto` en `Motor` aan.
+- **Welke vossen mogen we hunten?**, **AI-voorspelling** en **Invites pauzeren**.
+
+Met `bun run migrate-env-settings` kopieer je bestaande `.env`-waarden in één keer naar Beheer.
+
+## Eerste keer opstarten
+
+### Eerste beheerder
+
+Accounts hebben geen wachtwoord. Maak het eerste beheeraccount aan in de servercontainer; je krijgt een eenmalige link waarmee je een passkey aanmaakt:
+
 ```bash
-docker exec -it jotihunt-server-1 bun run login-link -- --new Naam --admin
+docker compose exec server bun run login-link -- --new Naam --admin
 ```
-Open de link die het commando toont en maak een passkey aan. Kwijtgeraakt of geen toegang meer tot een bestaand account? Maak dan een nieuwe inloglink met `bun run login-link -- --user Naam` (of `--id <gebruikers-id>` als meerdere accounts zo heten).
 
-Bij het starten ruimt de server zelf de oude wachtwoordgegevens op (zelfde stappen als `bun run migrate-passwordless`, dat script bestaat nog): wachtwoorden en e-mailadressen worden verwijderd, ieder account krijgt een WebAuthn-handle en de oude unieke e-mailindex wordt verwijderd. Dit is veilig om bij elke start opnieuw te doen; het aantal aangepaste accounts staat in de log.
+Open de link en maak een passkey. Daarna nodig je de rest uit via **Beheer → Invites**. Kwijtgeraakt of geen toegang meer? Maak een nieuwe link met `bun run login-link -- --user Naam` (of `--id <gebruikers-id>` als meerdere accounts zo heten).
 
-### Ophalen teams uit API
-De kaart is in eerste instantie nog leeg. Om de teams op te halen, ga je met een beheerderaccount naar `Instellingen` > `Admin tools` en druk je op de knop `Herlaad teams uit API`.
-Hierna wordt de kaart gevuld met de teams die meedoen aan de Jotihunt. Vergeet dit niet uit te voeren nadat de inschrijving is gesloten!
-## 🛰️ GPS Tracking
-De GPS tracking wordt verzorgd door [Traccar](https://www.traccar.org/).
-Om de GPS tracking werkend te krijgen, dien je de telefoons van de hunters te configureren met de Traccar Client app.
+Bij elke start ruimt de server oude wachtwoordgegevens op (zelfde stappen als `bun run migrate-passwordless`): wachtwoorden en e-mailadressen gaan weg en elk account krijgt een WebAuthn-handle. Dit is veilig om steeds opnieuw te doen.
 
-**Makkelijkste manier:** iedere gebruiker ziet in de zijbalk de kaart "Mijn tracker" met een persoonlijke QR-code. Installeer de Traccar Client-app, scan de code in de app (of tik op een telefoon op "Open in Traccar-app") en zet "Continu volgen" aan. De server maakt het apparaat in Traccar zelf aan, zet het in de groep van het gekozen voertuig (Lopend / Fiets / Auto / Motor) en de kaart toont "Verbonden ✓" zodra de eerste locatie binnen is. Hiervoor moeten `TRACCAR_CLIENT_URL` en de `GROUP_*_ID`'s ingevuld zijn.
+### Teams ophalen
 
-Handmatig instellen kan ook:
-1. Installeer de [Traccar Client app](https://www.traccar.org/client/) op de telefoons van de hunters. De apps zijn verkrijgbaar in zowel de Play Store als de App Store.
-2. Open de app en ga naar `Instellingen wijzigen`.
-3. De volgende instellingen werken goed in de meeste gevallen:
-    - Server-URL: Dit is de URL van jouw Traccar server, bijvoorbeeld `http://tracker.jotihunt.jouwscoutinggroep.nl`. Let op: deze URL moet naar poort `5055` gaan!
-    - Locatienauwkeurigheid: Hoogste
-    - Afstand (meters): 5
-    - Interval (seconden): 5
-    - Hoek (graden): Uitgeschakeld
-    - Stationaire heartbeat (seconden): 30
-    - Snelste interval (seconden): 5
-    - Offline buffering: Ingeschakeld
-    - Wakelock: Ingeschakeld
-    - Stopdetectie: Ingeschakeld
-4. Je kan ook gebruik maken van een QR-code om de instellingen te configureren. Dat ziet er dan als volgt uit: `https://tracker.jotihunt.jouwscoutinggroep.nl/?accuracy=highest&distance=5&heartbeat=30&fastest_interval=5&interval=5&wakelock=true`
+De kaart is eerst leeg. Ga als beheerder naar **Beheer → Algemeen → Teams herladen uit API** (of draai `bun run load-teams`). Doe dit opnieuw nadat de inschrijving gesloten is.
 
-In het dashboard dien je als beheerder vervolgens het Apparaat-ID te registreren. Dit doe je door in de zijbalk bovenin op het plusje (+) te drukken en de gegevens van het apparaat in te vullen. Na opslaan zal het apparaat verschijnen in de lijst en zal de GPS tracking starten zodra de app op de telefoon wordt gestart met "Continu volgen".
+## GPS-tracking
 
-## 📸 Hunts registreren
-Hunters registreren een hunt met een foto vanaf hun telefoon, plus de vossengroep en de soort (hunt/tegenhunt). De server leest de huntcode (hoofdlettergevoelig) en de handgeschreven tijd van de foto met Gemini (zie `GEMINI_API_KEY`); tot de tijd gelezen is geldt het uploadtijdstip. Dubbele codes worden niet geweigerd maar gemarkeerd. HQ (admins) kan code en tijd corrigeren en een foto opnieuw laten lezen. De foto's staan in de map `uploads` (in Docker het volume `uploads`, het pad is aan te passen met de omgevingsvariabele `UPLOADS_DIR`). HQ stuurt de hunt zelf in op jotihunt.nl en klikt daarna in de tracker op "Ingestuurd" om dat bij te houden.
+De posities van de hunters komen uit Traccar.
+
+**Android:** iedere gebruiker ziet in de zijbalk de kaart "Mijn tracker". Daar staat een koppelcode (met QR-code op de laptop, of een knop "open in app" op de telefoon) voor de Android-app. De server maakt het apparaat in Traccar aan en zet het in de groep van het gekozen voertuig.
+
+**iPhone:** via de [Traccar Client](https://www.traccar.org/client/)-app. "Mijn tracker" toont een QR-code met de juiste instellingen (hiervoor moet `TRACCAR_CLIENT_URL` ingevuld zijn).
+
+Handmatig instellen kan ook. Deze instellingen werken goed in de Traccar Client:
+
+| Instelling | Waarde |
+| --- | --- |
+| Server-URL | jouw Traccar-server op poort `5055` |
+| Locatienauwkeurigheid | Hoogste |
+| Afstand | 5 m |
+| Interval / snelste interval | 5 s |
+| Hoek | Uit |
+| Stationaire heartbeat | 30 s |
+| Offline buffering, wakelock, stopdetectie | Aan |
+
+Als QR-code: `https://tracker.jotihunt.jouwscoutinggroep.nl/?accuracy=highest&distance=5&heartbeat=30&fastest_interval=5&interval=5&wakelock=true`.
 
 ### Android-app
 
-De APK van de Android-app en een bestand `latest.json` (`{ "versionCode": 1, "versionName": "1.0.0", "file": "jotihunt-1.0.0.apk", "sha256": "<hex>" }`) staan in de map `app-releases` (aan te passen met `APP_DIR`; in Docker een bind mount). De server serveert ze zonder inloggen op `GET /app/latest` en `GET /app/download/<bestand>`. De site toont de downloadknop zodra `GET /app/latest` antwoordt.
+Zet de APK en een `latest.json` in `APP_DIR`:
 
-**Let op:** de gebruikers (met hun gekoppelde apparaten) staan in de database van de live editie. Een getoond archief krijgt daar een kopie van; wat alleen in die kopie verandert (bijv. koppelen of ontkoppelen van telefoons) blijft niet bewaard. Koppel en ontkoppel dus terwijl de live editie getoond wordt.
+```json
+{ "versionCode": 1, "versionName": "1.0.0", "file": "jotihunt-1.0.0.apk", "sha256": "<hex>" }
+```
 
-## 🤝 Bijdragen
-- Heb je zelf verbeteringen gemaakt? Open een Pull Request!
-- Ideeën maar geen code-skills? Maak een Issue, wie weet pakt iemand het op.
-- Alle bijdragen zijn welkom om de tracker samen nóg beter te maken. 💡
+De server serveert ze zonder inloggen op `GET /app/latest` en `GET /app/download/<bestand>`. De website toont de downloadknop zodra `/app/latest` antwoordt.
 
-## 📜 Licentie
-Dit project is open-source en beschikbaar onder de MIT-licentie.
+Gebruikers en hun gekoppelde apparaten staan in de database van de live editie. Koppel en ontkoppel telefoons dus terwijl de live editie getoond wordt; wijzigingen in een getoond archief blijven niet bewaard.
 
-💛 Gemaakt door [Scouting Scherpenzeel](https://scoutingscherpenzeel.nl/).\
-📧 E-mailadres: [info@scoutingscherpenzeel.nl](mailto:info@scoutingscherpenzeel.nl)
+## Koppelingen
+
+Alle koppelingen maak je als beheerder in **Beheer → Koppelingen**. De koppeling zelf staat versleuteld in de controledatabase.
+
+### Telegram
+
+De organisatie meldt een tegenhunt met een bericht van @Jotihunt_bot aan het Telegram-account van de groep. De server leest die berichten. Bij een tegenhunt krijgt iedereen een melding, met windrichting als die in het bericht staat. Een happy hour (hunts tellen dubbel) geeft een melding bij het bericht en bij de start, en een stille melding bij het einde. Alle botberichten staan in de kaart "Jotihunt-berichten".
+
+1. Maak eenmalig een app op [my.telegram.org](https://my.telegram.org) (API development tools) en vul API-id en hash in bij Beheer → Koppelingen.
+2. Zet `TELEGRAM_SESSION_KEY` (`openssl rand -base64 32`).
+3. Scan de QR-code in Telegram (Instellingen → Apparaten → Desktop-apparaat koppelen), eventueel met het cloud-wachtwoord.
+
+De server kan alle chats van het account lezen, maar verwerkt en bewaart alleen berichten van de bot. Er draait één luisteraar per proces: draai de server met **één replica**.
+
+### Life360
+
+Teamleden zonder de app delen hun locatie via een Life360-kring; elk lid wordt een eigen laag op de kaart.
+
+1. Zet `LIFE360_SESSION_KEY`.
+2. Maak een apart Life360-account (geen persoonlijk account) en laat het lid worden van de kring van het team.
+3. Log in via Beheer: e-mailadres, de code uit de mail, en kies de kring. Lukt dat niet, dan kun je de cookie `LIFE360_AUTH_TOKEN` van life360.com plakken.
+
+De server vraagt elke 30 seconden de posities op en houdt alleen de laatste in het geheugen (geen geschiedenis, geen adressen). Profielfoto's lopen via de server (`/life360/avatar/:id`). Bij een rate limit wacht de server minstens 5 minuten.
+
+### Jotiboard
+
+1. Zet `JOTIBOARD_SESSION_KEY`.
+2. Log in via Beheer met gebruikersnaam en wachtwoord. Alleen het refresh-token wordt bewaard.
+
+Met "Automatisch synchroniseren" aan leest de server elke 20 seconden pins en hint-oplossingen. Pins worden markers; opgeloste hints vullen open hint-vakken. Een eigen marker van hetzelfde type in hetzelfde deelgebied binnen 15 minuten en 300 meter gaat voor. "Data verwijderen" haalt alles van Jotiboard weg en zet de sync uit. Tijdens het tonen van een archief wordt niet gesynchroniseerd.
+
+### Routes (GraphHopper)
+
+De map [`router/`](router/) bevat een eigen image (`ghcr.io/scoutingscherpenzeel/jotihunt-router`) met GraphHopper. Bij de eerste start en elke maandag om 03:00 downloadt het de OSM-data van Nederland, knipt Gelderland (+10 km) eruit, markeert natuurgebieden die 's nachts gesloten zijn en bouwt een nieuwe graaf; de oude blijft draaien tot de nieuwe klaar is. Profielen: `foot`, `foot_night` en `car`.
+
+In Beheer → Algemeen → Routes zie je de status, start je een rebuild en teken je eigen gebieden die 's nachts open of dicht zijn. Een import heeft standaard 2 GB heap nodig (`IMPORT_HEAP`), het serveren 1 GB (`SERVE_HEAP`).
+
+### 3D-gebouwen en fastfood
+
+Geen configuratie nodig. 3D-gebouwen komen als z15-vectortegels van [3DBAG](https://3dbag.nl) en worden bij het eerste bekijken in de controledatabase gecachet (Beheer → Koppelingen → 3D-gebouwen: status, vooraf laden, legen). Fastfoodlocaties komen dagelijks uit OpenStreetMap (Overpass).
+
+## Lokaal ontwikkelen
+
+Vereist: [Bun](https://bun.sh/) en een MongoDB (bijvoorbeeld `docker run -d -p 27017:27017 mongo`).
+
+```bash
+bun install
+cp .env.example .env   # vul minimaal de verplichte variabelen in
+bun run dev            # herstart bij wijzigingen, http://localhost:3000
+```
+
+Lokaal: `WEBAUTHN_RP_ID=localhost`, `WEBAUTHN_ORIGINS=http://localhost:5173` en `PUBLIC_APP_URL=http://localhost:5173` (de Vite-devserver van de client).
+
+```bash
+bun test               # tests (gebruiken MONGO_URI_TEST, standaard mongodb://localhost:27017/jotihunt-test)
+bun run typecheck
+bun run lint
+```
+
+De tests legen de testdatabase. Wijs `MONGO_URI_TEST` dus nooit naar een echte database.
+
+## Scripts
+
+| Script | Wat het doet |
+| --- | --- |
+| `bun run dev` | Server met `--watch`. |
+| `bun run start` | Server zoals in productie. |
+| `bun run login-link -- --new Naam [--admin]` | Nieuw account plus eenmalige inloglink. |
+| `bun run login-link -- --user Naam` / `--id <id>` | Nieuwe herstel-link voor een bestaand account. |
+| `bun run load-teams` | Teams uit de Jotihunt-API ophalen. |
+| `bun run migrate-env-settings` | Instellingen uit `.env` kopiëren naar Beheer. |
+| `bun run migrate-passwordless` | Oude wachtwoordgegevens opruimen (gebeurt ook bij elke start). |
+| `bun test`, `bun run typecheck`, `bun run lint` | Tests, typecheck, lint. |
+
+In Docker: `docker compose exec server bun run <script>`.
+
+## API-overzicht
+
+De meeste endpoints spreken JSON. Uitzonderingen: `/intel-chat` streamt de antwoorden als UI-berichten (AI SDK), `/buildings` geeft vectortegels (`.pbf`), `/branding/logo` en `/life360/avatar/:id` geven een afbeelding, `/app/download` de APK, en `/sentry-tunnel` neemt Sentry-envelopes aan.
+
+Zonder inloggen bereikbaar: inloggen en koppelen, uitnodigingen, herstel-links, `/config`, `/branding/logo`, `/app` en `/sentry-tunnel`. Al het andere vraagt een `Authorization: Bearer <token>`-header; beheer-endpoints vereisen een beheerder.
+
+### Authenticatie
+
+- **Passkeys (WebAuthn)**: `POST /auth/passkey/login/options` en daarna de verificatie. Er zijn geen wachtwoorden.
+- **Sessies**: een geslaagde login geeft een JWT met een sessie-id. De sessie staat in de database (30 dagen, schuift mee bij gebruik) en is in te trekken via `/account/sessions`.
+- **Uitnodigingen** (`/invites/:code`) en **herstel-links** (`/herstel/:token`): een account of nieuwe passkey aanmaken, eventueel zonder passkey.
+- **Inloggen met QR-code** (`/auth/qr`): de laptop toont een code (2 minuten geldig), een telefoon die al ingelogd is scant en bevestigt.
+- **Apparaattokens**: de Android-app koppelt met een eenmalige code van 8 tekens (`POST /tracker/pair` maakt hem, `POST /auth/pair` wisselt hem in). Het token blijft geldig zolang het apparaat bij de gebruiker staat (max. 10 per gebruiker, beheer via `/auth/devices`).
+- Inloggen, koppelen en uitnodigingen hebben limieten per IP-adres.
+
+### Routegroepen
+
+| Pad | Inhoud |
+| --- | --- |
+| `/auth`, `/account`, `/invites`, `/herstel` | Inloggen, sessies, passkeys, apparaten, uitnodigingen, herstel |
+| `/config`, `/branding/logo` | Publieke instellingen voor de client |
+| `/areas` | Deelgebieden, vossenstatus, statusgeschiedenis |
+| `/teams` | Deelnemende groepen, deelgebied aanpassen, teams herladen |
+| `/markers` | Hints, hunts en spots op de kaart |
+| `/routes` | Vossensporen (`/routes/trails`) en bereik (`/routes/reach`) |
+| `/hints`, `/articles`, `/assignments` | Hint-bord en oplossingen, nieuws, opdrachten |
+| `/hunts`, `/score` | Gesynchroniseerde hunts, synclog, voorlopige score |
+| `/predictions`, `/visits` | AI-voorspelling, bezochte groepen |
+| `/intel-chat` | AI-chat per Intel-item (streaming) |
+| `/tracker` | Hunters, posities, "Mijn tracker", koppelcodes |
+| `/notifications`, `/push` | Meldingenfeed, voorkeuren, pushabonnementen |
+| `/telegram`, `/counter-hunt`, `/happy-hour` | Botberichten, lopende tegenhunt, happy hour |
+| `/life360`, `/buildings`, `/fastfood` | Life360-leden, 3D-gebouwtegels, fastfoodlocaties |
+| `/settings` | Voorspelling aan/uit, huntbare vossen, nachtgebieden, invites gepauzeerd |
+| `/admin` | Gebruikers, invites, berichten, koppelingen, Beheer-instellingen, AI-modellen, router |
+| `/editions` | Edities en wisselen van getoonde editie |
+| `/app` | Android-app: laatste versie en download |
+| `/sentry-tunnel` | Foutmeldingen van de website doorsturen naar Sentry |
+
+Een getoond archief is voor iedereen alleen-lezen.
+
+## Prestaties
+
+- **Gedeelde cache**: de lijsten die elke hunter om de paar seconden opvraagt (markers, artikelen, hunts) worden 1 seconde in het geheugen bewaard, inclusief gzip, en ongeldig gemaakt bij elke schrijfactie.
+- **ETags en gzip**: JSON en vectortegels gaan gecomprimeerd; ETags worden op de ongecomprimeerde body berekend, zodat herhaalde verzoeken een `304` krijgen. De streaming chat wordt niet gecomprimeerd.
+- **Indexen**: de server controleert de indexen van de getoonde editie bij elke start en na elke wissel.
+- **Externe bronnen**: Traccar-lijsten worden kort gedeeld gecachet, 3D-tegels en fastfood staan in MongoDB, CORS-preflights worden een dag gecachet.
+- **Logs**: geslaagde leesverzoeken worden niet gelogd; credentials uit headers nooit.
+
+## Deployment
+
+Bij elke push naar `main` en bij elke release bouwt GitHub Actions een image:
+
+- `ghcr.io/scoutingscherpenzeel/jotihunt-tracker-server` met de tags `main`, de versie (bij een release) en `sha-<commit>`.
+- `ghcr.io/scoutingscherpenzeel/jotihunt-router` bij wijzigingen in `router/`.
+
+Het image draait de server via `tini` op poort `3000`. Aandachtspunten:
+
+- Draai **één replica** (Telegram-luisteraar, crons en caches zijn per proces).
+- Bewaar `uploads` en `app-releases` op een volume.
+- Bewaar `SETTINGS_KEY` en de `*_SESSION_KEY`'s goed: zonder de oude key moeten de opgeslagen geheimen en koppelingen opnieuw.
+- Zet `TRUST_PROXY` (en eventueel `CLIENT_IP_HEADER`) achter een reverse proxy.
+
+## Bijdragen
+
+- Verbeteringen gemaakt? Open een pull request.
+- Een idee maar geen code? Maak een issue.
+- Draai `bun test`, `bun run typecheck` en `bun run lint` voor je een pull request opent.
+
+Gebruik je de tracker bij jullie Jotihunt? Je bent vrij dat te doen (het is open source); we waarderen een bronvermelding en horen graag hoe het in het veld ging.
+
+> [!TIP]
+> Bekijk ook de [Jotihunt Discord Notifier](https://github.com/ScoutingScherpenzeel/jotihunt-discord-notifier) en [Jotihunt Telegram Forwarder](https://github.com/ScoutingScherpenzeel/jotihunt-telegram-forwarder) voor het doorsturen van hints, opdrachten en Telegram-berichten naar Discord.
+
+## Licentie
+
+Open source onder de [MIT-licentie](LICENSE).
+
+Gemaakt door [Scouting Scherpenzeel](https://scoutingscherpenzeel.nl/) · [info@scoutingscherpenzeel.nl](mailto:info@scoutingscherpenzeel.nl)

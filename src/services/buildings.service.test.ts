@@ -3,7 +3,7 @@ import mongoose, { type Connection } from "mongoose";
 import { buildingTileModel } from "../models/building-tile.model";
 import { BuildingsUpstreamError, type BuildingsApi } from "./buildings.client";
 import { tileBounds, tileId, tileOf, tilesAround, type Bounds, type RawBuildingPart } from "./buildings.helpers";
-import { BuildingsService, MAX_CONSECUTIVE_FAILURES } from "./buildings.service";
+import { BuildingsService, MAX_CONSECUTIVE_FAILURES, tileBytes } from "./buildings.service";
 
 const uri = process.env.MONGO_URI_TEST ?? "mongodb://localhost:27017/jotihunt-test";
 const silent = { info() {}, warn() {}, error() {} };
@@ -76,8 +76,20 @@ describe("getTile", () => {
     const doc = await buildingTileModel(db).findById(tileId(TILE));
     expect(doc?.count).toBe(1);
     const second = await service.getTile(TILE);
+    expect(second).toBeInstanceOf(Buffer);
     expect(Buffer.compare(first!, second!)).toBe(0);
     expect(api.calls).toHaveLength(1);
+  });
+
+  test("tileBytes: a view on the stored bytes (Buffer, Uint8Array or the driver's Binary), null for none", () => {
+    const bytes = Buffer.from([1, 2, 3, 4, 5]);
+    expect(tileBytes(bytes)).toBe(bytes);
+    expect([...tileBytes(new Uint8Array([7, 8]))!]).toEqual([7, 8]);
+    const binary = new mongoose.mongo.Binary(bytes);
+    const view = tileBytes(binary)!;
+    expect([...view]).toEqual([1, 2, 3, 4, 5]);
+    expect(tileBytes(null)).toBeNull();
+    expect(tileBytes(undefined)).toBeNull();
   });
 
   test("empty tile is cached as null", async () => {

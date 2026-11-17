@@ -1,4 +1,7 @@
-import type { Response } from "express";
+import { createHash } from "node:crypto";
+import { promisify } from "node:util";
+import { gzip } from "node:zlib";
+import type { Request, Response } from "express";
 import mongoose from "mongoose";
 import { currentGeneration } from "../editions/work-tracking";
 
@@ -8,7 +11,7 @@ import { currentGeneration } from "../editions/work-tracking";
  * Writes to a collection invalidate its entry (see the model middleware); entries are keyed by the database generation
  * and name, so an edition switch never serves the other database's data.
  */
-export type CachedList = "markers" | "articles" | "hunts";
+export type CachedList = "markers" | "articles" | "hunts" | "hunt-counts";
 
 export const RESPONSE_CACHE_TTL_MS = 1_000;
 
@@ -45,9 +48,66 @@ export function invalidateResponseCache(list: CachedList) {
 }
 
 /** Answer 200 with the cached list; same body and content type as res.json. */
-export async function sendCachedJson(res: Response, list: CachedList, build: () => Promise<unknown>) {
-  const body = await cachedJson(list, build);
-  return res.status(200).set("Content-Type", "application/json; charset=utf-8").send(body);
+export async function sendCachedJson(req: Request, res: Response, list: CachedList, build: () => Promise<unknown>) {
+  return sendPreparedJson(req, res, `list:${list}`, await cachedJson(list, build));
+}
+
+const gzipAsync = promisify(gzip);
+/** Same as the compression middleware: smaller bodies aren't worth compressing. */
+export const GZIP_THRESHOLD_BYTES = 1024;
+
+interface Prepared {
+  body: string;
+  etag: string;
+  /** Made once, on the first request that accepts gzip */
+  gzip?: Promise<Buffer>;
+}
+
+/** The last body sent per endpoint with its ETag and gzipped form, so polling never hashes or compresses it again. */
+const prepared = new Map<string, Prepared>();
+
+function prepare(endpoint: string, body: string): Prepared {
+  const last = prepared.get(endpoint);
+  // Cached bodies are the same string object until they change, so this is usually a pointer comparison
+  if (last && last.body === body) return last;
+  const etag = `W/"${Buffer.byteLength(body).toString(16)}-${createHash("sha1").update(body).digest("base64url").slice(0, 27)}"`;
+  const entry: Prepared = { body, etag };
+  prepared.set(endpoint, entry);
+  return entry;
+}
+
+function acceptsGzip(req: Request): boolean {
+  return typeof req.acceptsEncodings === "function" && req.acceptsEncodings("gzip", "identity") === "gzip";
+}
+
+/**
+ * Send a prebuilt JSON body (a shared, memoised one) with a cached ETag: 304 when the client already has it, else the
+ * body, gzipped once per body when the client accepts gzip (the compression middleware leaves an encoded body alone).
+ * `endpoint` names the memo slot (one per endpoint).
+ */
+export async function sendPreparedJson(req: Request, res: Response, endpoint: string, body: string) {
+  const entry = prepare(endpoint, body);
+  res.set("Content-Type", "application/json; charset=utf-8");
+  res.set("ETag", entry.etag);
+  res.vary("Accept-Encoding");
+  res.status(200);
+  if (req.fresh) return res.status(304).end();
+  if (Buffer.byteLength(body) < GZIP_THRESHOLD_BYTES || !acceptsGzip(req)) return res.send(body);
+  if (!entry.gzip) {
+    entry.gzip = gzipAsync(body);
+    // A failed compression is tried again by the next request
+    entry.gzip.catch(() => {
+      if (prepared.get(endpoint) === entry) entry.gzip = undefined;
+    });
+  }
+  let zipped: Buffer;
+  try {
+    zipped = await entry.gzip;
+  } catch {
+    return res.send(body);
+  }
+  res.set("Content-Encoding", "gzip");
+  return res.send(zipped);
 }
 
 /** Mongoose operations that write; registered as pre and post middleware to invalidate a cached list. */

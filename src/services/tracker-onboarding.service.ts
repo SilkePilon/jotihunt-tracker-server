@@ -1,5 +1,5 @@
 import { User, type UserType } from "../models/user.model";
-import type { TraccarApi, TraccarDeviceDto } from "./traccar-api";
+import type { TraccarApi, TraccarDeviceDto, TraccarPositionDto } from "./traccar-api";
 import { isGroupInvalidError } from "./traccar-http";
 import {
   buildDeepLink,
@@ -40,7 +40,18 @@ export interface TrackerOnboardingDeps {
   now?: () => Date;
   /** Called when Traccar fails (the controller logs it); the response then says `unreachable`. */
   onError?: (error: unknown) => void;
+  /**
+   * App-wide device/position lists (shared, briefly cached Traccar fetches). GET /tracker/me reads its device and
+   * latest position from these first and only asks Traccar directly when they fail or miss the entry.
+   */
+  shared?: {
+    devices(): Promise<TraccarDeviceDto[]>;
+    positions(): Promise<TraccarPositionDto[]>;
+  };
 }
+
+/** The "distance today" summary report is slow for Traccar; one per device per minute is plenty. */
+export const DISTANCE_CACHE_MS = 60_000;
 
 export interface EnsuredDevice {
   device: TraccarDeviceDto;
@@ -69,15 +80,48 @@ export function createTrackerOnboarding(deps: TrackerOnboardingDeps) {
     return deps.api;
   }
 
+  /** Device from the shared list (null on a miss or a failed fetch), so polling doesn't cost its own Traccar call. */
+  async function sharedDevice(uniqueId: string): Promise<TraccarDeviceDto | null> {
+    if (!deps.shared) return null;
+    const devices = await deps.shared.devices().catch(() => null);
+    return devices?.find((device) => device.uniqueId === uniqueId) ?? null;
+  }
+
+  async function latestPosition(api: TraccarApi, positionId: number): Promise<TraccarPositionDto | null> {
+    const shared = deps.shared ? await deps.shared.positions().catch(() => null) : null;
+    const position = shared?.find((entry) => entry.id === positionId);
+    return position ?? api.getPosition(positionId);
+  }
+
+  /** Per device: the latest report request, also while it is still running (so concurrent polls share it). */
+  const distances = new Map<number, { at: number; from: number; distance: Promise<number | null> }>();
+
+  /**
+   * Distance driven since `from`, one report per device per DISTANCE_CACHE_MS. A request replaces the entry when it
+   * starts, so an older report answering late can't overwrite a newer one; a failed report is forgotten.
+   */
+  function distanceToday(api: TraccarApi, deviceId: number, from: Date, to: Date): Promise<number | null> {
+    const cached = distances.get(deviceId);
+    if (cached && cached.from === from.getTime() && to.getTime() - cached.at < DISTANCE_CACHE_MS) return cached.distance;
+    const entry = { at: to.getTime(), from: from.getTime(), distance: api.getDistance(deviceId, from, to) };
+    distances.set(deviceId, entry);
+    entry.distance.catch(() => {
+      if (distances.get(deviceId) === entry) distances.delete(deviceId);
+    });
+    return entry.distance;
+  }
+
   /**
    * Make sure the user's Traccar device exists: look it up by its (deterministic) uniqueId and create it when
    * missing, also when it was deleted in Traccar. Stores `{ deviceId, uniqueId, vehicle }` on the user.
+   * `useShared` reads the device from the shared (up to a few seconds old) device list first; leave it off before
+   * writing the device back to Traccar.
    */
-  async function ensureDevice(user: UserType): Promise<EnsuredDevice> {
+  async function ensureDevice(user: UserType, { useShared = false }: { useShared?: boolean } = {}): Promise<EnsuredDevice> {
     const api = requireApi();
     const uniqueId = deriveUniqueId(user._id.toString());
     const storedVehicle = user.tracker?.vehicle as Vehicle | undefined;
-    let device = await api.findDevice(uniqueId);
+    let device = (useShared ? await sharedDevice(uniqueId) : null) ?? (await api.findDevice(uniqueId));
     if (!device) {
       try {
         device = await api.createDevice({
@@ -104,8 +148,8 @@ export function createTrackerOnboarding(deps: TrackerOnboardingDeps) {
     const api = requireApi();
     const current = now();
     const [position, distance] = await Promise.all([
-      device.positionId ? api.getPosition(device.positionId).catch(() => null) : Promise.resolve(null),
-      api.getDistance(device.id, startOfDay(current), current).catch(() => null),
+      device.positionId ? latestPosition(api, device.positionId).catch(() => null) : Promise.resolve(null),
+      distanceToday(api, device.id, startOfDay(current), current).catch(() => null),
     ]);
     return {
       connected: isConnected(device.lastUpdate, current),
@@ -137,7 +181,7 @@ export function createTrackerOnboarding(deps: TrackerOnboardingDeps) {
     const problem = configurationProblem();
     if (problem) return notConfigured(problem);
     try {
-      return await describe(await ensureDevice(user));
+      return await describe(await ensureDevice(user, { useShared: true }));
     } catch (error) {
       deps.onError?.(error);
       return notConfigured(reasonFor(error));

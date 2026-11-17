@@ -20,7 +20,10 @@ export const SCRAPE_DEADLINE_MS = 120_000;
  * codes are skipped: they would all become "code:" and clash on the unique index.
  */
 async function backfillSiteKeys() {
-  await Hunt.updateMany({ siteKey: { $exists: false }, huntCode: { $type: "string", $regex: /\S/ } }, [{ $set: { siteKey: { $concat: ["code:", { $trim: { input: "$huntCode" } }] } } }], { updatePipeline: true });
+  const filter = { siteKey: { $exists: false }, huntCode: { $type: "string" as const, $regex: /\S/ } };
+  // Checked first: a write (even one matching nothing) clears the cached hunt lists
+  if (!(await Hunt.exists(filter))) return;
+  await Hunt.updateMany(filter, [{ $set: { siteKey: { $concat: ["code:", { $trim: { input: "$huntCode" } }] } } }], { updatePipeline: true });
 }
 
 const CLOCK_ONLY = /^\d{1,2}[:.]\d{2}(?::\d{2})?$/;
@@ -59,6 +62,40 @@ export interface StoreResult {
   removed: string[];
 }
 
+interface StoredScrapeFields {
+  area: string;
+  huntCode?: string | null;
+  status: string;
+  statusText?: string | null;
+  statusClass?: string | null;
+  points: number;
+  huntTime?: Date | null;
+  huntTimeText?: string | null;
+  lastNotifiedOutcome?: string | null;
+  lastNotifiedPoints?: number | null;
+}
+
+/**
+ * Whether storing `hunt` would leave the stored hunt exactly as it is: every field the upsert sets compared as stored
+ * (a field the upsert would add, e.g. on an old document, counts as a change). A scraped location always writes.
+ */
+export function isUnchanged(stored: StoredScrapeFields, hunt: ScrapedHunt, last: { outcome: Outcome | null; points: number | null }): boolean {
+  const sameTime = (a: Date | null | undefined, b: Date | null) => (a == null || b == null ? a === b : a.getTime() === b.getTime());
+  return (
+    !hunt.location &&
+    stored.area === hunt.area &&
+    stored.huntCode === hunt.huntCode &&
+    stored.status === hunt.statusText &&
+    stored.statusText === hunt.statusText &&
+    stored.statusClass === hunt.status &&
+    stored.points === hunt.points &&
+    sameTime(stored.huntTime, hunt.huntTime) &&
+    stored.huntTimeText === hunt.huntTimeText &&
+    stored.lastNotifiedOutcome === last.outcome &&
+    stored.lastNotifiedPoints === last.points
+  );
+}
+
 /**
  * Store the scraped hunts and log what changed (HuntSyncEvent):
  * - upsert by siteKey; a location is never cleared by a scrape that found none;
@@ -74,7 +111,11 @@ export async function storeHunts(scraped: ScrapedHunt[], now = new Date(), optio
   const keys = scraped.map((hunt) => hunt.siteKey);
   const storedCount = await Hunt.countDocuments();
   await rekeyMovedHunts(scraped);
-  const previous = (await Hunt.find({ siteKey: { $in: keys } }).select("siteKey status statusClass points lastNotifiedOutcome lastNotifiedPoints").lean()).map((hunt) => ({
+  const stored = await Hunt.find({ siteKey: { $in: keys } })
+    .select("siteKey area huntCode status statusText statusClass points huntTime huntTimeText lastNotifiedOutcome lastNotifiedPoints")
+    .lean();
+  const storedByKey = new Map(stored.map((hunt) => [hunt.siteKey!, hunt]));
+  const previous = stored.map((hunt) => ({
     siteKey: hunt.siteKey!,
     statusClass: hunt.statusClass ?? classifyStatus(hunt.status, hunt.points),
     points: hunt.points,
@@ -84,13 +125,16 @@ export async function storeHunts(scraped: ScrapedHunt[], now = new Date(), optio
   const drafts = diffHunts(previous, scraped, now, { initial });
   const before = new Map(previous.map((hunt) => [hunt.siteKey, hunt]));
 
-  await Hunt.bulkWrite(
-    scraped.map((hunt) => {
-      const old = before.get(hunt.siteKey);
-      const judged = hunt.status === "approved" || hunt.status === "rejected";
-      // The outcome the log now shows for it: the new one when judged, else what was logged before
-      const last = judged ? { outcome: hunt.status as Outcome, points: hunt.points } : old ? lastOutcomeOf(old) : { outcome: null, points: null };
-      return {
+  const writes = scraped.flatMap((hunt) => {
+    const old = before.get(hunt.siteKey);
+    const judged = hunt.status === "approved" || hunt.status === "rejected";
+    // The outcome the log now shows for it: the new one when judged, else what was logged before
+    const last = judged ? { outcome: hunt.status as Outcome, points: hunt.points } : old ? lastOutcomeOf(old) : { outcome: null, points: null };
+    // Nothing new: no write, so updatedAt, the oplog and the cached hunt lists stay as they are
+    const current = storedByKey.get(hunt.siteKey);
+    if (current && isUnchanged(current, hunt, last)) return [];
+    return [
+      {
         updateOne: {
           filter: { siteKey: hunt.siteKey },
           update: {
@@ -113,9 +157,10 @@ export async function storeHunts(scraped: ScrapedHunt[], now = new Date(), optio
           },
           upsert: true,
         },
-      };
-    }),
-  );
+      },
+    ];
+  });
+  if (writes.length > 0) await Hunt.bulkWrite(writes);
 
   let events: HuntSyncEventDoc[] = [];
   if (drafts.length > 0) {

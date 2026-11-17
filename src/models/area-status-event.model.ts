@@ -7,5 +7,7 @@ const AreaStatusEventSchema = new mongoose.Schema({
   at: { type: Date, required: true },
 });
 AreaStatusEventSchema.index({ area: 1, at: 1 });
+// Trails and reach read every event in time order
+AreaStatusEventSchema.index({ at: 1 });
 
 export const AreaStatusEvent = mongoose.model("AreaStatusEvent", AreaStatusEventSchema);

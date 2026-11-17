@@ -34,5 +34,9 @@ const HintCellSchema = new mongoose.Schema({
 });
 
 HintCellSchema.index({ articleId: 1, area: 1 }, { unique: true });
+// The cell linked to a marker (marker deletes, imports); most cells have none
+HintCellSchema.index({ markerId: 1 }, { sparse: true });
+// Fox history: one area's cells by publish time
+HintCellSchema.index({ area: 1, publishAt: 1 });
 
 export const HintCell = mongoose.model("HintCell", HintCellSchema);
