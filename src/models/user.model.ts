@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import mongoose, { HydratedDocument, InferSchemaType } from "mongoose";
+import { invalidateOnWrites } from "../auth/session-cache";
 import { VEHICLES } from "../services/tracker-onboarding.helpers";
 
 /** The user's own Traccar device (created lazily by GET /tracker/me). */
@@ -90,6 +91,9 @@ UserSchema.set("toJSON", {
     return ret;
   },
 });
+
+// Every user write (role, name, passkeys, devices, delete, ...) drops that user's cached sessions
+invalidateOnWrites(UserSchema, "user");
 
 export const User = mongoose.model("User", UserSchema);
 export type UserType = HydratedDocument<InferSchemaType<typeof UserSchema>>;

@@ -1,5 +1,6 @@
 import mongoose, { type Types } from "mongoose";
 import { authModel } from "./auth-db";
+import { invalidateOnWrites } from "./session-cache";
 
 export const SESSION_VIAS = ["passkey", "invite", "herstel", "qr", "cli"] as const;
 export type SessionVia = (typeof SESSION_VIAS)[number];
@@ -28,6 +29,9 @@ const SessionSchema = new mongoose.Schema<SessionDoc>(
   },
   { versionKey: false },
 );
+
+// Every session write (revoke, log out elsewhere, delete) drops the cached session(s) it touches
+invalidateOnWrites(SessionSchema, "session");
 
 export interface InviteDoc {
   _id: Types.ObjectId;
